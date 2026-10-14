@@ -1,0 +1,138 @@
+{
+  "info": {
+    "id": "ses_e5a1b2c3d4e5Fx7Qk2LmNp9RsT",
+    "projectID": "global",
+    "agent": "build",
+    "model": {
+      "id": "test-model",
+      "providerID": "test"
+    },
+    "cost": 0,
+    "tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache": {
+        "read": 0,
+        "write": 0
+      }
+    },
+    "outcome": "succeeded",
+    "time": {
+      "created": 1790000000000,
+      "updated": 1790000060000
+    },
+    "title": "Fix the login form",
+    "location": {
+      "directory": "/placeholder"
+    }
+  },
+  "messages": [
+    {
+      "id": "msg_1a2b3c4d5001Ab3dE5fG7hJ9kL",
+      "time": {
+        "created": 1790000000000
+      },
+      "text": "The login form doesn't submit, can you look?",
+      "files": [],
+      "agents": [],
+      "type": "user"
+    },
+    {
+      "id": "msg_1a2b3c4d5002Bc4eF6gH8jK0lM",
+      "time": {
+        "created": 1790000001000,
+        "streamed": 1790000001500,
+        "completed": 1790000002000
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "test-model",
+        "providerID": "test"
+      },
+      "content": [
+        {
+          "type": "reasoning",
+          "text": "The submit handler is probably reset somewhere."
+        },
+        {
+          "type": "text",
+          "text": "Let me check the form handler."
+        },
+        {
+          "type": "tool",
+          "id": "call_00_test1",
+          "name": "shell",
+          "executed": false,
+          "state": {
+            "status": "completed",
+            "input": {
+              "command": "grep -n submit src/login.js"
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "12:  form.onsubmit = null"
+              }
+            ],
+            "metadata": {
+              "status": "completed",
+              "truncated": false,
+              "exit": 0
+            }
+          },
+          "time": {
+            "created": 1790000001600,
+            "ran": 1790000001700,
+            "completed": 1790000001800
+          }
+        }
+      ],
+      "finish": "tool-calls",
+      "rawFinish": "tool-calls",
+      "cost": 0,
+      "tokens": {
+        "input": 0,
+        "output": 0,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_1a2b3c4d5003Cd5fG7hJ9kL1mN",
+      "time": {
+        "created": 1790000003000,
+        "streamed": 1790000003500,
+        "completed": 1790000004000
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "test-model",
+        "providerID": "test"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Fixed: src/login.js was resetting the submit handler on line 12."
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "stop",
+      "cost": 0,
+      "tokens": {
+        "input": 0,
+        "output": 0,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    }
+  ]
+}

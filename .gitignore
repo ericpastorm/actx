@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+# makepkg leftovers
+packaging/aur/src/
+packaging/aur/pkg/
+packaging/aur/actx/
+packaging/aur/*.pkg.tar.*

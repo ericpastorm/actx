@@ -1,0 +1,38 @@
+# Maintainer: ericpastorm
+
+pkgname=actx-git
+_pkgname=actx
+pkgver=0.1.0.r0.g0000000
+pkgrel=1
+pkgdesc="Keep Claude Code and opencode conversations in sync across machines, by project"
+arch=('any')
+url="https://github.com/ericpastorm/actx"
+license=('MIT')
+depends=('python>=3.12' 'git' 'fzf')
+optdepends=('claude-code: sync and convert Claude Code conversations'
+            'opencode: sync and convert opencode conversations')
+makedepends=('git')
+checkdepends=('python-pytest')
+provides=("$_pkgname")
+conflicts=("$_pkgname")
+source=("$_pkgname::git+$url.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$_pkgname"
+  local version
+  version=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' actx)
+  printf "%s.r%s.g%s" "$version" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+check() {
+  cd "$_pkgname"
+  python -m pytest -q
+}
+
+package() {
+  cd "$_pkgname"
+  install -Dm755 actx "$pkgdir/usr/bin/actx"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}

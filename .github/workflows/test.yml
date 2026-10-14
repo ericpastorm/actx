@@ -1,0 +1,27 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "0 6 * * 1"  # weekly: catch format changes in new opencode releases
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install pytest
+      - name: Install opencode (its format tests are skipped without it)
+        run: |
+          curl -fsSL https://opencode.ai/install | bash || npm install -g opencode-ai || true
+          echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
+      - run: opencode --version || echo "opencode not available"
+      - run: pytest -v

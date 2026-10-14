@@ -1,0 +1,20 @@
+pkgbase = actx-git
+	pkgdesc = Keep Claude Code and opencode conversations in sync across machines, by project
+	pkgver = 0.1.0.r0.g0000000
+	pkgrel = 1
+	url = https://github.com/ericpastorm/actx
+	arch = any
+	license = MIT
+	checkdepends = python-pytest
+	makedepends = git
+	depends = python>=3.12
+	depends = git
+	depends = fzf
+	optdepends = claude-code: sync and convert Claude Code conversations
+	optdepends = opencode: sync and convert opencode conversations
+	provides = actx
+	conflicts = actx
+	source = actx::git+https://github.com/ericpastorm/actx.git
+	sha256sums = SKIP
+
+pkgname = actx-git
