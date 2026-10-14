@@ -5,7 +5,7 @@ import json
 import re
 import uuid
 
-from conftest import ACTX, claude_session, opencode_fixture
+from conftest import ACTX, claude_session, codex_continue, codex_rollout, opencode_fixture
 
 
 def test_every_interface_string_has_a_spanish_translation(actx_mod):
@@ -104,7 +104,7 @@ def test_claude_turns_without_uuids_uses_file_order(actx_mod):
 
 
 def test_oc_turns_starts_at_the_last_compaction(actx_mod, tmp_path):
-    exp = opencode_fixture(tmp_path)
+    exp = opencode_fixture(tmp_path, major=2)
     turns = actx_mod.oc_turns(exp)
     assert [w for w, _t, _ts in turns] == ["user", "assistant"]
     assert "‹shell› $ grep -n submit src/login.js\n12:  form.onsubmit = null" in turns[1][1]
@@ -146,12 +146,70 @@ def test_claude_scan_titles_paths_and_empty_sessions(tmp_path, machines):
     assert {s.path for s in found.values()} == {str(app)}
 
 
-def test_opencode_1_is_reported_not_crashed(machines):
+def test_oc_turns_reads_opencode_1(actx_mod, tmp_path):
+    exp = opencode_fixture(tmp_path, major=1)
+    turns = actx_mod.oc_turns(exp)
+    assert [w for w, _t, _ts in turns] == ["user", "assistant"]
+    assert "‹bash› $ grep -n submit src/login.js\n12:  form.onsubmit = null" in turns[1][1]
+    assert "reset somewhere" not in turns[1][1]
+    summary = {"info": {"id": "msg_s", "role": "assistant", "summary": True, "time": {"created": 1}},
+               "parts": [{"type": "text", "text": "We found the bug."}]}
+    exp["messages"].insert(2, summary)
+    assert actx_mod.oc_turns(exp)[0][1].endswith("We found the bug.")
+
+
+def test_opencode_1_database_is_listed(machines):
     import sqlite3
 
     m = machines("pc")
     db = m.home / ".local/share/opencode/opencode.db"
     db.parent.mkdir(parents=True)
-    sqlite3.connect(db).execute("create table session (id text primary key)").connection.commit()
-    out = m.actx("mk", "x", pick=[])
-    assert "Your opencode is 1.x" in out and "Can't read" not in out
+    con = sqlite3.connect(db)
+    con.executescript("""
+        create table session (id text, title text, directory text, time_updated integer, parent_id text, time_archived integer);
+        create table message (id text, session_id text, time_created integer, data text);
+        create table part (id text, message_id text, session_id text, data text);
+        insert into session values ('ses_1', 'Talked', '/w', 1790000000000, null, null);
+        insert into session values ('ses_2', 'Never answered', '/w', 1790000000000, null, null);
+        insert into message values ('msg_1', 'ses_1', 1, '{"role":"user"}'), ('msg_2', 'ses_1', 2, '{"role":"assistant"}');
+        insert into part values ('prt_1', 'msg_1', 'ses_1', '{"type":"text","text":"hello there"}');
+    """)
+    con.commit()
+    with m.active():
+        assert m.mod.oc_version() == 1
+        found = m.mod.opencode_local()
+        assert [(s.id, s.title, s.weight) for s in found] == [("ses_1", "Talked", 2)]
+        assert m.mod.oc_preview(found[0]) == [("user", "hello there")]
+
+
+def test_codex_sessions_titles_and_turns(machines):
+    m = machines("pc")
+    folder = m.home / "code" / "app"
+    folder.mkdir(parents=True)
+    named = codex_rollout(m, folder, [("user", "fix the build"), ("assistant", "done")], title="Build fix")
+    plain = codex_rollout(m, folder, [("user", "what is <this>?\nmore"), ("assistant", "a tag")])
+    codex_rollout(m, folder, [])  # opened and closed without a conversation
+    with m.active():
+        found = {s.id: s for s in m.mod.codex_local()}
+    ids = {p.name[-42:-6] for p in (named, plain)}
+    assert set(found) == ids
+    assert found[named.name[-42:-6]].title == "Build fix"
+    assert found[plain.name[-42:-6]].title == "what is <this>?"
+    assert found[plain.name[-42:-6]].path == str(folder)
+
+    codex_continue(plain, [("user", "run it"), ("assistant", "it runs")], tool=("make", "ok\n"))
+    turns = m.mod.codex_turns(plain.read_bytes().splitlines())
+    assert [w for w, _t, _ts in turns] == ["user", "assistant", "user", "assistant"]
+    assert turns[3][1] == "‹shell› $ bash -lc make\nok\n\nit runs"
+    assert all("permissions" not in t for _w, t, _ts in turns)  # injected context is left out
+
+    compacted = b'{"timestamp":"2026-01-01T11:00:00.000Z","type":"compacted","payload":{"message":"We fixed the build."}}'
+    turns = m.mod.codex_turns([*plain.read_bytes().splitlines(), compacted])
+    assert len(turns) == 1 and turns[0][1].endswith("We fixed the build.")
+
+
+def test_sizes_are_shown_in_the_right_unit(actx_mod):
+    S = actx_mod.Session
+    assert S("codex", "x", "t", "/p", 0, 1310820).size_label() == "1MB"
+    assert S("claude", "x", "t", "/p", 0, 2048).size_label() == "2KB"
+    assert S("opencode", "x", "t", "/p", 0, 13).size_label() == "13 msgs"

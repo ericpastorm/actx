@@ -24,18 +24,20 @@ GIT_ENV = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAM
 
 
 
-def _opencode_2() -> bool:
-    """actx works with opencode 2.x (its session export/import commands and session_v2 database)."""
+def _opencode_major() -> int | None:
+    """The installed opencode's major version (1 or 2), or None."""
     if not shutil.which("opencode"):
-        return False
+        return None
     try:
         res = subprocess.run(["opencode", "session", "--help"], capture_output=True, text=True, timeout=120)
     except (OSError, subprocess.SubprocessError):
-        return False
-    return "import" in res.stdout + res.stderr
+        return None
+    return 2 if "import" in res.stdout + res.stderr else 1
 
 
-needs_opencode = pytest.mark.skipif(not _opencode_2(), reason="needs opencode 2.x")
+OPENCODE_MAJOR = _opencode_major()
+needs_opencode = pytest.mark.skipif(OPENCODE_MAJOR is None, reason="opencode is not installed")
+needs_codex = pytest.mark.skipif(not shutil.which("codex"), reason="codex is not installed")
 
 
 def load_actx(env: dict):
@@ -72,7 +74,9 @@ class Machine:
             "ACTX_ROOT": str(store),
             "ACTX_SCAN": str(self.home),
             "ACTX_LANG": lang,
-            "ACTX_OPENCODE_ARGS": "--standalone",  # never talk to a real opencode service
+            # opencode 2.x: never talk to a real opencode service (1.x has no service)
+            "ACTX_OPENCODE_ARGS": "--standalone" if OPENCODE_MAJOR == 2 else "",
+            "CODEX_HOME": str(self.home / ".codex"),
             "NO_COLOR": "1",
         }
         self.mod = load_actx(self.env)
@@ -108,16 +112,19 @@ class Machine:
             mod.git_id.cache_clear()
             mod.local_repos.cache_clear()
             mod.oc_db.cache_clear()
+            mod.oc_version.cache_clear()
             try:
                 mod.main()
             except SystemExit:
                 pass
         return out.getvalue()
 
-    def opencode(self, *args: str) -> subprocess.CompletedProcess:
-        with self.active():
-            return subprocess.run(["opencode", "session", args[0], "--standalone", *args[1:]],
-                                  capture_output=True, cwd=self.home)
+    def call(self, fn, *args, cwd: Path | None = None):
+        """Call one of actx's functions on this machine (e.g. to import a test conversation)."""
+        with self.active(cwd):
+            self.mod.oc_db.cache_clear()
+            self.mod.oc_version.cache_clear()
+            return fn(*args)
 
     def opencode_db(self) -> Path:
         return self.home / ".local/share/opencode/opencode.db"
@@ -212,7 +219,91 @@ def claude_continue(path: Path, turns: list[tuple[str, str]], folder: Path | Non
             parent = u
 
 
-def opencode_fixture(folder: Path) -> dict:
-    exp = json.loads((FIXTURES / "opencode_export.json").read_text())
-    exp["info"]["location"]["directory"] = str(folder)
+def opencode_fixture(folder: Path, major: int | None = None) -> dict:
+    """The test opencode conversation, in the format of opencode `major` (default: the installed one)."""
+    major = major or OPENCODE_MAJOR or 2
+    exp = json.loads((FIXTURES / ("opencode1_export.json" if major == 1 else "opencode_export.json")).read_text())
+    if major == 1:
+        exp["info"]["directory"] = str(folder)
+    else:
+        exp["info"]["location"]["directory"] = str(folder)
     return exp
+
+
+def codex_rollout(m: Machine, folder: Path, turns: list[tuple[str, str]], title: str | None = None) -> Path:
+    """Write a Codex rollout the way Codex does: session_meta, then per turn what the model saw
+    (response_item) and what Codex shows (event_msg)."""
+    sid = str(uuid.UUID(int=(1790000000000 << 80) | (0x7 << 76) | (0b10 << 62) | uuid.uuid4().int % (1 << 62)))
+    d = m.home / ".codex/sessions/2026/01/01"
+    d.mkdir(parents=True, exist_ok=True)
+    path = d / f"rollout-2026-01-01T10-00-00-{sid}.jsonl"
+    line = lambda kind, payload: _line({"timestamp": "2026-01-01T10:00:00.000Z", "type": kind, "payload": payload})
+    out = [line("session_meta", {"id": sid, "session_id": sid, "timestamp": "2026-01-01T10:00:00.000Z",
+                                 "cwd": str(folder), "originator": "codex-tui", "cli_version": "0.160.0",
+                                 "source": "cli", "model_provider": "openai"}),
+           line("response_item", {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "<permissions>...</permissions>"}]})]
+    path.write_text("".join(out))
+    codex_continue(path, turns)
+    if title:
+        with open(m.home / ".codex/session_index.jsonl", "a") as fo:
+            fo.write(_line({"id": sid, "thread_name": title, "updated_at": "2026-01-01T10:00:00Z"}))
+    return path
+
+
+def codex_continue(path: Path, turns: list[tuple[str, str]], tool: tuple[str, str] | None = None) -> None:
+    """Append turns to a rollout (as if you kept talking in Codex). `tool`: a command and its output."""
+    sid = path.name[-42:-6]
+    line = lambda kind, payload: _line({"timestamp": "2026-01-01T10:05:00.000Z", "type": kind, "payload": payload})
+    with open(path, "a") as fo:
+        for who, text in turns:
+            turn = str(uuid.uuid4())
+            if who == "user":
+                fo.write(line("event_msg", {"type": "task_started", "turn_id": turn, "started_at": 1790000000}))
+                fo.write(line("response_item", {"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]}))
+                fo.write(line("event_msg", {"type": "item_completed", "thread_id": sid, "turn_id": turn, "item": {
+                    "type": "UserMessage", "id": turn, "content": [{"type": "text", "text": text, "text_elements": []}]},
+                    "started_at_ms": 1790000000000, "completed_at_ms": 1790000000000}))
+            else:
+                if tool:
+                    fo.write(line("response_item", {"type": "function_call", "name": "shell", "call_id": "c1",
+                                                    "arguments": json.dumps({"command": ["bash", "-lc", tool[0]]})}))
+                    fo.write(line("response_item", {"type": "function_call_output", "call_id": "c1", "output": tool[1]}))
+                fo.write(line("response_item", {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": text}]}))
+                fo.write(line("event_msg", {"type": "item_completed", "thread_id": sid, "turn_id": turn, "item": {
+                    "type": "AgentMessage", "id": turn, "content": [{"type": "Text", "text": text}], "phase": "final_answer"},
+                    "started_at_ms": 1790000001000, "completed_at_ms": 1790000001000}))
+                fo.write(line("event_msg", {"type": "task_complete", "turn_id": turn, "last_agent_message": text,
+                                            "started_at": 1790000000, "completed_at": 1790000001, "duration_ms": 1000}))
+
+
+def codex_threads(m: Machine) -> dict:
+    """What Codex itself sees on this machine, through its app-server: {id: (preview, turn count)}."""
+    import select
+    import time
+
+    env = os.environ | m.env
+    p = subprocess.Popen(["codex", "app-server"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                         stderr=subprocess.DEVNULL, env=env, text=True)
+
+    def call(n: int, method: str, params: dict) -> dict:
+        p.stdin.write(json.dumps({"id": n, "method": method, "params": params}) + "\n")
+        p.stdin.flush()
+        end = time.time() + 60
+        while time.time() < end:
+            if select.select([p.stdout], [], [], 1)[0]:
+                msg = json.loads(p.stdout.readline() or "{}")
+                if msg.get("id") == n:
+                    return msg.get("result") or {}
+        return {}
+
+    try:
+        call(0, "initialize", {"clientInfo": {"name": "actx-tests", "version": "0"}})
+        p.stdin.write(json.dumps({"method": "initialized"}) + "\n")
+        listed = call(1, "thread/list", {}).get("data", [])
+        out = {}
+        for n, t in enumerate(listed, 2):
+            thread = call(n, "thread/read", {"threadId": t["id"], "includeTurns": True}).get("thread") or {}
+            out[t["id"]] = (t.get("preview"), len(thread.get("turns") or []), thread.get("cwd"))
+        return out
+    finally:
+        p.kill()

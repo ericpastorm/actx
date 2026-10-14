@@ -1,8 +1,8 @@
 # actx
 
-**Agent context, everywhere.** Keep your [Claude Code](https://claude.com/claude-code) and
-[opencode](https://opencode.ai) conversations in sync across your machines, grouped into projects,
-through any shared folder: a NAS, Syncthing, Dropbox…
+**Agent context, everywhere.** Keep your [Claude Code](https://claude.com/claude-code),
+[opencode](https://opencode.ai) and [Codex](https://github.com/openai/codex) conversations in sync
+across your machines, grouped into projects, through any shared folder: a NAS, Syncthing, Dropbox…
 
 [Leer en español](README.es.md)
 
@@ -23,7 +23,7 @@ laptop$  claude --resume …     # carry on where you left off
 - **Two-way sync with conflict handling.** It remembers the last sync, so it knows what to push,
   what to pull, and when both sides changed. Then you can **merge**: keep this machine's version
   plus a summary of what was done on the other, and the other version is kept as a separate branch.
-- **Claude Code ⇄ opencode.** Copy a conversation from one tool to the other and keep going there.
+- **Claude Code ⇄ opencode ⇄ Codex.** Copy a conversation into another tool and keep going there.
 - **Safe.** Backups before overwriting, atomic writes in the shared folder, and git warnings when the
   code is out of step (uncommitted changes, a different commit).
 - **One file, no dependencies.** Python 3.12+, git and fzf. English and Spanish interface.
@@ -44,10 +44,11 @@ chmod +x ~/.local/bin/actx
 ```
 
 Requires Python 3.12+ (3.14+ recommended: conversations are compressed with zstd, gzip otherwise),
-`git` and [`fzf`](https://github.com/junegunn/fzf). For opencode conversations you need **opencode 2.x**,
-which is still a preview: the current stable opencode (1.x) isn't supported yet, and actx shows only
-Claude Code conversations when it finds it. All your machines should use the same
+`git` and [`fzf`](https://github.com/junegunn/fzf). All your machines should use the same
 compression, so either all on 3.14+ or all below.
+
+Supported tools: **Claude Code**, **opencode** 1.x and 2.x (each machine can have either: a conversation
+saved with one is converted when it reaches the other), and **Codex**.
 
 ## Quick start
 
@@ -64,7 +65,7 @@ Then:
 | `actx mk <project>` | Create a project (or open one) and pick conversations to save in it. Those that look like they belong (same folder, name in the title) come first. |
 | `actx sync [project]` | Push what you continued here, pull what's new. Pick the projects, or `--all`. |
 | `actx` / `actx ls [project]` | Projects and the state of each conversation: `↑ push`, `↓ pull`, `↓ new`, `⚠ conflict`, `✓ synced`. |
-| `actx cv [project]` | Copy a conversation to the other tool (Claude Code ⇄ opencode). |
+| `actx cv [project]` | Copy a conversation into another tool (Claude Code, opencode, Codex). |
 | `actx rm <project>` | Remove conversations from a project (nothing is deleted on your machines). |
 | `actx update` | Install the newest actx found in the shared folder (for script installs). |
 
@@ -101,11 +102,11 @@ to `~/.local/state/actx/backups/`.
 
 ### Converting between tools
 
-`actx cv` writes a copy in the other tool. Your messages and the replies are kept; tool calls
+`actx cv` writes a copy in the tool you pick. Your messages and the replies are kept; tool calls
 become text (what was run and what came out, outputs trimmed to 1500 characters); internal
 reasoning and images are dropped. If the conversation was compacted, only the summary and what
 followed are converted (that's what the agent had in context). It's an approximation, but enough to
-keep working. In opencode, the copy uses the last model you used there.
+keep working. In opencode, the copy uses the last model you used there; in Codex, your default one.
 
 ### The shared folder
 
@@ -115,6 +116,7 @@ keep working. In opencode, the copy uses the last model you used there.
   <project>/
     claude/<session id>/        meta.json · preview.txt · session.jsonl.zst · extra.tar.zst
     opencode/<session id>/      meta.json · preview.txt · session.json.zst · child-*.json.zst
+    codex/<session id>/         meta.json · preview.txt · rollout.jsonl.zst
   _bin/actx                     a copy of actx, for `actx update` on script installs
 ```
 
@@ -135,8 +137,8 @@ real-time.
 | `ACTX_ROOT` | Shared folder (overrides the config). |
 | `ACTX_LANG` | `en` or `es` (default: from your locale). |
 | `ACTX_SCAN` | Where to look for repos, `:`-separated (default: your home). |
-| `ACTX_OPENCODE_ARGS` | Extra flags for `opencode session …`, e.g. `--standalone`. |
-| `CLAUDE_CONFIG_DIR`, `XDG_*` | Respected, like Claude Code and opencode do. |
+| `ACTX_OPENCODE_ARGS` | Extra flags for opencode's export/import/delete, e.g. `--standalone` (2.x). |
+| `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `XDG_*` | Respected, like Claude Code, Codex and opencode do. |
 
 ## Privacy
 
@@ -146,12 +148,13 @@ private, and don't use a public sync service you wouldn't trust with your code.
 
 ## Limitations
 
-- actx reads the **internal, undocumented formats** of Claude Code (`~/.claude/projects/*.jsonl`) and
-  opencode (its SQLite database and `opencode session export/import`). They can change without notice.
-  Tested with Claude Code 2.1 and opencode 2.0 (preview); opencode 1.x isn't supported yet. The test
-  suite runs against the real opencode CLI (weekly too) to catch format changes early. If something
-  breaks, please open an issue.
-- Conversion between tools is lossy (see above). Syncing within the same tool is not.
+- actx reads the **internal, undocumented formats** of Claude Code (`~/.claude/projects/*.jsonl`),
+  opencode (its SQLite database and its export/import commands) and Codex (`~/.codex/sessions` rollouts).
+  They can change without notice. Tested with Claude Code 2.1, opencode 1.19 and 2.0, and Codex 0.160;
+  the test suite runs against the real opencode and Codex (weekly too) to catch format changes early.
+  If something breaks, please open an issue.
+- Conversion between tools is lossy (see above). Syncing within the same tool is not, except between
+  opencode 1.x and 2.x, which goes through the same conversion. Merging needs the same opencode version.
 - opencode is driven through its CLI; while you're importing a session, don't have that same session
   open in opencode.
 - Linux is the target. macOS will likely work; Windows isn't supported.
@@ -160,12 +163,12 @@ private, and don't use a public sync service you wouldn't trust with your code.
 
 ```
 pip install pytest
-pytest                # opencode tests run if opencode is installed, and are skipped otherwise
+pytest                # opencode and Codex tests run if they are installed, and are skipped otherwise
 ```
 
-The tests build fake machines (each with its own home, Claude Code and opencode data) that share one
+The tests build fake machines (each with its own home, Claude Code, opencode and Codex data) that share one
 folder, and run real syncs, merges and conversions between them.
 
 ## License
 
-[MIT](LICENSE). actx is an independent project, not affiliated with Anthropic or the opencode team.
+[MIT](LICENSE). actx is an independent project, not affiliated with Anthropic, OpenAI or the opencode team.

@@ -4,7 +4,7 @@ on:
   push:
   pull_request:
   schedule:
-    - cron: "0 6 * * 1"  # weekly: catch format changes in new opencode releases
+    - cron: "0 6 * * 1"  # weekly: catch format changes in new opencode and Codex releases
 
 jobs:
   test:
@@ -19,9 +19,11 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: pip install pytest
-      - name: Install opencode (its format tests are skipped without it)
+      - name: Install opencode and Codex (their tests are skipped without them)
         run: |
           curl -fsSL https://opencode.ai/install | bash || npm install -g opencode-ai || true
           echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
+          npm install -g @openai/codex || true
       - run: opencode --version || echo "opencode not available"
+      - run: codex --version || echo "codex not available"
       - run: pytest -v

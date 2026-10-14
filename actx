@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""actx (agent context): keep your Claude Code and opencode conversations in sync across
+"""actx (agent context): keep your Claude Code, opencode and Codex conversations in sync across
 machines, grouped into projects, through any shared folder (a NAS, Syncthing, ...).
 
 Single file, no dependencies besides Python 3.12+, git and fzf. Run `actx -h`, or see README.md.
@@ -34,7 +34,7 @@ try:
 except ImportError:
     _zstd = None
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 COMP = "zst" if _zstd else "gz"
 HOME = Path.home()
@@ -44,15 +44,18 @@ STATE_FILE = STATE_DIR / "state.json"
 BACKUPS = STATE_DIR / "backups"
 CLAUDE_PROJECTS = Path(os.environ.get("CLAUDE_CONFIG_DIR", HOME / ".claude")) / "projects"
 OPENCODE_DB = Path(os.environ.get("XDG_DATA_HOME", HOME / ".local/share")) / "opencode" / "opencode.db"
+CODEX_HOME = Path(os.environ.get("CODEX_HOME", HOME / ".codex"))
+CODEX_SESSIONS = CODEX_HOME / "sessions"
+CODEX_INDEX = CODEX_HOME / "session_index.jsonl"
 # where to look for repos when placing a conversation (ACTX_SCAN: paths separated by ':')
 SCAN_ROOTS = [Path(p).expanduser() for p in os.environ.get("ACTX_SCAN", str(HOME)).split(os.pathsep) if p]
 SCAN_DEPTH = 5
 SKIP_DIRS = {"node_modules", "build", "dist", "target", "vendor", "venv", "Android", "go", "snap"}
-# extra flags for `opencode session ...`, e.g. "--standalone" (tests, or when its service isn't running)
+# extra flags for opencode's export/import/delete, e.g. "--standalone" for opencode 2.x (tests, or no service)
 OPENCODE_ARGS = shlex.split(os.environ.get("ACTX_OPENCODE_ARGS", ""))
 HOST = socket.gethostname()
 SELF = Path(__file__).resolve()
-ACTIVE_SECS = 120  # a Claude conversation touched this recently is probably still open
+ACTIVE_SECS = 120  # a conversation file touched this recently is probably still open
 N_PREVIEW = 14
 
 
@@ -90,7 +93,7 @@ ERRORS = (ActxError, OSError, sqlite3.Error, subprocess.SubprocessError, tarfile
 # ── output ──────────────────────────────────────────────────────────────────
 
 NO_COLOR = "NO_COLOR" in os.environ or not sys.stdout.isatty()
-HCOLOR = {"claude": "38;5;173", "opencode": "36"}
+HCOLOR = {"claude": "38;5;173", "opencode": "36", "codex": "38;5;75"}
 
 
 def paint(code: str, s: str) -> str:
@@ -231,7 +234,7 @@ class Session:
     title: str
     path: str  # folder the conversation was started in
     updated: float  # last activity (epoch)
-    weight: int  # to tell whether it changed: bytes (claude) or number of messages (opencode)
+    weight: int  # to tell whether it changed: bytes (claude, codex) or number of messages (opencode)
     src: Path | None = None  # local claude: the .jsonl
     meta: dict | None = None  # stored ones
     store_dir: Path | None = None
@@ -242,7 +245,7 @@ class Session:
         return f"{self.harness}:{self.id}"
 
     def size_label(self) -> str:
-        return human(self.weight) if self.harness == "claude" else f"{self.weight} msgs"
+        return f"{self.weight} msgs" if self.harness == "opencode" else human(self.weight)
 
 
 def status(local: Session | None, remote: Session | None, base: list | None) -> str:
@@ -462,46 +465,67 @@ def install_claude(r: Session, local: Session | None, folder: str, fix) -> int:
 
 
 # ── opencode ────────────────────────────────────────────────────────────────
-
-
-OC_UNSUPPORTED = False  # set when the database belongs to opencode 1.x
+# opencode 1.x and 2.x store sessions differently (tables session/message/part vs session_v2/
+# session_message) and export them differently (per message {info, parts} vs flat messages).
+# Both are handled; a stored conversation remembers which one it came from.
 
 
 @functools.cache
 def oc_db() -> sqlite3.Connection | None:
-    global OC_UNSUPPORTED
     if not OPENCODE_DB.exists():
         return None
     try:
-        con = sqlite3.connect(f"file:{OPENCODE_DB}?mode=ro", uri=True, timeout=5)
-        tables = {name for (name,) in con.execute("select name from sqlite_master where type = 'table'")}
-        if "session_v2" not in tables:
-            OC_UNSUPPORTED = "session" in tables
-            return None
-        con.execute("select id, parent_id, directory, time_archived from session_v2 limit 1")
-        return con
+        return sqlite3.connect(f"file:{OPENCODE_DB}?mode=ro", uri=True, timeout=5)
     except sqlite3.Error as e:
         warn(tr("Can't read the opencode database ({err}); skipping opencode", err=e))
         return None
 
 
-def opencode_notice() -> None:
-    """Say why opencode conversations are missing, where you pick conversations."""
-    if OC_UNSUPPORTED:
-        warn(tr("Your opencode is 1.x: actx supports opencode 2.x for now, so only Claude Code is shown."))
+@functools.cache
+def oc_version() -> int | None:
+    """opencode's major version here (1 or 2): from its database, or its CLI when there's no database yet."""
+    con = oc_db()
+    if con:
+        try:
+            tables = {name for (name,) in con.execute("select name from sqlite_master where type = 'table'")}
+        except sqlite3.Error:
+            tables = set()
+        if "session_v2" in tables:
+            return 2
+        if "session" in tables:
+            return 1
+    if not shutil.which("opencode"):
+        return None
+    try:
+        res = subprocess.run(["opencode", "session", "--help"], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return 2 if "import" in res.stdout + res.stderr else 1
 
 
-def opencode_local() -> list[Session]:
+def _oc_query(sql: str, args: tuple = ()) -> list:
     con = oc_db()
     if not con:
         return []
-    rows = con.execute(
-        """select s.id, s.title, s.directory, s.time_updated,
-                  (select count(*) from session_message m where m.session_id = s.id),
-                  (select count(*) from session_message m where m.session_id = s.id and m.type = 'user')
-           from session_v2 s
-           where s.parent_id is null and s.time_archived is null"""
-    ).fetchall()
+    try:
+        return con.execute(sql, args).fetchall()
+    except sqlite3.Error as e:
+        warn(tr("Can't read the opencode database ({err}); skipping opencode", err=e))
+        return []
+
+
+def opencode_local() -> list[Session]:
+    if oc_version() == 2:
+        sessions, messages, user = "session_v2", "session_message", "m.type = 'user'"
+    else:
+        sessions, messages, user = "session", "message", "json_extract(m.data, '$.role') = 'user'"
+    rows = _oc_query(
+        f"""select s.id, s.title, s.directory, s.time_updated,
+                   (select count(*) from {messages} m where m.session_id = s.id),
+                   (select count(*) from {messages} m where m.session_id = s.id and {user})
+            from {sessions} s
+            where s.parent_id is null and s.time_archived is null"""
+    )
     return [
         Session("opencode", sid, title or tr("(untitled)"), d, upd / 1000, n)
         for sid, title, d, upd, n, users in rows
@@ -510,15 +534,17 @@ def opencode_local() -> list[Session]:
 
 
 def oc_children(sid: str) -> list[str]:
-    con, out, todo = oc_db(), [], [sid]
-    while con and todo:
-        for (cid,) in con.execute("select id from session_v2 where parent_id = ?", (todo.pop(),)):
+    table = "session_v2" if oc_version() == 2 else "session"
+    out, todo = [], [sid]
+    while todo:
+        for (cid,) in _oc_query(f"select id from {table} where parent_id = ?", (todo.pop(),)):
             out.append(cid)
             todo.append(cid)
     return out
 
 
 def _oc_text(kind: str | None, d: dict) -> str | None:
+    """Text of an opencode 2.x message."""
     if kind == "user":
         return (d.get("text") or "").strip() or None
     if kind == "assistant":
@@ -528,33 +554,55 @@ def _oc_text(kind: str | None, d: dict) -> str | None:
     return None
 
 
-def oc_messages_db(sid: str) -> list[tuple[str, str]]:
-    con = oc_db()
-    if not con:
-        return []
-    rows = con.execute(
-        "select type, data from session_message where session_id = ? and type in ('user', 'assistant') "
-        "order by seq desc limit ?",
-        (sid, N_PREVIEW * 3),
-    ).fetchall()
-    return [(kind, text) for kind, data in reversed(rows) if (text := _oc_text(kind, json.loads(data)))]
+def _oc1_text(m: dict) -> str:
+    """Text of an opencode 1.x message ({info, parts}), without parts opencode added by itself."""
+    parts = m.get("parts") or []
+    texts = [p.get("text") or "" for p in parts if p.get("type") == "text" and not p.get("synthetic") and not p.get("ignored")]
+    return "\n".join(texts).strip()
 
 
-def _oc_cmd(*args: str) -> list[str]:
+def _oc_format(exp: dict) -> int:
+    msgs = exp.get("messages") or []
+    return 1 if msgs and "info" in msgs[0] else 2
+
+
+def oc_export_messages(exp: dict) -> list[tuple[str, str]]:
+    """(role, text) of an export of either version, for previews."""
+    if _oc_format(exp) == 1:
+        return [(m["info"].get("role"), text) for m in exp.get("messages", []) if (text := _oc1_text(m))]
+    return [(m.get("type"), text) for m in exp.get("messages", []) if (text := _oc_text(m.get("type"), m))]
+
+
+def oc_preview(s: Session) -> list[tuple[str, str]]:
+    if oc_version() == 2:
+        rows = _oc_query(
+            "select type, data from session_message where session_id = ? and type in ('user', 'assistant') "
+            "order by seq desc limit ?",
+            (s.id, N_PREVIEW * 3),
+        )
+        return [(kind, text) for kind, data in reversed(rows) if (text := _oc_text(kind, json.loads(data)))]
+    rows = _oc_query(
+        """select json_extract(m.data, '$.role'),
+                  (select group_concat(json_extract(p.data, '$.text'), char(10)) from part p
+                   where p.message_id = m.id and json_extract(p.data, '$.type') = 'text'
+                     and coalesce(json_extract(p.data, '$.synthetic'), 0) = 0)
+           from message m where m.session_id = ? order by m.time_created desc, m.id desc limit ?""",
+        (s.id, N_PREVIEW * 3),
+    )
+    return [(role, text.strip()) for role, text in reversed(rows) if text and text.strip()]
+
+
+def _oc_cmd(sub: list[str], *rest: str) -> list[str]:
     if not shutil.which("opencode"):
         raise ActxError(tr("opencode is not installed on this machine"))
-    return ["opencode", *args[:2], *OPENCODE_ARGS, *args[2:]]
-
-
-def oc(*args: str, cwd: str | None = None) -> subprocess.CompletedProcess:
-    workdir = cwd if cwd and Path(cwd).is_dir() else HOME
-    return subprocess.run(_oc_cmd(*args), cwd=workdir, capture_output=True, timeout=300)
+    return ["opencode", *sub, *OPENCODE_ARGS, *rest]
 
 
 def oc_export(sid: str, cwd: str) -> bytes:
+    sub = ["session", "export"] if oc_version() == 2 else ["export"]
     # to a file, not a pipe: through a pipe opencode cuts its output (~320 KB)
     with tempfile.TemporaryFile() as out:
-        r = subprocess.run(_oc_cmd("session", "export", sid), cwd=cwd if Path(cwd).is_dir() else HOME,
+        r = subprocess.run(_oc_cmd(sub, sid), cwd=cwd if Path(cwd).is_dir() else HOME,
                            stdout=out, stderr=subprocess.PIPE, timeout=300)
         out.seek(0)
         data = out.read()
@@ -569,8 +617,12 @@ def oc_export(sid: str, cwd: str) -> bytes:
 def oc_import(data: bytes, folder: str) -> None:
     with tempfile.NamedTemporaryFile("wb", suffix=".json", prefix="actx-", delete=False) as fh:
         fh.write(data)
+    if oc_version() == 2:
+        cmd = _oc_cmd(["session", "import"], "--directory", folder, fh.name)
+    else:
+        cmd = _oc_cmd(["import"], fh.name)  # opencode 1.x imports into the folder it runs in
     try:
-        res = oc("session", "import", "--directory", folder, fh.name, cwd=folder)
+        res = subprocess.run(cmd, cwd=folder, capture_output=True, timeout=300)
     finally:
         os.unlink(fh.name)
     output = (res.stdout + res.stderr).decode(errors="replace")
@@ -579,15 +631,114 @@ def oc_import(data: bytes, folder: str) -> None:
 
 
 def oc_delete(sid: str, cwd: str) -> None:
-    res = oc("session", "delete", sid, cwd=cwd)
+    res = subprocess.run(_oc_cmd(["session", "delete"], sid), cwd=cwd if Path(cwd).is_dir() else HOME,
+                         capture_output=True, timeout=300)
     if res.returncode != 0:
         err = res.stderr.decode(errors="replace").strip()[-300:]
         raise ActxError(tr("opencode couldn't delete {sid}: {err}", sid=sid, err=err))
 
 
+@functools.cache
+def oc_cli_version() -> str:
+    try:
+        out = subprocess.run(["opencode", "--version"], capture_output=True, text=True, timeout=60).stdout
+        return out.split()[-1].lstrip("v")
+    except (OSError, subprocess.SubprocessError, IndexError):
+        return "1.0.0"
+
+
+def _oc_id(prefix: str, ts_ms: int, counter: int = 0, descending: bool = False) -> str:
+    """opencode-style ids: 12 hex digits of time (reversed for sessions) + 14 random characters."""
+    v = ts_ms * 0x1000 + counter
+    if descending:
+        v = ~v
+    return f"{prefix}_{v & 0xFFFFFFFFFFFF:012x}" + "".join(random.choices(string.ascii_letters + string.digits, k=14))
+
+
+def _slug(title: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:40] or "imported"
+
+
+def _zero_tokens() -> dict:
+    return {"input": 0, "output": 0, "reasoning": 0, "cache": {"read": 0, "write": 0}}
+
+
+def oc_last_model() -> dict | None:
+    """The last model you used in opencode, as {providerID, modelID, variant}: copies continue with it."""
+    try:
+        if oc_version() == 2:
+            rows = _oc_query("select json_extract(data, '$.model') from session_message where type = 'assistant' "
+                             "order by time_created desc limit 1")
+            m = json.loads(rows[0][0]) if rows and rows[0][0] else None
+            return {"providerID": m["providerID"], "modelID": m["id"], "variant": m.get("variant")} if m else None
+        rows = _oc_query("select data from message where json_extract(data, '$.role') = 'assistant' "
+                         "order by time_created desc limit 1")
+        d = json.loads(rows[0][0]) if rows else None
+        return {"providerID": d["providerID"], "modelID": d["modelID"], "variant": d.get("variant")} if d else None
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _model2(m: dict) -> dict:
+    """A model in opencode 2.x's shape."""
+    return {"id": m["modelID"], "providerID": m["providerID"], **({"variant": m["variant"]} if m.get("variant") else {})}
+
+
+def _oc2_message(mid: str, ts: int, who: str, text: str, model: dict) -> dict:
+    if who == "user":
+        return {"id": mid, "time": {"created": ts}, "text": text, "files": [], "agents": [], "type": "user"}
+    return {
+        "id": mid, "time": {"created": ts, "streamed": ts, "completed": ts}, "type": "assistant", "agent": "build",
+        "model": _model2(model), "content": [{"type": "text", "text": text}], "finish": "stop", "rawFinish": "stop",
+        "cost": 0, "tokens": _zero_tokens(),
+    }
+
+
+def _oc1_message(sid: str, mid: str, ts: int, who: str, text: str, model: dict, parent: str, folder: str) -> dict:
+    if who == "user":
+        info = {"id": mid, "sessionID": sid, "role": "user", "time": {"created": ts}, "agent": "build",
+                "model": {"providerID": model["providerID"], "modelID": model["modelID"]}}
+    else:
+        info = {"id": mid, "sessionID": sid, "role": "assistant", "parentID": parent, "modelID": model["modelID"],
+                "providerID": model["providerID"], "mode": "build", "agent": "build",
+                "path": {"cwd": folder, "root": folder}, "cost": 0, "tokens": _zero_tokens(),
+                "time": {"created": ts, "completed": ts}, "finish": "stop"}
+    part = {"id": _oc_id("prt", ts), "sessionID": sid, "messageID": mid, "type": "text", "text": text}
+    return {"info": info, "parts": [part]}
+
+
+def oc_write(turns: list, folder: str, title: str, sid: str | None = None, model: dict | None = None) -> Session:
+    """Write turns as an opencode session (in the format of the opencode installed here).
+    It continues with the last model you used in opencode, or else `model`."""
+    model = oc_last_model() or model
+    if not model:
+        raise ActxError(tr("I don't know which model you use in opencode: open opencode once and try again"))
+    t0, t1 = turns[0][2], turns[-1][2]
+    sid = sid or _oc_id("ses", t0, descending=True)
+    msgs, parent = [], None
+    for n, (who, text, ts) in enumerate(turns, 1):
+        mid = _oc_id("msg", ts, n)
+        if oc_version() == 2:
+            msgs.append(_oc2_message(mid, ts, who, text, model))
+        else:
+            msgs.append(_oc1_message(sid, mid, ts, who, text, model, parent or mid, folder))
+        if who == "user":
+            parent = mid
+    if oc_version() == 2:
+        # projectID is required; import --directory replaces it with that folder's project
+        info = {"id": sid, "projectID": "global", "agent": "build", "model": _model2(model), "cost": 0,
+                "tokens": _zero_tokens(), "outcome": "succeeded", "time": {"created": t0, "updated": t1},
+                "title": title, "location": {"directory": folder}}
+    else:
+        info = {"id": sid, "slug": _slug(title), "projectID": "global", "directory": folder, "title": title,
+                "version": oc_cli_version(), "time": {"created": t0, "updated": t1}}
+    oc_import(json.dumps({"info": info, "messages": msgs}, ensure_ascii=False).encode(), folder)
+    return Session("opencode", sid, title, folder, t1 / 1000, len(msgs))
+
+
 def push_opencode(s: Session, tmp: Path) -> tuple[dict, float, int, str]:
     data = oc_export(s.id, s.path)
-    files = {"session": f"session.json.{COMP}", "children": []}
+    files = {"session": f"session.json.{COMP}", "children": [], "format": f"opencode-v{oc_version()}"}
     with copen(tmp / files["session"], "wb") as fo:
         fo.write(data)
     for cid in oc_children(s.id):  # subagents
@@ -595,36 +746,390 @@ def push_opencode(s: Session, tmp: Path) -> tuple[dict, float, int, str]:
         with copen(tmp / name, "wb") as fo:
             fo.write(oc_export(cid, s.path))
         files["children"].append(name)
-    msgs = json.loads(data).get("messages", [])
-    preview = [(m.get("type"), t) for m in msgs if (t := _oc_text(m.get("type"), m))]
-    return files, s.updated, len(msgs), render(preview, "opencode")
+    exp = json.loads(data)
+    return files, s.updated, len(exp.get("messages", [])), render(oc_export_messages(exp), "opencode")
+
+
+def _stored_export(r: Session, fix, name: str | None = None) -> bytes:
+    with copen(r.store_dir / (name or r.meta["files"]["session"]), "rb") as fi:
+        data = fi.read()
+    return fix(data) if fix else data
 
 
 def install_opencode(r: Session, local: Session | None, folder: str, fix) -> int:
     meta = r.meta
-    exports = []
-    for name in [meta["files"]["session"], *meta["files"].get("children", [])]:
-        with copen(r.store_dir / name, "rb") as fi:
-            data = fi.read()
-        exports.append(fix(data) if fix else data)
+    exports = [_stored_export(r, fix, name) for name in [meta["files"]["session"], *meta["files"].get("children", [])]]
     if local:
-        # import doesn't overwrite an existing session: back up, delete and import
+        # import doesn't replace an existing session: back up, delete and import
         backup_bytes(oc_export(r.id, local.path), f"opencode-{r.id}.json")
         oc_delete(r.id, local.path)
-    for data in exports:
-        oc_import(data, folder)
-    return r.weight
+    stored, here = meta["files"].get("format", "opencode-v2"), f"opencode-v{oc_version()}"
+    if stored == here:
+        for data in exports:
+            oc_import(data, folder)
+        return r.weight
+    # saved by the other major version of opencode: convert it, keeping its id
+    warn(tr("«{title}» comes from opencode {a}.x and here you have opencode {b}.x: converted (tool calls become text)",
+            title=r.title, a=stored[-1], b=here[-1]))
+    exp = json.loads(exports[0])
+    return oc_write(oc_turns(exp), folder, r.title, sid=r.id, model=_oc_export_model(exp)).weight
 
 
-# ── converting between Claude Code and opencode ─────────────────────────────
+def _oc_export_model(exp: dict) -> dict | None:
+    """The model an export was using, as {providerID, modelID, variant}."""
+    try:
+        if _oc_format(exp) == 1:
+            last = next((m["info"] for m in reversed(exp.get("messages", [])) if m["info"].get("role") == "assistant"), None)
+            return {"providerID": last["providerID"], "modelID": last["modelID"], "variant": last.get("variant")} if last else None
+        m = (exp.get("info") or {}).get("model")
+        return {"providerID": m["providerID"], "modelID": m["id"], "variant": m.get("variant")} if m else None
+    except (KeyError, TypeError):
+        return None
+
+
+def _oc_model_label(exp: dict) -> str | None:
+    return (_oc_export_model(exp) or {}).get("modelID")
+
+
+def _oc_msg_id(m: dict) -> str | None:
+    return m.get("id") or (m.get("info") or {}).get("id")
+
+
+def _oc_other_branch(l: Session, r: Session, fix) -> list:
+    if r.meta["files"].get("format", "opencode-v2") != f"opencode-v{oc_version()}":
+        raise ActxError(tr("can't merge between opencode 1.x and 2.x: pick this one or the other one"))
+    mine = {_oc_msg_id(m) for m in json.loads(oc_export(l.id, l.path)).get("messages", [])}
+    exp = json.loads(_stored_export(r, fix))
+    return oc_turns({"messages": [m for m in exp.get("messages", []) if _oc_msg_id(m) not in mine]})
+
+
+def _oc_append(l: Session, text: str, ack: str) -> None:
+    raw = oc_export(l.id, l.path)
+    backup_bytes(raw, f"opencode-{l.id}.json")
+    exp = json.loads(raw)
+    msgs = exp.setdefault("messages", [])
+    now = int(time.time() * 1000)
+    if _oc_format(exp) == 1:
+        last = next((m["info"] for m in reversed(msgs) if m["info"].get("role") == "assistant"), None)
+        model = {"providerID": last["providerID"], "modelID": last["modelID"]} if last else oc_last_model()
+    else:
+        last = next((m["model"] for m in reversed(msgs) if m.get("type") == "assistant" and m.get("model")), None)
+        model = {"providerID": last["providerID"], "modelID": last["id"], "variant": last.get("variant")} if last else oc_last_model()
+    if not model:
+        raise ActxError(tr("I don't know which model you use in opencode: open opencode once and try again"))
+    user_id, reply_id = _oc_id("msg", now, 1), _oc_id("msg", now, 2)
+    if _oc_format(exp) == 1:
+        msgs.append(_oc1_message(l.id, user_id, now, "user", text, model, user_id, l.path))
+        msgs.append(_oc1_message(l.id, reply_id, now, "assistant", ack, model, user_id, l.path))
+    else:
+        msgs.append(_oc2_message(user_id, now, "user", text, model))
+        msgs.append(_oc2_message(reply_id, now, "assistant", ack, model))
+    oc_delete(l.id, l.path)
+    oc_import(json.dumps(exp, ensure_ascii=False).encode(), l.path)
+    l.weight, l.updated = len(msgs), now / 1000
+
+
+def _oc_branch_copy(r: Session, folder: str, fix, title: str) -> Session:
+    """The stored version, whole, as a new session (new ids so it doesn't clash with the original)."""
+    exp = json.loads(_stored_export(r, fix))
+    info, msgs = exp.setdefault("info", {}), exp.get("messages", [])
+    t0 = (info.get("time") or {}).get("created") or int(time.time() * 1000)
+    sid = _oc_id("ses", t0, descending=True)
+    info.update(id=sid, title=title)
+    if _oc_format(exp) == 1:
+        info["slug"] = _slug(title)
+        ids = {m["info"]["id"]: _oc_id("msg", (m["info"].get("time") or {}).get("created") or t0, n)
+               for n, m in enumerate(msgs, 1)}
+        for m in msgs:
+            m["info"].update(id=ids[m["info"]["id"]], sessionID=sid)
+            if m["info"].get("parentID") in ids:
+                m["info"]["parentID"] = ids[m["info"]["parentID"]]
+            for p in m.get("parts") or []:
+                p.update(id=_oc_id("prt", t0), sessionID=sid, messageID=m["info"]["id"])
+                if p.get("tail_start_id") in ids:
+                    p["tail_start_id"] = ids[p["tail_start_id"]]
+    else:
+        for n, m in enumerate(msgs, 1):
+            m["id"] = _oc_id("msg", (m.get("time") or {}).get("created") or t0, n)
+    oc_import(json.dumps(exp, ensure_ascii=False).encode(), folder)
+    return Session("opencode", sid, title, folder, time.time(), len(msgs))
+
+
+# ── Codex ───────────────────────────────────────────────────────────────────
+# A session is a "rollout" file, ~/.codex/sessions/YYYY/MM/DD/rollout-<time>-<id>.jsonl, holding what
+# the model saw (response_item) and what Codex shows (event_msg); titles live in session_index.jsonl.
+# Codex finds rollouts by scanning that folder, so copying the file is enough.
+
+CODEX_ID = re.compile(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$")
+
+
+def _uuid7() -> str:
+    if hasattr(uuid, "uuid7"):  # Python 3.14+
+        return str(uuid.uuid7())
+    ms, rand = int(time.time() * 1000), random.getrandbits(74)
+    value = (ms << 80) | (0x7 << 76) | ((rand >> 62) << 64) | (0b10 << 62) | (rand & ((1 << 62) - 1))
+    return str(uuid.UUID(int=value))
+
+
+def _codex_titles() -> dict[str, str]:
+    titles = {}
+    try:
+        lines = CODEX_INDEX.read_text().splitlines()
+    except OSError:
+        return titles
+    for line in lines:
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if e.get("id") and e.get("thread_name"):
+            titles[e["id"]] = e["thread_name"]
+    return titles
+
+
+def _codex_set_title(sid: str, title: str) -> None:
+    if _codex_titles().get(sid) == title:
+        return
+    CODEX_INDEX.parent.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    with open(CODEX_INDEX, "a") as fo:
+        fo.write(jsonl({"id": sid, "thread_name": title, "updated_at": stamp}))
+
+
+def _codex_text(p: dict, role: str) -> str | None:
+    """Text of a response_item message from `role`, leaving out injected context like <environment_context>."""
+    if p.get("type") != "message" or p.get("role") != role:
+        return None
+    kinds = ("input_text", "text") if role == "user" else ("output_text", "text")
+    texts = [c.get("text", "") for c in p.get("content") or []
+             if isinstance(c, dict) and c.get("type") in kinds and not c.get("text", "").lstrip().startswith("<")]
+    return "\n".join(texts).strip() or None
+
+
+def codex_messages(buf: bytes) -> list[tuple[str, str]]:
+    msgs = []
+    for e in _lines(buf):
+        if e.get("type") == "response_item":
+            for role in ("user", "assistant"):
+                if text := _codex_text(e.get("payload") or {}, role):
+                    msgs.append((role, text))
+    return msgs
+
+
+def _codex_meta(f: Path) -> dict:
+    with open(f, "rb") as fh:
+        try:
+            e = json.loads(fh.readline())
+        except ValueError:
+            return {}
+    return (e.get("payload") or {}) if e.get("type") == "session_meta" else {}
+
+
+def codex_local() -> list[Session]:
+    if not CODEX_SESSIONS.is_dir():
+        return []
+    titles, out = _codex_titles(), []
+    for f in CODEX_SESSIONS.glob("*/*/*/rollout-*.jsonl"):
+        m = CODEX_ID.search(f.name)
+        if not m:
+            continue
+        try:
+            st, meta, (head, tail) = f.stat(), _codex_meta(f), _chunks(f)
+        except OSError:
+            continue
+        if not meta.get("cwd") or meta.get("thread_source") not in (None, "user"):
+            continue  # unreadable, or a subagent's thread
+        said = [text for role, text in codex_messages(head) + codex_messages(tail) if role == "user"]
+        if not said:
+            continue
+        title = titles.get(m.group(1)) or said[0].splitlines()[0][:80]
+        out.append(Session("codex", m.group(1), title, meta["cwd"], st.st_mtime, st.st_size, src=f))
+    return out
+
+
+@functools.cache
+def codex_version() -> str:
+    try:
+        return subprocess.run(["codex", "--version"], capture_output=True, text=True, timeout=60).stdout.split()[-1]
+    except (OSError, subprocess.SubprocessError, IndexError):
+        return "0.0.0"
+
+
+def _iso(ts: int) -> str:
+    return datetime.fromtimestamp(ts / 1000, timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _codex_line(kind: str, payload: dict, ts: int) -> str:
+    return jsonl({"timestamp": _iso(ts), "type": kind, "payload": payload})
+
+
+def _codex_task_end(turn: str, last: str, ts: int) -> str:
+    return _codex_line("event_msg", {"type": "task_complete", "turn_id": turn, "last_agent_message": last,
+                                     "started_at": ts // 1000, "completed_at": ts // 1000, "duration_ms": 0}, ts)
+
+
+def _codex_turn_lines(sid: str, turns: list) -> list[str]:
+    """Rollout lines for turns: what the model sees (response_item) and what Codex shows (event_msg)."""
+    lines, turn, last, ts = [], None, "", 0
+    for who, text, ts in turns:
+        if who == "user" or turn is None:
+            if turn:
+                lines.append(_codex_task_end(turn, last, ts))
+            turn, last = _uuid7(), ""
+            lines.append(_codex_line("event_msg", {"type": "task_started", "turn_id": turn, "started_at": ts // 1000}, ts))
+        if who == "user":
+            item = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]}
+            shown = {"type": "UserMessage", "id": str(uuid.uuid4()),
+                     "content": [{"type": "text", "text": text, "text_elements": []}]}
+        else:
+            item = {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": text}]}
+            shown = {"type": "AgentMessage", "id": str(uuid.uuid4()), "content": [{"type": "Text", "text": text}],
+                     "phase": "final_answer"}
+            last = text
+        lines.append(_codex_line("response_item", item, ts))
+        lines.append(_codex_line("event_msg", {"type": "item_completed", "thread_id": sid, "turn_id": turn,
+                                               "item": shown, "started_at_ms": ts, "completed_at_ms": ts}, ts))
+    if turn:
+        lines.append(_codex_task_end(turn, last, ts))
+    return lines
+
+
+def _codex_new_path(sid: str) -> Path:
+    now = time.localtime()
+    d = CODEX_SESSIONS / time.strftime("%Y/%m/%d", now)
+    d.mkdir(parents=True, exist_ok=True)
+    return d / f"rollout-{time.strftime('%Y-%m-%dT%H-%M-%S', now)}-{sid}.jsonl"
+
+
+def codex_write(turns: list, folder: str, title: str) -> Session:
+    sid = _uuid7()
+    path = _codex_new_path(sid)
+    t0 = turns[0][2]
+    meta = {"id": sid, "session_id": sid, "timestamp": _iso(t0), "cwd": folder,
+            "originator": "codex-tui", "cli_version": codex_version(), "source": "cli", "model_provider": "openai"}
+    with open(path, "w") as fo:
+        fo.write(_codex_line("session_meta", meta, t0))
+        fo.writelines(_codex_turn_lines(sid, turns))
+    os.chmod(path, 0o600)
+    _codex_set_title(sid, title)
+    st = path.stat()
+    return Session("codex", sid, title, folder, st.st_mtime, st.st_size, src=path)
+
+
+def push_codex(s: Session, tmp: Path) -> tuple[dict, float, int, str]:
+    src = s.src
+    files = {"session": f"rollout.jsonl.{COMP}", "name": src.name, "dir": str(src.parent.relative_to(CODEX_SESSIONS))}
+    updated = src.stat().st_mtime
+    with open(src, "rb") as fi, copen(tmp / files["session"], "wb") as fo:
+        shutil.copyfileobj(fi, fo, 1 << 20)
+        weight = fi.tell()
+    return files, updated, weight, render(codex_messages(_chunks(src)[1]), "codex")
+
+
+def install_codex(r: Session, local: Session | None, folder: str, fix) -> int:
+    meta = r.meta
+    dest = CODEX_SESSIONS / meta["files"]["dir"] / meta["files"]["name"]
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if local and local.src:
+        backup_file(local.src, f"codex-{r.id}.jsonl")
+    tmp = dest.with_name(f".{dest.name}.actx-tmp")
+    try:
+        with copen(r.store_dir / meta["files"]["session"], "rb") as fi, open(tmp, "wb") as fo:
+            if fix:
+                for line in fi:
+                    fo.write(fix(line))
+            else:
+                shutil.copyfileobj(fi, fo, 1 << 20)
+        os.chmod(tmp, 0o600)
+        os.utime(tmp, (meta["updated"], meta["updated"]))
+        os.replace(tmp, dest)
+    finally:
+        tmp.unlink(missing_ok=True)
+    if local and local.src and local.src != dest:
+        local.src.unlink(missing_ok=True)
+    _codex_set_title(r.id, r.title)
+    return dest.stat().st_size
+
+
+def codex_turns(lines) -> list[tuple[str, str, int]]:
+    """Turns of a Codex rollout, from the last compaction on."""
+    items: list = []
+    for raw in lines:
+        try:
+            e = json.loads(raw)
+        except ValueError:
+            continue
+        ts, p = _iso_ms(e.get("timestamp")), e.get("payload") or {}
+        if e.get("type") == "compacted":
+            history = p.get("replacement_history")
+            if isinstance(history, list):
+                items = [(ts, x) for x in history if isinstance(x, dict)]
+            else:
+                summary = f"{tr('[Summary of the earlier part of the conversation]')}\n{p.get('message') or ''}"
+                items = [(ts, {"type": "message", "role": "user", "content": [{"type": "input_text", "text": summary}]})]
+        elif e.get("type") == "response_item":
+            items.append((ts, p))
+    turns, calls = [], {}
+    for ts, p in items:
+        kind = p.get("type")
+        if kind == "message":
+            if text := _codex_text(p, "user"):
+                _add_turn(turns, "user", text, ts)
+            elif text := _codex_text(p, "assistant"):
+                _add_turn(turns, "assistant", text, ts)
+        elif kind in ("function_call", "custom_tool_call", "local_shell_call"):
+            raw_args = p.get("arguments", p.get("input", p.get("action")))
+            try:
+                args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+            except ValueError:
+                args = {"command": raw_args}
+            calls[p.get("call_id")] = _tool_call(p.get("name") or kind, args if args is not None else {})
+        elif kind in ("function_call_output", "custom_tool_call_output", "local_shell_call_output"):
+            output = p.get("output")
+            if isinstance(output, dict):
+                output = output.get("content") or output.get("output") or output
+            _add_turn(turns, "assistant", _tool_text(calls.get(p.get("call_id"), "‹tool›"), _as_text(output)), ts)
+    return turns
+
+
+def _codex_other_branch(l: Session, r: Session, fix) -> list:
+    """Rollouts only grow: what the other one has after the part both share."""
+    mine = l.src.read_bytes().splitlines()
+    with copen(r.store_dir / r.meta["files"]["session"], "rb") as fi:
+        theirs = [fix(x) if fix else x for x in fi.read().splitlines()]
+    n = 0
+    while n < min(len(mine), len(theirs)) and mine[n] == theirs[n]:
+        n += 1
+    return codex_turns(theirs[n:])
+
+
+def _codex_append(l: Session, text: str, ack: str) -> None:
+    now = int(time.time() * 1000)
+    with open(l.src, "a") as fo:
+        fo.writelines(_codex_turn_lines(l.id, [("user", text, now), ("assistant", ack, now)]))
+    l.weight, l.updated = l.src.stat().st_size, l.src.stat().st_mtime
+
+
+def _codex_branch_copy(r: Session, folder: str, fix, title: str) -> Session:
+    sid = _uuid7()
+    path = _codex_new_path(sid)
+    with copen(r.store_dir / r.meta["files"]["session"], "rb") as fi, open(path, "wb") as fo:
+        for line in fi:
+            fo.write((fix(line) if fix else line).replace(r.id.encode(), sid.encode()))
+    os.chmod(path, 0o600)
+    _codex_set_title(sid, title)
+    st = path.stat()
+    return Session("codex", sid, title, folder, st.st_mtime, st.st_size, src=path)
+
+
+# ── converting between tools ────────────────────────────────────────────────
 # Your messages and the replies are kept. Each tool has its own tool names and formats, so tool
 # calls become text (what was run and what came out). Internal reasoning is dropped: each model
 # signs it its own way and the other one wouldn't accept it.
 
 OUT_MAX = 1500  # characters of each tool output that are kept
 CONV_BUDGET = 400_000  # at most this many characters (~100k tokens); the beginning is dropped if needed
-LABEL = {"claude": "Claude Code", "opencode": "opencode"}
-COPY_SUFFIX = re.compile(r" \((?:from|de) (?:Claude Code|opencode)\)$")
+COPY_SUFFIX = re.compile(r" \((?:from|de) (?:Claude Code|opencode|Codex)\)$")
 IMPORT_NOTE = re.compile(
     r"^\[(?:Conversation imported from|Conversación importada de) [^\]\n]*\]\n?"
     r"(?:\[(?:The first|Se han omitido) [^\]\n]*\]\n?)?\s*"
@@ -642,10 +1147,10 @@ def _as_text(x) -> str:
 
 
 def _tool_call(name: str, args) -> str:
-    if isinstance(args, dict) and isinstance(args.get("command"), str):
-        call = "$ " + args["command"]
-    else:
-        call = json.dumps(args, ensure_ascii=False)
+    cmd = args.get("command", args.get("cmd")) if isinstance(args, dict) else None
+    if isinstance(cmd, list):
+        cmd = " ".join(map(str, cmd))
+    call = "$ " + cmd if isinstance(cmd, str) else json.dumps(args, ensure_ascii=False)
     return f"‹{name}› " + (call if len(call) <= 400 else call[:400] + "…")
 
 
@@ -733,29 +1238,38 @@ def claude_turns(lines) -> list[tuple[str, str, int]]:
     return turns
 
 
-def _oc_tool_text(part: dict) -> str:
-    state = part.get("state") or {}
-    if isinstance(state, str):
-        try:
-            state = json.loads(state)
-        except ValueError:
-            state = {}
-    output = state.get("output") or state.get("error") or state.get("content")
-    return _tool_text(_tool_call(part.get("name", "?"), state.get("input") or {}), _as_text(output))
-
-
 def oc_turns(exp: dict) -> list[tuple[str, str, int]]:
-    """Turns of an opencode export, from the last compaction on (with its summary)."""
+    """Turns of an opencode export (either version), from the last compaction on (with its summary)."""
     msgs = exp.get("messages", [])
-    start = max((i for i, m in enumerate(msgs) if m.get("type") == "compaction" and m.get("summary")), default=None)
+    now = int(time.time() * 1000)
+    header = tr("[Summary of the earlier part of the conversation]")
     turns: list = []
+    if _oc_format(exp) == 1:
+        start = max((i for i, m in enumerate(msgs) if m["info"].get("summary") is True), default=None)
+        if start is not None:
+            ts = (msgs[start]["info"].get("time") or {}).get("created") or 0
+            _add_turn(turns, "user", f"{header}\n{_oc1_text(msgs[start])}", ts)
+            msgs = msgs[start + 1:]
+        for m in msgs:
+            info = m["info"]
+            ts = (info.get("time") or {}).get("created") or now
+            who = "user" if info.get("role") == "user" else "assistant"
+            for p in m.get("parts") or []:
+                if p.get("type") == "text" and not p.get("synthetic") and not p.get("ignored"):
+                    _add_turn(turns, who, p.get("text") or "", ts)
+                elif p.get("type") == "tool":
+                    state = p.get("state") or {}
+                    output = state.get("output") or state.get("error") or ""
+                    call = _tool_call(p.get("tool", "?"), state.get("input") or {})
+                    _add_turn(turns, "assistant", _tool_text(call, _as_text(output)), ts)
+        return turns
+    start = max((i for i, m in enumerate(msgs) if m.get("type") == "compaction" and m.get("summary")), default=None)
     if start is not None:
         ts = (msgs[start].get("time") or {}).get("created") or 0
-        header = tr("[Summary of the earlier part of the conversation]")
         _add_turn(turns, "user", f"{header}\n{msgs[start]['summary']}", ts)
         msgs = msgs[start + 1:]
     for m in msgs:
-        ts = (m.get("time") or {}).get("created") or int(time.time() * 1000)
+        ts = (m.get("time") or {}).get("created") or now
         if m.get("type") == "user":
             _add_turn(turns, "user", m.get("text") or "", ts)
         elif m.get("type") == "assistant":
@@ -765,6 +1279,17 @@ def oc_turns(exp: dict) -> list[tuple[str, str, int]]:
                 elif part.get("type") == "tool":
                     _add_turn(turns, "assistant", _oc_tool_text(part), ts)
     return turns
+
+
+def _oc_tool_text(part: dict) -> str:
+    state = part.get("state") or {}
+    if isinstance(state, str):
+        try:
+            state = json.loads(state)
+        except ValueError:
+            state = {}
+    output = state.get("output") or state.get("error") or state.get("content")
+    return _tool_text(_tool_call(part.get("name", "?"), state.get("input") or {}), _as_text(output))
 
 
 def _fit(turns: list, source: str, model: str | None) -> list:
@@ -782,7 +1307,7 @@ def _fit(turns: list, source: str, model: str | None) -> list:
     dropped, turns = keep, turns[keep:]
     note = tr(
         "[Conversation imported from {source}{model}. Tool calls appear as text.]",
-        source=LABEL[source], model=f" ({model})" if model else "",
+        source=HARNESS[source].label, model=f" ({model})" if model else "",
     )
     if dropped:
         note += "\n" + tr("[The first {n} messages were left out because they didn't fit.]", n=dropped)
@@ -834,83 +1359,24 @@ def write_claude(turns: list, folder: str, title: str, model: str | None) -> Ses
     return Session("claude", sid, title, folder, st.st_mtime, st.st_size, src=path)
 
 
-def _oc_id(prefix: str, ts_ms: int, counter: int = 0, descending: bool = False) -> str:
-    """opencode-style ids: 12 hex digits of time (reversed for sessions) + 14 random characters."""
-    v = ts_ms * 0x1000 + counter
-    if descending:
-        v = ~v
-    return f"{prefix}_{v & 0xFFFFFFFFFFFF:012x}" + "".join(random.choices(string.ascii_letters + string.digits, k=14))
-
-
-def oc_last_model() -> dict | None:
-    """The last model you used in opencode: the conversation will continue with it."""
-    con = oc_db()
-    if not con:
-        return None
-    row = con.execute(
-        "select json_extract(data, '$.model') from session_message where type = 'assistant' "
-        "order by time_created desc limit 1"
-    ).fetchone()
-    return json.loads(row[0]) if row and row[0] else None
-
-
-def write_opencode(turns: list, folder: str, title: str) -> Session:
-    model = oc_last_model()
-    if not model:
-        raise ActxError(tr("I don't know which model you use in opencode: open opencode once and try again"))
-    zero = {"input": 0, "output": 0, "reasoning": 0, "cache": {"read": 0, "write": 0}}
-    msgs = []
-    for n, (who, text, ts) in enumerate(turns, 1):
-        if who == "user":
-            msgs.append({"id": _oc_id("msg", ts, n), "time": {"created": ts}, "text": text,
-                         "files": [], "agents": [], "type": "user"})
-        else:
-            msgs.append({
-                "id": _oc_id("msg", ts, n), "time": {"created": ts, "streamed": ts, "completed": ts},
-                "type": "assistant", "agent": "build", "model": model, "content": [{"type": "text", "text": text}],
-                "finish": "stop", "rawFinish": "stop", "cost": 0, "tokens": zero,
-            })
-    t0, t1 = turns[0][2], turns[-1][2]
-    info = {
-        # projectID is required; import --directory replaces it with that folder's project
-        "id": _oc_id("ses", t0, descending=True), "projectID": "global", "agent": "build", "model": model,
-        "cost": 0, "tokens": zero, "outcome": "succeeded", "time": {"created": t0, "updated": t1},
-        "title": title, "location": {"directory": folder},
-    }
-    oc_import(json.dumps({"info": info, "messages": msgs}, ensure_ascii=False).encode(), folder)
-    return Session("opencode", info["id"], title, folder, t1 / 1000, len(msgs))
-
-
-def convert_one(s: Session, st: dict) -> Session:
-    """Create a copy of s in the other tool and return it. The original is left untouched."""
+def convert_one(s: Session, target: str, st: dict) -> Session:
+    """Create a copy of s in another tool and return it. The original is left untouched."""
+    source = HARNESS[s.harness]
     if s.meta:  # only in the shared folder
         folder = resolve_folder(s.meta, st) or ask_folder(s.meta, st)
         if not folder:
             raise ActxError(tr("I don't know which folder it goes in on this machine"))
-        fix = fixer_for(s.meta, folder) or (lambda b: b)
-        with copen(s.store_dir / s.meta["files"]["session"], "rb") as fi:
-            if s.harness == "claude":
-                turns = claude_turns(fix(line) for line in fi)
-            else:
-                exp = json.loads(fix(fi.read()))
+        turns, model = source.stored_turns(s, fixer_for(s.meta, folder))
     else:
         folder = s.path
-        if s.harness == "claude":
-            with open(s.src, "rb") as fi:
-                turns = claude_turns(fi)
-        else:
-            exp = json.loads(oc_export(s.id, s.path))
-    model = None
-    if s.harness == "opencode":
-        turns = oc_turns(exp)
-        model = ((exp.get("info") or {}).get("model") or {}).get("id")
+        turns, model = source.local_turns(s)
     if not turns:
         raise ActxError(tr("it has no text messages to convert"))
     if not Path(folder).is_dir():
         raise ActxError(tr("{path} doesn't exist on this machine", path=short(folder)))
     turns = _fit(turns, s.harness, model)
-    title = tr("{title} (from {source})", title=COPY_SUFFIX.sub("", s.title), source=LABEL[s.harness])
-    return write_opencode(turns, folder, title) if s.harness == "claude" else write_claude(turns, folder, title, model)
+    title = tr("{title} (from {source})", title=COPY_SUFFIX.sub("", s.title), source=source.label)
+    return HARNESS[target].write(turns, folder, title, model)
 
 
 # ── merging two versions of a conversation ──────────────────────────────────
@@ -921,43 +1387,27 @@ MERGE_BUDGET = 100_000  # at most this many characters for the other branch's su
 BRANCH_SUFFIX = re.compile(r" \((?:branch from|rama de) [^)]*\)$")
 
 
-def _other_branch_turns(l: Session, r: Session, fix) -> list:
+def _claude_other_branch(l: Session, r: Session, fix) -> list:
     """What was done on the other machine since both versions split."""
-    src = r.store_dir / r.meta["files"]["session"]
-    if l.harness == "claude":
-        mine = set()
-        with open(l.src, "rb") as fi:
-            for raw in fi:
-                try:
-                    mine.add(json.loads(raw).get("uuid"))
-                except ValueError:
-                    pass
-        theirs = []
-        with copen(src, "rb") as fi:
-            for raw in fi:
-                try:
-                    if json.loads(raw).get("uuid") not in mine:
-                        theirs.append(fix(raw) if fix else raw)
-                except ValueError:
-                    pass
-        return claude_turns(theirs)  # the chain stops by itself where the shared part begins
-    mine = {m.get("id") for m in json.loads(oc_export(l.id, l.path)).get("messages", [])}
-    with copen(src, "rb") as fi:
-        data = fi.read()
-    exp = json.loads(fix(data) if fix else data)
-    return oc_turns({"messages": [m for m in exp.get("messages", []) if m.get("id") not in mine]})
+    mine = set()
+    with open(l.src, "rb") as fi:
+        for raw in fi:
+            try:
+                mine.add(json.loads(raw).get("uuid"))
+            except ValueError:
+                pass
+    theirs = []
+    with copen(r.store_dir / r.meta["files"]["session"], "rb") as fi:
+        for raw in fi:
+            try:
+                if json.loads(raw).get("uuid") not in mine:
+                    theirs.append(fix(raw) if fix else raw)
+            except ValueError:
+                pass
+    return claude_turns(theirs)  # the chain stops by itself where the shared part begins
 
 
-def _branch_summary(turns: list, host: str) -> str:
-    names = {"user": tr("You"), "assistant": tr("Agent")}
-    body = "\n\n".join(f"{names[who]}: {text}" for who, text, _ts in turns)
-    if len(body) > MERGE_BUDGET:
-        body = "…\n" + body[-MERGE_BUDGET:]
-    header = tr("[Meanwhile, this conversation continued on {host}. This is what happened there:]", host=host)
-    return f"{header}\n\n{body}"
-
-
-def _append_claude(l: Session, text: str, ack: str) -> None:
+def _claude_append(l: Session, text: str, ack: str) -> None:
     leaf, cwd = None, l.path
     for buf in (_chunks(l.src)[1], None):
         for e in _lines(buf if buf is not None else l.src.read_bytes()):
@@ -979,63 +1429,45 @@ def _append_claude(l: Session, text: str, ack: str) -> None:
     l.weight, l.updated = l.src.stat().st_size, l.src.stat().st_mtime
 
 
-def _append_opencode(l: Session, text: str, ack: str) -> None:
-    raw = oc_export(l.id, l.path)
-    backup_bytes(raw, f"opencode-{l.id}.json")
-    exp = json.loads(raw)
-    msgs = exp.setdefault("messages", [])
-    model = next((m["model"] for m in reversed(msgs) if m.get("type") == "assistant" and m.get("model")), None)
-    now = int(time.time() * 1000)
-    msgs.append({"id": _oc_id("msg", now, 1), "time": {"created": now}, "text": text,
-                 "files": [], "agents": [], "type": "user"})
-    msgs.append({"id": _oc_id("msg", now, 2), "time": {"created": now, "streamed": now, "completed": now},
-                 "type": "assistant", "agent": "build", "model": model or oc_last_model(),
-                 "content": [{"type": "text", "text": ack}], "finish": "stop", "rawFinish": "stop", "cost": 0,
-                 "tokens": {"input": 0, "output": 0, "reasoning": 0, "cache": {"read": 0, "write": 0}}})
-    oc_delete(l.id, l.path)
-    oc_import(json.dumps(exp, ensure_ascii=False).encode(), l.path)
-    l.weight, l.updated = len(msgs), now / 1000
-
-
-def _branch_copy(r: Session, folder: str, fix, title: str) -> Session:
+def _claude_branch_copy(r: Session, folder: str, fix, title: str) -> Session:
     """The stored version, whole, as a new conversation (new ids so it doesn't clash with the original)."""
-    with copen(r.store_dir / r.meta["files"]["session"], "rb") as fi:
-        if r.harness == "opencode":
-            data = fi.read()
-            exp = json.loads(fix(data) if fix else data)
-            t0 = ((exp.get("info") or {}).get("time") or {}).get("created") or int(time.time() * 1000)
-            exp["info"] |= {"id": _oc_id("ses", t0, descending=True), "title": title}
-            for n, m in enumerate(exp.get("messages", []), 1):
-                m["id"] = _oc_id("msg", (m.get("time") or {}).get("created") or t0, n)
-            oc_import(json.dumps(exp, ensure_ascii=False).encode(), folder)
-            return Session("opencode", exp["info"]["id"], title, folder, time.time(), len(exp["messages"]))
-        sid, renamed = str(uuid.uuid4()), {}
-        tdir = CLAUDE_PROJECTS / encode_claude(folder)
-        tdir.mkdir(parents=True, exist_ok=True)
-        path = tdir / f"{sid}.jsonl"
-        with open(path, "w") as fo:
-            for raw in fi:
-                try:
-                    e = json.loads(fix(raw) if fix else raw)
-                except ValueError:
-                    continue
-                if e.get("type") in ("ai-title", "custom-title", "summary"):
-                    continue
-                for k in ("uuid", "parentUuid", "logicalParentUuid", "leafUuid"):
-                    if e.get(k):
-                        e[k] = renamed.setdefault(e[k], str(uuid.uuid4()))
-                if "sessionId" in e:
-                    e["sessionId"] = sid
-                fo.write(jsonl(e))
-            fo.write(jsonl({"type": "ai-title", "aiTitle": title, "sessionId": sid}))
+    sid, renamed = str(uuid.uuid4()), {}
+    tdir = CLAUDE_PROJECTS / encode_claude(folder)
+    tdir.mkdir(parents=True, exist_ok=True)
+    path = tdir / f"{sid}.jsonl"
+    with copen(r.store_dir / r.meta["files"]["session"], "rb") as fi, open(path, "w") as fo:
+        for raw in fi:
+            try:
+                e = json.loads(fix(raw) if fix else raw)
+            except ValueError:
+                continue
+            if e.get("type") in ("ai-title", "custom-title", "summary"):
+                continue
+            for k in ("uuid", "parentUuid", "logicalParentUuid", "leafUuid"):
+                if e.get(k):
+                    e[k] = renamed.setdefault(e[k], str(uuid.uuid4()))
+            if "sessionId" in e:
+                e["sessionId"] = sid
+            fo.write(jsonl(e))
+        fo.write(jsonl({"type": "ai-title", "aiTitle": title, "sessionId": sid}))
     os.chmod(path, 0o600)
     return Session("claude", sid, title, folder, path.stat().st_mtime, path.stat().st_size, src=path)
 
 
+def _branch_summary(turns: list, host: str) -> str:
+    names = {"user": tr("You"), "assistant": tr("Agent")}
+    body = "\n\n".join(f"{names[who]}: {text}" for who, text, _ts in turns)
+    if len(body) > MERGE_BUDGET:
+        body = "…\n" + body[-MERGE_BUDGET:]
+    header = tr("[Meanwhile, this conversation continued on {host}. This is what happened there:]", host=host)
+    return f"{header}\n\n{body}"
+
+
 def merge_one(root: Path, l: Session, r: Session, st: dict) -> None:
+    h = HARNESS[l.harness]
     host = r.meta["host"]
     fix = fixer_for(r.meta, l.path)
-    turns = _other_branch_turns(l, r, fix)
+    turns = h.other_branch(l, r, fix)
     git = git_info(l.path)
     tag = f"{paint('35', '⇄')} {r.project:<14} {harness_tag(r.harness)} {r.title}"
     if not turns:  # nothing really new there: this one wins
@@ -1043,15 +1475,116 @@ def merge_one(root: Path, l: Session, r: Session, st: dict) -> None:
         print(f"{tag}  {dim(tr('(no new messages on {host}: keeping this one)', host=host))}")
         return
     title = tr("{title} (branch from {host})", title=BRANCH_SUFFIX.sub("", r.title), host=host)
-    branch = _branch_copy(r, l.path, fix, title)
-    if l.harness == "claude":
-        backup_file(l.src, f"claude-{l.id}.jsonl")
+    branch = h.branch_copy(r, l.path, fix, title)
+    if l.src:  # file-based tools; opencode backs up inside its append
+        backup_file(l.src, f"{l.harness}-{l.id}.jsonl")
     ack = tr("Got it: I'm taking into account what was done on {host}, and we continue from here.", host=host)
-    (_append_claude if l.harness == "claude" else _append_opencode)(l, _branch_summary(turns, host), ack)
+    h.append(l, _branch_summary(turns, host), ack)
     push_one(root, r.project, l, git, st, {})
     push_one(root, r.project, branch, git, st, {})
     note = tr("+ summary of what was done on {host}; its version is kept as «{title}»", host=host, title=branch.title)
     print(f"{tag}  {dim(note)}")
+
+
+# ── the tools ───────────────────────────────────────────────────────────────
+# Everything above, per tool, behind one interface. Adding a tool means filling one of these.
+
+
+def _shell_path(folder: str) -> str:
+    p = short(folder)
+    return p if re.fullmatch(r"[\w./~+-]+", p) else shlex.quote(folder)
+
+
+def _read_stored(r: Session, fix, parse):
+    with copen(r.store_dir / r.meta["files"]["session"], "rb") as fi:
+        return parse((fix(line) if fix else line) for line in fi)
+
+
+@dataclass(frozen=True)
+class Harness:
+    label: str
+    installed: object  # () -> bool
+    local: object  # () -> list[Session]
+    preview: object  # (Session) -> [(role, text)]
+    push: object  # (Session, tmp dir) -> (files, updated, weight, preview text)
+    install: object  # (stored, local or None, folder, fix) -> weight
+    local_turns: object  # (Session) -> (turns, model)
+    stored_turns: object  # (stored, fix) -> (turns, model)
+    write: object  # (turns, folder, title, model) -> Session
+    other_branch: object  # (local, stored, fix) -> turns
+    append: object  # (local, text, ack) -> None
+    branch_copy: object  # (stored, folder, fix, title) -> Session
+    resume: object  # (id, folder) -> shell command
+
+
+def _oc_local_turns(s: Session):
+    exp = json.loads(oc_export(s.id, s.path))
+    return oc_turns(exp), _oc_model_label(exp)
+
+
+def _oc_stored_turns(r: Session, fix):
+    exp = json.loads(_stored_export(r, fix))
+    return oc_turns(exp), _oc_model_label(exp)
+
+
+def _file_turns(parse):
+    def local_turns(s: Session):
+        with open(s.src, "rb") as fi:
+            return parse(fi), None
+    return local_turns
+
+
+HARNESS = {
+    "claude": Harness(
+        label="Claude Code",
+        installed=lambda: CLAUDE_PROJECTS.parent.is_dir() or bool(shutil.which("claude")),
+        local=claude_local,
+        preview=lambda s: claude_messages(_chunks(s.src)[1]),
+        push=push_claude,
+        install=install_claude,
+        local_turns=_file_turns(claude_turns),
+        stored_turns=lambda r, fix: (_read_stored(r, fix, claude_turns), None),
+        write=write_claude,
+        other_branch=_claude_other_branch,
+        append=_claude_append,
+        branch_copy=_claude_branch_copy,
+        resume=lambda sid, folder: f"cd {_shell_path(folder)} && claude --resume {sid}",
+    ),
+    "opencode": Harness(
+        label="opencode",
+        installed=lambda: bool(shutil.which("opencode")),
+        local=opencode_local,
+        preview=oc_preview,
+        push=push_opencode,
+        install=install_opencode,
+        local_turns=_oc_local_turns,
+        stored_turns=_oc_stored_turns,
+        write=lambda turns, folder, title, model: oc_write(turns, folder, title),
+        other_branch=_oc_other_branch,
+        append=_oc_append,
+        branch_copy=_oc_branch_copy,
+        resume=lambda sid, folder: f"opencode {_shell_path(folder)} -s {sid}",
+    ),
+    "codex": Harness(
+        label="Codex",
+        installed=lambda: CODEX_HOME.is_dir() or bool(shutil.which("codex")),
+        local=codex_local,
+        preview=lambda s: codex_messages(_chunks(s.src)[1]),
+        push=push_codex,
+        install=install_codex,
+        local_turns=_file_turns(codex_turns),
+        stored_turns=lambda r, fix: (_read_stored(r, fix, codex_turns), None),
+        write=lambda turns, folder, title, model: codex_write(turns, folder, title),
+        other_branch=_codex_other_branch,
+        append=_codex_append,
+        branch_copy=_codex_branch_copy,
+        resume=lambda sid, folder: f"cd {_shell_path(folder)} && codex resume {sid}",
+    ),
+}
+
+
+def all_local() -> list[Session]:
+    return [s for h in HARNESS.values() for s in h.local()]
 
 
 # ── git: identifying repos and finding their folder on this machine ─────────
@@ -1321,6 +1854,8 @@ def stored_sessions(root: Path) -> list[Session]:
             continue  # _bin and half-written uploads
         try:
             meta = json.loads(m.read_text())
+            if meta["harness"] not in HARNESS:
+                continue  # stored by a newer actx that knows more tools
             rel = meta.get("rel")
             path = str(HOME / rel) if rel is not None else meta["path"]
             out.append(
@@ -1340,7 +1875,7 @@ def push_one(root: Path, project: str, s: Session, git: dict | None, st: dict, r
     shutil.rmtree(tmp, ignore_errors=True)
     tmp.mkdir(parents=True)
     try:
-        files, updated, weight, preview = (push_claude if s.harness == "claude" else push_opencode)(s, tmp)
+        files, updated, weight, preview = HARNESS[s.harness].push(s, tmp)
         meta = {
             "v": 2, "harness": s.harness, "id": s.id, "title": s.title,
             "path": s.path, "rel": rel_home(s.path), "home": str(HOME),
@@ -1444,16 +1979,12 @@ def session_preview(s: Session) -> str:
             body = tr("(no preview)")
     else:
         lines.append(dim(tr("{path} · last activity {ago}", path=short(s.path), ago=ago(s.updated))))
-        msgs = claude_messages(_chunks(s.src)[1]) if s.harness == "claude" else oc_messages_db(s.id)
-        body = render(msgs, s.harness)
+        body = render(HARNESS[s.harness].preview(s), s.harness)
     return "\n".join(lines) + "\n" + dim("─" * 40) + "\n\n" + body
 
 
 def resume_cmd(harness: str, sid: str, folder: str) -> str:
-    p = short(folder)
-    if not re.fullmatch(r"[\w./~+-]+", p):
-        p = shlex.quote(folder)
-    return f"cd {p} && claude --resume {sid}" if harness == "claude" else f"opencode {p} -s {sid}"
+    return HARNESS[harness].resume(sid, folder)
 
 
 def _norm(s: str) -> str:
@@ -1480,7 +2011,7 @@ def clip(title: str, width: int = 42) -> str:
 
 
 def local_index() -> dict[str, Session]:
-    return {s.key: s for s in claude_local() + opencode_local()}
+    return {s.key: s for s in all_local()}
 
 
 def warn_dirty(folders: set[str]) -> None:
@@ -1579,10 +2110,9 @@ def cmd_mk(args) -> None:
         ok(tr("Project {name} created", name=bold(name)))
     remote = {s.key: s for s in stored_sessions(root)}
     st = load_state()
-    local = claude_local() + opencode_local()
-    opencode_notice()
+    local = all_local()
     if not local:
-        die(tr("No Claude Code or opencode conversations found on this machine"))
+        die(tr("No Claude Code, opencode or Codex conversations found on this machine"))
     ranked = sorted(local, key=lambda s: (-relevance(name, s), -s.updated))
     rows = []
     for s in ranked:
@@ -1595,7 +2125,7 @@ def cmd_mk(args) -> None:
             tag = " " * 12
         star = paint("33", "★") if relevance(name, s) else " "
         details = f"{short(s.path)} · {s.size_label()} · {ago(s.updated)}"
-        if s.harness == "claude" and time.time() - s.updated < ACTIVE_SECS:
+        if s.src and time.time() - s.updated < ACTIVE_SECS:
             details += " · " + tr("open now")
         line = f"{star} {harness_tag(s.harness)} {tag} {clip(s.title):<42}  {dim(details)}"
         rows.append((s.key, line, session_preview(s)))
@@ -1735,8 +2265,7 @@ def cmd_sync(args) -> None:
                 check_git(r.meta, folder)
                 checked.add(folder)
             try:
-                install = install_claude if r.harness == "claude" else install_opencode
-                weight = install(r, l, folder, fixer_for(r.meta, folder))
+                weight = HARNESS[r.harness].install(r, l, folder, fixer_for(r.meta, folder))
                 st["base"][r.key] = [weight, r.weight]
                 print(f"{paint('36', '↓')} {r.project:<14} {harness_tag(r.harness)} {r.title}  {dim('→ ' + short(folder))}")
                 ready.append((r, folder))
@@ -1830,11 +2359,23 @@ def cmd_rm(args) -> None:
     ok(tr("Project {name} deleted", name=pdir.name) if everything else tr("Removed {n}", n=len(chosen)))
 
 
+def pick_target(chosen: list[Session]) -> str | None:
+    """The tool to copy the chosen conversations into: asked only if there's more than one option."""
+    sources = {s.harness for s in chosen}
+    options = [name for name, h in HARNESS.items() if h.installed() and {name} != sources]
+    if not options:
+        die(tr("There's no other tool to convert to: install Claude Code, opencode or Codex"))
+    if len(options) == 1:
+        return options[0]
+    rows = [(name, f"→ {harness_tag(name)} {HARNESS[name].label}", "") for name in options]
+    picked = fzf(rows, tr("Convert to which tool?"), preview=False)
+    return picked[0] if picked else None
+
+
 def cmd_cv(args) -> None:
     root = store_root(optional=True)
     remote = {r.key: r for r in stored_sessions(root)} if root else {}
-    local = claude_local() + opencode_local()
-    opencode_notice()
+    local = all_local()
     have = {s.key for s in local}
     candidates = local + [r for key, r in remote.items() if key not in have]
     if args.project:
@@ -1843,11 +2384,10 @@ def cmd_cv(args) -> None:
         if not candidates:
             die(tr("No conversations in project {name}", name=args.project))
     if not candidates:
-        die(tr("No Claude Code or opencode conversations found"))
+        die(tr("No Claude Code, opencode or Codex conversations found"))
     candidates.sort(key=lambda s: -s.updated)
     rows = []
     for s in candidates:
-        target = "opencode" if s.harness == "claude" else "claude"
         if s.meta:
             where = tr("{path} on {host}", path=short(s.meta["path"]), host=s.meta["host"])
         else:
@@ -1855,19 +2395,26 @@ def cmd_cv(args) -> None:
         details = f"{where} · {s.size_label()} · {ago(s.updated)}"
         if s.key in remote:
             details += " · " + tr("in {project}", project=remote[s.key].project)
-        rows.append((s.key, f"{harness_tag(s.harness)} → {harness_tag(target)} {clip(s.title):<42}  {dim(details)}",
-                     session_preview(s)))
-    header = tr("Convert · creates a copy in the other tool, the original is left untouched · TAB marks several")
+        rows.append((s.key, f"{harness_tag(s.harness)} {clip(s.title):<42}  {dim(details)}", session_preview(s)))
+    header = tr("Convert · creates a copy in another tool, the original is left untouched · TAB marks several")
     keys = set(fzf(rows, header, multi=True))
     chosen = [s for s in candidates if s.key in keys]
+    if not chosen:
+        return
+    target = pick_target(chosen)
+    if not target:
+        return
     st = load_state()
     ready = []
     try:
         for s in chosen:
-            if s.harness == "claude" and s.weight > 50 << 20:
+            if s.harness == target:
+                print(dim(tr("{title}: it's already a {tool} conversation", title=s.title, tool=HARNESS[target].label)))
+                continue
+            if s.src and s.weight > 50 << 20:
                 print(dim(tr("Reading «{title}» ({size})…", title=s.title, size=s.size_label())))
             try:
-                new = convert_one(s, st)
+                new = convert_one(s, target, st)
             except ERRORS as e:
                 fail(f"{s.title}: {e}")
                 continue
@@ -1933,7 +2480,7 @@ def cmd_update(args) -> None:
 # ── help text and Spanish translations ──────────────────────────────────────
 
 HELP = """\
-actx (agent context): keep your Claude Code and opencode conversations in sync across
+actx (agent context): keep your Claude Code, opencode and Codex conversations in sync across
 machines, grouped into projects, through any shared folder (a NAS, Syncthing, ...).
 
   actx init [folder]   choose the shared folder (once per machine)
@@ -1941,7 +2488,7 @@ machines, grouped into projects, through any shared folder (a NAS, Syncthing, ..
   actx sync [project]  push what you continued here and pull what's new (pick projects; --all)
   actx ls [project]    projects and the state of each conversation (also: plain actx)
   actx rm <project>    remove conversations from a project (remove them all to delete it)
-  actx cv [project]    copy a conversation from Claude Code to opencode, or the other way round
+  actx cv [project]    copy a conversation into another tool (Claude Code, opencode, Codex)
   actx update          install the newest actx found in the shared folder
 
 Conversations don't depend on folder paths. When pulling one, actx looks for its repo on this
@@ -1958,15 +2505,15 @@ Language: English or Spanish, from your locale; set ACTX_LANG=en|es or `actx ini
 
 ES = {
     HELP: """\
-actx (agent context): mantiene tus conversaciones de Claude Code y opencode al día entre
-tus PCs, agrupadas en proyectos, a través de cualquier carpeta compartida (un NAS, Syncthing...).
+actx (agent context): mantiene tus conversaciones de Claude Code, opencode y Codex al día
+entre tus PCs, agrupadas en proyectos, a través de cualquier carpeta compartida (un NAS, Syncthing...).
 
   actx init [carpeta]   elige la carpeta compartida (una vez en cada PC)
   actx mk <proyecto>    crea un proyecto (o abre uno) y eliges qué conversaciones guardar
   actx sync [proyecto]  sube lo que has seguido aquí y baja lo nuevo (eliges proyectos; --all)
   actx ls [proyecto]    proyectos y estado de cada conversación (también: actx a secas)
   actx rm <proyecto>    quita conversaciones de un proyecto (si quitas todas, lo borra)
-  actx cv [proyecto]    copia una conversación de Claude Code a opencode, o al revés
+  actx cv [proyecto]    copia una conversación a otro programa (Claude Code, opencode, Codex)
   actx update           instala la última versión de actx que haya en la carpeta compartida
 
 Las conversaciones no dependen de la carpeta. Al bajar una, actx busca su repo en este PC por
@@ -1993,8 +2540,6 @@ Idioma: inglés o español, según tu sistema; o ACTX_LANG=en|es, o `actx init -
     "(no text messages)": "(sin mensajes de texto)",
     "you": "tú",
     "(untitled)": "(sin título)",
-    "Your opencode is 1.x: actx supports opencode 2.x for now, so only Claude Code is shown.":
-        "Tu opencode es 1.x: de momento actx funciona con opencode 2.x, así que solo salen las de Claude Code.",
     "Can't read the opencode database ({err}); skipping opencode":
         "No puedo leer la base de datos de opencode ({err}); me salto opencode",
     "opencode is not installed on this machine": "opencode no está instalado en este PC",
@@ -2066,8 +2611,8 @@ Idioma: inglés o español, según tu sistema; o ACTX_LANG=en|es, o `actx init -
     "Project name [{default}]:": "Nombre del proyecto [{default}]:",
     "Invalid name: use letters, numbers, '-', '_' or '.'": "Nombre no válido: usa letras, números, '-', '_' o '.'",
     "Project {name} created": "Proyecto {name} creado",
-    "No Claude Code or opencode conversations found on this machine":
-        "No encuentro conversaciones de Claude Code ni de opencode en este PC",
+    "No Claude Code, opencode or Codex conversations found on this machine":
+        "No encuentro conversaciones de Claude Code, opencode ni Codex en este PC",
     "in {project}": "en {project}",
     "open now": "abierta ahora",
     "{name} · ★ = looks like this project · TAB marks several · Enter saves":
@@ -2111,9 +2656,17 @@ Idioma: inglés o español, según tu sistema; o ACTX_LANG=en|es, o `actx init -
     "Remove {n} from {name}?": "¿Quitar {n} de {name}?",
     "Removed {n}": "Quitadas {n}",
     "No conversations in project {name}": "No hay conversaciones en el proyecto {name}",
-    "No Claude Code or opencode conversations found": "No encuentro conversaciones de Claude Code ni de opencode",
-    "Convert · creates a copy in the other tool, the original is left untouched · TAB marks several":
-        "Convertir · se crea una copia en el otro programa, la original no se toca · TAB marca varias",
+    "No Claude Code, opencode or Codex conversations found": "No encuentro conversaciones de Claude Code, opencode ni Codex",
+    "There's no other tool to convert to: install Claude Code, opencode or Codex":
+        "No hay otro programa al que convertirla: instala Claude Code, opencode o Codex",
+    "Convert to which tool?": "¿A qué programa la convierto?",
+    "{title}: it's already a {tool} conversation": "{title}: ya es una conversación de {tool}",
+    "can't merge between opencode 1.x and 2.x: pick this one or the other one":
+        "no se pueden mezclar opencode 1.x y 2.x: elige la de aquí o la del otro",
+    "«{title}» comes from opencode {a}.x and here you have opencode {b}.x: converted (tool calls become text)":
+        "«{title}» viene de opencode {a}.x y aquí tienes opencode {b}.x: convertida (las herramientas pasan a texto)",
+    "Convert · creates a copy in another tool, the original is left untouched · TAB marks several":
+        "Convertir · se crea una copia en otro programa, la original no se toca · TAB marca varias",
     "Reading «{title}» ({size})…": "Leyendo «{title}» ({size})…",
     "(also saved in {project})": "(también guardada en {project})",
     "(couldn't save it in {project}: {err})": "(no pude guardarla en {project}: {err})",
@@ -2140,8 +2693,7 @@ Idioma: inglés o español, según tu sistema; o ACTX_LANG=en|es, o `actx init -
     "all projects, no questions": "todos los proyectos, sin preguntar",
     "show projects and their state": "ver los proyectos y su estado",
     "remove conversations from a project": "quitar conversaciones de un proyecto",
-    "copy a conversation from Claude Code to opencode, or the other way round":
-        "copiar una conversación de Claude Code a opencode, o al revés",
+    "copy a conversation into another tool": "copiar una conversación a otro programa",
     "only this project's": "solo las de este proyecto",
     "install the newest actx from the shared folder": "instalar la última versión de actx de la carpeta compartida",
     "show the version": "ver la versión",
@@ -2175,7 +2727,7 @@ def main() -> None:
     sp = sub.add_parser("rm", help=tr("remove conversations from a project"))
     sp.add_argument("project", metavar=tr("project"))
     sp.set_defaults(fn=cmd_rm)
-    sp = sub.add_parser("cv", help=tr("copy a conversation from Claude Code to opencode, or the other way round"))
+    sp = sub.add_parser("cv", help=tr("copy a conversation into another tool"))
     sp.add_argument("project", nargs="?", metavar=tr("project"), help=tr("only this project's"))
     sp.set_defaults(fn=cmd_cv)
     sub.add_parser("update", help=tr("install the newest actx from the shared folder")).set_defaults(fn=cmd_update)

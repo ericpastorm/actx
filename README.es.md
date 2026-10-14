@@ -1,8 +1,9 @@
 # actx
 
 **El contexto de tus agentes, en todos tus PCs.** Mantiene tus conversaciones de
-[Claude Code](https://claude.com/claude-code) y [opencode](https://opencode.ai) al día entre tus
-PCs, agrupadas en proyectos, a través de cualquier carpeta compartida: un NAS, Syncthing, Dropbox…
+[Claude Code](https://claude.com/claude-code), [opencode](https://opencode.ai) y
+[Codex](https://github.com/openai/codex) al día entre tus PCs, agrupadas en proyectos, a través de
+cualquier carpeta compartida: un NAS, Syncthing, Dropbox…
 
 [Read in English](README.md)
 
@@ -24,7 +25,7 @@ portátil$  claude --resume …    # sigues donde lo dejaste
   que sabe qué subir, qué bajar y cuándo han cambiado los dos lados. Entonces puedes **mezclar**: te
   quedas con la versión de este PC más un resumen de lo hecho en el otro, y la otra versión se
   guarda aparte como una rama.
-- **Claude Code ⇄ opencode.** Copia una conversación de un programa al otro y sigue allí.
+- **Claude Code ⇄ opencode ⇄ Codex.** Copia una conversación a otro programa y sigue allí.
 - **Seguro.** Copias de seguridad antes de sobrescribir, escrituras atómicas en la carpeta compartida
   y avisos de git cuando el código no cuadra (cambios sin commitear, otro commit).
 - **Un solo archivo, sin dependencias.** Python 3.12+, git y fzf. Interfaz en inglés y español.
@@ -45,10 +46,11 @@ chmod +x ~/.local/bin/actx
 ```
 
 Necesita Python 3.12+ (mejor 3.14+: las conversaciones se comprimen con zstd; si no, con gzip),
-`git` y [`fzf`](https://github.com/junegunn/fzf). Para las conversaciones de opencode necesitas
-**opencode 2.x**, que todavía es una versión previa: la estable actual (1.x) aún no está soportada, y si
-actx la encuentra solo muestra las conversaciones de Claude Code. Todos tus PCs deberían usar la misma compresión:
+`git` y [`fzf`](https://github.com/junegunn/fzf). Todos tus PCs deberían usar la misma compresión:
 o todos con 3.14+, o todos por debajo.
+
+Programas soportados: **Claude Code**, **opencode** 1.x y 2.x (cada PC puede tener cualquiera: una
+conversación guardada con una se convierte al llegar a la otra) y **Codex**.
 
 ## Primeros pasos
 
@@ -65,7 +67,7 @@ Y luego:
 | `actx mk <proyecto>` | Crea un proyecto (o abre uno) y eliges qué conversaciones guardar. Salen primero las que parecen suyas (misma carpeta, el nombre en el título). |
 | `actx sync [proyecto]` | Sube lo que has seguido aquí y baja lo nuevo. Eliges los proyectos, o `--all`. |
 | `actx` / `actx ls [proyecto]` | Proyectos y estado de cada conversación: `↑ subir`, `↓ bajar`, `↓ nueva`, `⚠ conflicto`, `✓ al día`. |
-| `actx cv [proyecto]` | Copia una conversación al otro programa (Claude Code ⇄ opencode). |
+| `actx cv [proyecto]` | Copia una conversación a otro programa (Claude Code, opencode, Codex). |
 | `actx rm <proyecto>` | Quita conversaciones de un proyecto (en tus PCs no se borra nada). |
 | `actx update` | Instala la última versión de actx que haya en la carpeta compartida (si lo instalaste como script). |
 
@@ -102,11 +104,12 @@ se guarda una copia en `~/.local/state/actx/backups/`.
 
 ### Convertir entre programas
 
-`actx cv` crea una copia en el otro programa. Se conservan tus mensajes y las respuestas; las
+`actx cv` crea una copia en el programa que elijas. Se conservan tus mensajes y las respuestas; las
 herramientas pasan a texto (qué se ejecutó y qué salió, recortado a 1500 caracteres por salida); el
 razonamiento interno y las imágenes se pierden. Si la conversación se compactó, solo se convierte el
 resumen y lo que vino después (que es lo que el agente tenía en contexto). Es una aproximación, pero
-basta para seguir trabajando. En opencode, la copia usa el último modelo que hayas usado allí.
+basta para seguir trabajando. En opencode, la copia usa el último modelo que hayas usado allí; en Codex,
+el que tengas por defecto.
 
 ### La carpeta compartida
 
@@ -116,6 +119,7 @@ basta para seguir trabajando. En opencode, la copia usa el último modelo que ha
   <proyecto>/
     claude/<id de sesión>/      meta.json · preview.txt · session.jsonl.zst · extra.tar.zst
     opencode/<id de sesión>/    meta.json · preview.txt · session.json.zst · child-*.json.zst
+    codex/<id de sesión>/       meta.json · preview.txt · rollout.jsonl.zst
   _bin/actx                     una copia de actx, para `actx update` si lo instalaste como script
 ```
 
@@ -136,8 +140,8 @@ dos PCs a la vez.
 | `ACTX_ROOT` | Carpeta compartida (manda sobre la configuración). |
 | `ACTX_LANG` | `en` o `es` (por defecto: el idioma de tu sistema). |
 | `ACTX_SCAN` | Dónde buscar repos, separados por `:` (por defecto: tu home). |
-| `ACTX_OPENCODE_ARGS` | Opciones extra para `opencode session …`, p. ej. `--standalone`. |
-| `CLAUDE_CONFIG_DIR`, `XDG_*` | Se respetan, igual que hacen Claude Code y opencode. |
+| `ACTX_OPENCODE_ARGS` | Opciones extra para exportar/importar/borrar en opencode, p. ej. `--standalone` (2.x). |
+| `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `XDG_*` | Se respetan, igual que hacen Claude Code, Codex y opencode. |
 
 ## Privacidad
 
@@ -148,12 +152,14 @@ no confiarías tu código.
 
 ## Limitaciones
 
-- actx lee **formatos internos y sin documentar** de Claude Code (`~/.claude/projects/*.jsonl`) y de
-  opencode (su base de datos SQLite y `opencode session export/import`). Pueden cambiar sin aviso.
-  Probado con Claude Code 2.1 y opencode 2.0 (versión previa); opencode 1.x aún no está soportado. Los
-  tests se ejecutan contra opencode de verdad (también cada semana) para detectar cambios de formato
-  cuanto antes. Si algo se rompe, abre un issue.
-- La conversión entre programas pierde detalle (ver arriba). Sincronizar dentro del mismo programa, no.
+- actx lee **formatos internos y sin documentar** de Claude Code (`~/.claude/projects/*.jsonl`), de
+  opencode (su base de datos SQLite y sus comandos de exportar/importar) y de Codex (los rollouts de
+  `~/.codex/sessions`). Pueden cambiar sin aviso. Probado con Claude Code 2.1, opencode 1.19 y 2.0, y
+  Codex 0.160; los tests se ejecutan contra opencode y Codex de verdad (también cada semana) para
+  detectar cambios de formato cuanto antes. Si algo se rompe, abre un issue.
+- La conversión entre programas pierde detalle (ver arriba). Sincronizar dentro del mismo programa, no,
+  salvo entre opencode 1.x y 2.x, que pasa por la misma conversión. Para mezclar hace falta la misma
+  versión de opencode.
 - opencode se maneja con su CLI: mientras importas una sesión, no la tengas abierta en opencode.
 - Pensado para Linux. En macOS probablemente funcione; Windows no está soportado.
 
@@ -161,12 +167,12 @@ no confiarías tu código.
 
 ```
 pip install pytest
-pytest                # los tests de opencode se ejecutan si está instalado y se saltan si no
+pytest                # los tests de opencode y Codex se ejecutan si están instalados y se saltan si no
 ```
 
-Los tests montan PCs simulados (cada uno con su home y sus datos de Claude Code y opencode) que
+Los tests montan PCs simulados (cada uno con su home y sus datos de Claude Code, opencode y Codex) que
 comparten una carpeta, y hacen sincronizaciones, mezclas y conversiones reales entre ellos.
 
 ## Licencia
 
-[MIT](LICENSE). actx es un proyecto independiente, sin relación con Anthropic ni con el equipo de opencode.
+[MIT](LICENSE). actx es un proyecto independiente, sin relación con Anthropic, OpenAI ni el equipo de opencode.
