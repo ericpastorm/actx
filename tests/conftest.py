@@ -22,7 +22,20 @@ ACTX = Path(os.environ.get("ACTX_UNDER_TEST") or Path(__file__).resolve().parent
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 GIT_ENV = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
 
-needs_opencode = pytest.mark.skipif(not shutil.which("opencode"), reason="opencode is not installed")
+
+
+def _opencode_2() -> bool:
+    """actx works with opencode 2.x (its session export/import commands and session_v2 database)."""
+    if not shutil.which("opencode"):
+        return False
+    try:
+        res = subprocess.run(["opencode", "session", "--help"], capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return "import" in res.stdout + res.stderr
+
+
+needs_opencode = pytest.mark.skipif(not _opencode_2(), reason="needs opencode 2.x")
 
 
 def load_actx(env: dict):

@@ -44,7 +44,9 @@ chmod +x ~/.local/bin/actx
 ```
 
 Requires Python 3.12+ (3.14+ recommended: conversations are compressed with zstd, gzip otherwise),
-`git` and [`fzf`](https://github.com/junegunn/fzf). All your machines should use the same
+`git` and [`fzf`](https://github.com/junegunn/fzf). For opencode conversations you need **opencode 2.x**,
+which is still a preview: the current stable opencode (1.x) isn't supported yet, and actx shows only
+Claude Code conversations when it finds it. All your machines should use the same
 compression, so either all on 3.14+ or all below.
 
 ## Quick start
@@ -146,8 +148,9 @@ private, and don't use a public sync service you wouldn't trust with your code.
 
 - actx reads the **internal, undocumented formats** of Claude Code (`~/.claude/projects/*.jsonl`) and
   opencode (its SQLite database and `opencode session export/import`). They can change without notice.
-  Tested with Claude Code 2.1 and opencode 2.0; the test suite runs against the real opencode CLI to
-  catch format changes early. If something breaks, please open an issue.
+  Tested with Claude Code 2.1 and opencode 2.0 (preview); opencode 1.x isn't supported yet. The test
+  suite runs against the real opencode CLI (weekly too) to catch format changes early. If something
+  breaks, please open an issue.
 - Conversion between tools is lossy (see above). Syncing within the same tool is not.
 - opencode is driven through its CLI; while you're importing a session, don't have that same session
   open in opencode.

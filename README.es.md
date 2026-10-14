@@ -45,7 +45,9 @@ chmod +x ~/.local/bin/actx
 ```
 
 Necesita Python 3.12+ (mejor 3.14+: las conversaciones se comprimen con zstd; si no, con gzip),
-`git` y [`fzf`](https://github.com/junegunn/fzf). Todos tus PCs deberían usar la misma compresión:
+`git` y [`fzf`](https://github.com/junegunn/fzf). Para las conversaciones de opencode necesitas
+**opencode 2.x**, que todavía es una versión previa: la estable actual (1.x) aún no está soportada, y si
+actx la encuentra solo muestra las conversaciones de Claude Code. Todos tus PCs deberían usar la misma compresión:
 o todos con 3.14+, o todos por debajo.
 
 ## Primeros pasos
@@ -148,8 +150,9 @@ no confiarías tu código.
 
 - actx lee **formatos internos y sin documentar** de Claude Code (`~/.claude/projects/*.jsonl`) y de
   opencode (su base de datos SQLite y `opencode session export/import`). Pueden cambiar sin aviso.
-  Probado con Claude Code 2.1 y opencode 2.0; los tests se ejecutan contra opencode de verdad para
-  detectar cambios de formato cuanto antes. Si algo se rompe, abre un issue.
+  Probado con Claude Code 2.1 y opencode 2.0 (versión previa); opencode 1.x aún no está soportado. Los
+  tests se ejecutan contra opencode de verdad (también cada semana) para detectar cambios de formato
+  cuanto antes. Si algo se rompe, abre un issue.
 - La conversión entre programas pierde detalle (ver arriba). Sincronizar dentro del mismo programa, no.
 - opencode se maneja con su CLI: mientras importas una sesión, no la tengas abierta en opencode.
 - Pensado para Linux. En macOS probablemente funcione; Windows no está soportado.

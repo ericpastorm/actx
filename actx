@@ -464,17 +464,31 @@ def install_claude(r: Session, local: Session | None, folder: str, fix) -> int:
 # ── opencode ────────────────────────────────────────────────────────────────
 
 
+OC_UNSUPPORTED = False  # set when the database belongs to opencode 1.x
+
+
 @functools.cache
 def oc_db() -> sqlite3.Connection | None:
+    global OC_UNSUPPORTED
     if not OPENCODE_DB.exists():
         return None
     try:
         con = sqlite3.connect(f"file:{OPENCODE_DB}?mode=ro", uri=True, timeout=5)
+        tables = {name for (name,) in con.execute("select name from sqlite_master where type = 'table'")}
+        if "session_v2" not in tables:
+            OC_UNSUPPORTED = "session" in tables
+            return None
         con.execute("select id, parent_id, directory, time_archived from session_v2 limit 1")
         return con
     except sqlite3.Error as e:
         warn(tr("Can't read the opencode database ({err}); skipping opencode", err=e))
         return None
+
+
+def opencode_notice() -> None:
+    """Say why opencode conversations are missing, where you pick conversations."""
+    if OC_UNSUPPORTED:
+        warn(tr("Your opencode is 1.x: actx supports opencode 2.x for now, so only Claude Code is shown."))
 
 
 def opencode_local() -> list[Session]:
@@ -1566,6 +1580,7 @@ def cmd_mk(args) -> None:
     remote = {s.key: s for s in stored_sessions(root)}
     st = load_state()
     local = claude_local() + opencode_local()
+    opencode_notice()
     if not local:
         die(tr("No Claude Code or opencode conversations found on this machine"))
     ranked = sorted(local, key=lambda s: (-relevance(name, s), -s.updated))
@@ -1819,6 +1834,7 @@ def cmd_cv(args) -> None:
     root = store_root(optional=True)
     remote = {r.key: r for r in stored_sessions(root)} if root else {}
     local = claude_local() + opencode_local()
+    opencode_notice()
     have = {s.key for s in local}
     candidates = local + [r for key, r in remote.items() if key not in have]
     if args.project:
@@ -1977,6 +1993,8 @@ Idioma: inglés o español, según tu sistema; o ACTX_LANG=en|es, o `actx init -
     "(no text messages)": "(sin mensajes de texto)",
     "you": "tú",
     "(untitled)": "(sin título)",
+    "Your opencode is 1.x: actx supports opencode 2.x for now, so only Claude Code is shown.":
+        "Tu opencode es 1.x: de momento actx funciona con opencode 2.x, así que solo salen las de Claude Code.",
     "Can't read the opencode database ({err}); skipping opencode":
         "No puedo leer la base de datos de opencode ({err}); me salto opencode",
     "opencode is not installed on this machine": "opencode no está instalado en este PC",

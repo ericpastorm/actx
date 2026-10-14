@@ -144,3 +144,14 @@ def test_claude_scan_titles_paths_and_empty_sessions(tmp_path, machines):
         found = {s.title: s for s in m.mod.claude_local()}
     assert set(found) == {"first prompt", "Renamed by me"}
     assert {s.path for s in found.values()} == {str(app)}
+
+
+def test_opencode_1_is_reported_not_crashed(machines):
+    import sqlite3
+
+    m = machines("pc")
+    db = m.home / ".local/share/opencode/opencode.db"
+    db.parent.mkdir(parents=True)
+    sqlite3.connect(db).execute("create table session (id text primary key)").connection.commit()
+    out = m.actx("mk", "x", pick=[])
+    assert "Your opencode is 1.x" in out and "Can't read" not in out
