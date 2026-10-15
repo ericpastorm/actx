@@ -15,8 +15,8 @@ use serde_json::{Value, json};
 use crate::ctx::{Result, ctx, jstr, now_ms};
 use crate::paths::{Fix, apply, encode_claude, resolve_encoded};
 use crate::session::Session;
-use crate::state::backup_file;
-use crate::store::{COMP, Pushed, open_read, stored_lines, tar_dir, untar, write_compressed};
+use crate::state::{Copy, backup};
+use crate::store::{COMP, Pushed, complete_lines, open_read, stored_lines, tar_dir, untar, write_compressed};
 use crate::tr;
 use crate::turns::{OUT_MAX, Turn, add_turn, as_text, iso, iso_ms, tool_call, tool_text};
 use crate::ui::render;
@@ -39,7 +39,7 @@ pub fn chunks(f: &Path) -> io::Result<(Vec<u8>, Vec<u8>)> {
     if size <= HEAD {
         return Ok((head.clone(), head));
     }
-    file.seek(SeekFrom::Start(HEAD.max(size - TAIL)))?;
+    file.seek(SeekFrom::Start(HEAD.max(size.saturating_sub(TAIL))))?;
     let mut tail = Vec::new();
     file.read_to_end(&mut tail)?;
     Ok((head, tail))
@@ -207,8 +207,9 @@ pub fn push(s: &Session, tmp: &Path) -> Result<Pushed> {
     let src = s.src.as_ref().expect("a local Claude conversation");
     let updated = epoch(src.metadata()?.modified()?);
     let session = format!("session.jsonl.{COMP}");
-    // if the session is still open, what was actually copied
-    let weight = write_compressed(&tmp.join(&session), File::open(src)?)?;
+    // an agent may be writing to it right now: up to its last complete line
+    let (file, seen) = complete_lines(src)?;
+    let weight = write_compressed(&tmp.join(&session), file)?;
     let mut files = json!({"session": session});
     let extra = src.with_extension(""); // <id>/ with subagents and tool results
     if extra.is_dir() {
@@ -221,6 +222,7 @@ pub fn push(s: &Session, tmp: &Path) -> Result<Pushed> {
         files,
         updated,
         weight,
+        seen,
         preview,
     })
 }
@@ -274,8 +276,8 @@ pub fn install(r: &Session, local: Option<&Session>, folder: &str, fix: Fix) -> 
     std::fs::create_dir_all(&tdir)?;
     let dest = tdir.join(format!("{}.jsonl", r.id));
     let local_src = local.and_then(|l| l.src.clone());
-    if let Some(src) = &local_src {
-        backup_file(src, &format!("claude-{}.jsonl", r.id))?;
+    if let (Some(l), Some(src)) = (local, &local_src) {
+        backup(l, Copy::File(src), "pull")?;
     }
     let size = install_file(r, &dest, fix)?;
     if let Some(src) = local_src.filter(|s| *s != dest) {
@@ -596,6 +598,20 @@ pub fn branch_copy(r: &Session, folder: &str, fix: Fix, title: &str) -> Result<S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_title_is_found_whatever_the_size() {
+        let dir = tempfile::tempdir().unwrap();
+        for size in [10_000usize, 1 << 20, 3 << 20] {
+            let f = dir.path().join(format!("{size}.jsonl"));
+            let filler = json!({"type": "user", "message": {"content": "x".repeat(1000)}}).to_string() + "\n";
+            let mut text = filler.repeat(size / filler.len());
+            text += &(json!({"type": "ai-title", "aiTitle": "Late title"}).to_string() + "\n");
+            std::fs::write(&f, text).unwrap();
+            let (head, tail) = chunks(&f).unwrap();
+            assert_eq!(title(&head, &tail), "Late title", "{size} bytes");
+        }
+    }
 
     fn entry(kind: &str, content: Value, parent: Option<&str>, extra: Value) -> (String, String) {
         let u = uuid::Uuid::new_v4().to_string();

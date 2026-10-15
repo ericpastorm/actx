@@ -47,7 +47,8 @@ pub struct World {
 
 impl World {
     pub fn new() -> World {
-        let dir = tempfile::tempdir().unwrap();
+        // canonical (on macOS /var is a link to /private/var): actx compares real paths
+        let dir = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
         std::fs::create_dir(dir.path().join("store")).unwrap();
         World { dir }
     }

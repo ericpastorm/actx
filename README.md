@@ -23,10 +23,13 @@ laptop$  claude --resume …     # carry on where you left off
 - **Two-way sync with conflict handling.** It remembers the last sync, so it knows what to push,
   what to pull, and when both sides changed. Then you can **merge**: keep this machine's version
   plus a summary of what was done on the other, and the other version is kept as a separate branch.
+- **Automatic, if you want.** `actx auto on`, and conversations sync when you open or close them in
+  Claude Code or Codex, and every 10 minutes. It never replaces a conversation that's open in an agent.
 - **Claude Code ⇄ opencode ⇄ Codex.** Copy a conversation into another tool and keep going there.
-- **Safe.** Backups before overwriting, atomic writes in the shared folder, and git warnings when the
-  code is out of step (uncommitted changes, a different commit).
-- **One small binary.** Written in Rust; it only needs git and fzf. English and Spanish interface.
+- **Safe.** Backups before overwriting (`actx restore`), atomic writes and a lock in the shared folder,
+  and git warnings when the code is out of step (uncommitted changes, a different commit).
+- **One small binary.** Written in Rust; it only needs git and fzf. Linux and macOS. English and Spanish
+  interface.
 
 ## Install
 
@@ -47,6 +50,9 @@ At runtime it needs `git` and [`fzf`](https://github.com/junegunn/fzf). On machi
 binary from one that has it: actx leaves a copy in the shared folder (`_bin/`), and `actx update` keeps it
 current.
 
+Shell completions: `actx completions bash|zsh|fish` (the PKGBUILD installs them), e.g.
+`actx completions bash > ~/.local/share/bash-completion/completions/actx`.
+
 Supported tools: **Claude Code**, **opencode** 1.x and 2.x (each machine can have either: a conversation
 saved with one is converted when it reaches the other), and **Codex**.
 
@@ -56,6 +62,7 @@ On every machine, once:
 
 ```
 actx init            # choose the shared folder (it suggests network mounts and sync folders)
+actx auto on         # optional: sync by itself (see "Automatic sync" below)
 ```
 
 Then:
@@ -67,6 +74,9 @@ Then:
 | `actx` / `actx ls [project]` | Projects and the state of each conversation: `↑ push`, `↓ pull`, `↓ new`, `⚠ conflict`, `✓ synced`. |
 | `actx cv [project]` | Copy a conversation into another tool (Claude Code, opencode, Codex). |
 | `actx rm <project>` | Remove conversations from a project (nothing is deleted on your machines). |
+| `actx auto [on\|off]` | Automatic sync: hooks in Claude Code and Codex, and a timer. Plain `actx auto` shows how it's doing. |
+| `actx restore` | Put back a conversation from a backup. |
+| `actx doctor` | Check the shared folder, the tools and automatic sync. |
 | `actx update` | Install the newest actx found in the shared folder (for copies installed by hand). |
 
 Pickers: type to filter, <kbd>Tab</kbd> marks several, <kbd>Ctrl</kbd>+<kbd>A</kbd> all, <kbd>Enter</kbd> confirms.
@@ -100,6 +110,30 @@ one (and an acknowledgement from the agent), so the agent knows about both. The 
 also kept, whole, as *«title (branch from laptop)»*. Before anything is overwritten, a backup goes
 to `~/.local/state/actx/backups/`.
 
+### Automatic sync
+
+`actx auto on` sets up, on this machine:
+
+- **hooks in Claude Code** (`~/.claude/settings.json`) **and Codex** (`~/.codex/hooks.json`), next to
+  any you already have. When a conversation starts, actx syncs in the background; if the one you're
+  resuming has newer messages from another machine, Claude Code or Codex shows you a warning (exit, run
+  `actx sync`, resume it again). When it ends, it's pushed. Codex asks you to review new hooks once:
+  accept them in `/hooks`.
+- **a timer** every 10 minutes (a systemd user timer on Linux, a LaunchAgent on macOS). It's what
+  keeps opencode in sync, and it catches anything the hooks missed.
+
+Each run is `actx sync --auto`: it pushes what changed and pulls what's new, but it never asks, so it
+only does what's safe. It doesn't pull over a conversation that's open in an agent (it waits until you
+close it), and it leaves conflicts, and new conversations it doesn't know where to put, for `actx sync`.
+What it does goes to `~/.local/state/actx/auto.log`; `actx auto` shows the last lines. `actx auto off`
+removes everything.
+
+### Backups
+
+Before replacing a conversation on this machine (pulling, merging, restoring), actx keeps a copy in
+`~/.local/state/actx/backups/` for 30 days. `actx restore` lists them and puts one back (the current
+version is backed up first).
+
 ### Converting between tools
 
 `actx cv` writes a copy in the tool you pick. Your messages and the replies are kept; tool calls
@@ -113,6 +147,7 @@ keep working. In opencode, the copy uses the last model you used there; in Codex
 ```
 <shared folder>/
   .actx                         marker
+  .lock                         who is writing right now (machines take turns)
   <project>/
     claude/<session id>/        meta.json · preview.txt · session.jsonl.zst · extra.tar.zst
     opencode/<session id>/      meta.json · preview.txt · session.json.zst · child-*.json.zst
@@ -121,8 +156,10 @@ keep working. In opencode, the copy uses the last model you used there; in Codex
 ```
 
 Anything that all your machines can reach works: an SMB/NFS mount, a Syncthing or Dropbox folder…
-Avoid editing the same project on two machines at the same moment if your sync tool isn't
-real-time.
+On a network share, machines take turns writing (the `.lock` file says who's at it; one left behind by
+a run that died expires after 5 minutes), and a sync that waited skips anything pushed meanwhile. A
+sync tool that isn't real-time can't offer that: avoid syncing the same project on two machines at the
+same moment.
 
 ## Configuration
 
@@ -157,7 +194,7 @@ private, and don't use a public sync service you wouldn't trust with your code.
   opencode 1.x and 2.x, which goes through the same conversion. Merging needs the same opencode version.
 - opencode is driven through its CLI; while you're importing a session, don't have that same session
   open in opencode.
-- Linux is the target. macOS will likely work; Windows isn't supported.
+- Linux and macOS (both tested in CI). Windows isn't supported.
 
 ## Development
 
@@ -167,11 +204,14 @@ cargo test            # opencode and Codex tests run if they are installed, and 
 
 The end-to-end tests build fake machines (each with its own home, Claude Code, opencode and Codex data)
 that share one folder, and run the real binary on them: syncs, merges and conversions. They steer it with
-`ACTX_HOST` (the machine's name), `ACTX_PICK` (what the pickers choose) and `ACTX_ANSWER` (the reply to
-every question). CI also runs `cargo fmt --check` and `cargo clippy -- -D warnings`.
+`ACTX_HOST` (the machine's name), `ACTX_PICK` (what the pickers choose), `ACTX_ANSWER` (the reply to
+every question), `ACTX_LOCK_WAIT` (seconds to wait for the shared folder's lock) and `ACTX_HOOK_WAIT`
+(hooks wait for the sync they start). CI runs them on Linux and macOS, plus `cargo fmt --check` and
+`cargo clippy -- -D warnings`.
 
-actx 0.3 is a Rust rewrite of the 0.1–0.2 Python script. It reads and writes the same shared folder and
-the same local state, so you can mix versions while you upgrade your machines.
+actx 0.3 is a Rust rewrite of the 0.1–0.2 Python script. All versions read and write the same shared
+folder and the same local state, so you can mix them while you upgrade your machines (0.4 adds the
+lock, which older versions ignore).
 
 ## License
 

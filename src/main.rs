@@ -1,6 +1,8 @@
 //! actx (agent context): keep your Claude Code, opencode and Codex conversations in sync across
 //! machines, grouped into projects, through any shared folder (a NAS, Syncthing, ...).
 
+mod agents;
+mod auto;
 mod claude;
 mod codex;
 mod commands;
@@ -8,6 +10,7 @@ mod ctx;
 mod git;
 mod harness;
 mod i18n;
+mod lock;
 mod merge;
 mod opencode;
 mod paths;
@@ -76,7 +79,20 @@ fn cli() -> Command {
                         .alias("todo")
                         .action(ArgAction::SetTrue)
                         .help(tr!("all projects, no questions")),
-                ),
+                )
+                .arg(
+                    Arg::new("auto")
+                        .long("auto")
+                        .action(ArgAction::SetTrue)
+                        .help(tr!("what automatic sync runs: no questions, only what's safe")),
+                )
+                .arg(
+                    Arg::new("delay")
+                        .long("delay")
+                        .value_parser(clap::value_parser!(u64))
+                        .hide(true),
+                )
+                .arg(Arg::new("busy").long("busy").hide(true)),
         )
         .subcommand(
             Command::new("ls")
@@ -93,7 +109,35 @@ fn cli() -> Command {
                 .about(tr!("copy a conversation into another tool"))
                 .arg(project().help(tr!("only this project's"))),
         )
+        .subcommand(
+            Command::new("auto")
+                .about(tr!("automatic sync: hooks in Claude Code and Codex, and a timer"))
+                .arg(
+                    Arg::new("action")
+                        .value_parser(["on", "off"])
+                        .help(tr!("turn it on or off (otherwise: how it's doing)")),
+                ),
+        )
+        .subcommand(Command::new("restore").about(tr!("put back a conversation from a backup")))
+        .subcommand(Command::new("doctor").about(tr!("check that everything is in place")))
         .subcommand(Command::new("update").about(tr!("install the newest actx from the shared folder")))
+        .subcommand(
+            Command::new("completions")
+                .about(tr!(
+                    "shell completions (e.g. actx completions bash > ~/.local/share/bash-completion/completions/actx)"
+                ))
+                .arg(
+                    Arg::new("shell")
+                        .required(true)
+                        .value_parser(clap::value_parser!(clap_complete::Shell)),
+                ),
+        )
+        .subcommand(
+            Command::new("hook")
+                .hide(true)
+                .arg(Arg::new("tool").required(true).value_parser(["claude", "codex"]))
+                .arg(Arg::new("event").required(true).value_parser(["start", "end"])),
+        )
 }
 
 fn main() {
@@ -119,6 +163,9 @@ fn main() {
         Some(("sync", m)) => commands::sync(Args {
             project: get(m, "project"),
             all: m.get_flag("all"),
+            auto: m.get_flag("auto"),
+            delay: m.get_one::<u64>("delay").copied().unwrap_or(0),
+            busy: get(m, "busy"),
             ..Default::default()
         }),
         Some(("ls", m)) => commands::ls(Args {
@@ -134,13 +181,24 @@ fn main() {
             ..Default::default()
         }),
         Some(("update", _)) => commands::update(),
+        Some(("auto", m)) => auto::auto(get(m, "action").as_deref()),
+        Some(("restore", _)) => commands::restore(),
+        Some(("doctor", _)) => commands::doctor(),
+        Some(("completions", m)) => {
+            let shell = *m.get_one::<clap_complete::Shell>("shell").expect("required");
+            clap_complete::generate(shell, &mut cli(), "actx", &mut std::io::stdout());
+        }
+        Some(("hook", m)) => auto::hook(
+            &get(m, "tool").unwrap_or_default(),
+            &get(m, "event").unwrap_or_default(),
+        ),
         _ => {
             commands::ls(Args::default());
             let p = tr!("project");
             println!(
                 "{}",
                 ui::dim(&format!(
-                    "actx mk <{p}> · actx sync · actx ls · actx rm <{p}> · actx cv · actx update · actx -h"
+                    "actx mk <{p}> · actx sync · actx ls · actx rm <{p}> · actx cv · actx auto · actx -h"
                 ))
             );
         }

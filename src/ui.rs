@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::io::{IsTerminal, Read, Write};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use chrono::{Local, TimeZone};
 
@@ -36,21 +37,41 @@ pub fn harness_tag(h: &str) -> String {
     paint(color, &format!("{h:<8}"))
 }
 
+static AUTO: AtomicBool = AtomicBool::new(false);
+
+/// Automatic runs: nobody is watching, output goes to a log.
+pub fn set_auto() {
+    AUTO.store(true, Ordering::Relaxed)
+}
+
+pub fn is_auto() -> bool {
+    AUTO.load(Ordering::Relaxed)
+}
+
+/// Print a line (in automatic runs, with the time: it's a log).
+pub fn say(msg: &str) {
+    if is_auto() {
+        println!("{} {msg}", local_time(crate::ctx::now(), "%Y-%m-%d %H:%M:%S"));
+    } else {
+        println!("{msg}");
+    }
+}
+
 pub fn die(msg: &str) -> ! {
     eprintln!("{}{msg}", paint("31", "✗ "));
     std::process::exit(1)
 }
 
 pub fn warn(msg: &str) {
-    println!("{}{msg}", paint("33", "⚠ "));
+    say(&format!("{}{msg}", paint("33", "⚠ ")));
 }
 
 pub fn ok(msg: &str) {
-    println!("{}{msg}", paint("32", "✓ "));
+    say(&format!("{}{msg}", paint("32", "✓ ")));
 }
 
 pub fn fail(msg: &str) {
-    println!("{}{msg}", paint("31", "✗ "));
+    say(&format!("{}{msg}", paint("31", "✗ ")));
 }
 
 /// Is there someone to ask? (a terminal, or a scripted answer in tests)

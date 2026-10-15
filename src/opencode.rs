@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use crate::ctx::{Error, Result, ctx, jstr, now, now_ms, which};
 use crate::paths::{Fix, apply};
 use crate::session::Session;
-use crate::state::backup_bytes;
+use crate::state::{Copy, backup};
 use crate::store::{COMP, Pushed, read_all, write_compressed};
 use crate::tr;
 use crate::turns::{Turn, add_turn, as_text, tool_call, tool_text};
@@ -178,6 +178,15 @@ fn format_of(exp: &Value) -> u8 {
 }
 
 /// (role, text) of an export of either version, for previews.
+/// The messages of an export file (a backup, say), for previews.
+pub fn file_preview(path: &std::path::Path) -> Vec<(String, String)> {
+    std::fs::read(path)
+        .ok()
+        .and_then(|data| serde_json::from_slice::<Value>(&data).ok())
+        .map(|exp| export_messages(&exp))
+        .unwrap_or_default()
+}
+
 fn export_messages(exp: &Value) -> Vec<(String, String)> {
     let one = format_of(exp) == 1;
     messages_of(exp)
@@ -524,6 +533,7 @@ pub fn push(s: &Session, tmp: &Path) -> Result<Pushed> {
         files,
         updated: s.updated,
         weight: messages_of(&exp).len() as u64,
+        seen: s.weight,
         preview: render(&export_messages(&exp), "opencode"),
     })
 }
@@ -558,7 +568,7 @@ pub fn install(r: &Session, local: Option<&Session>, folder: &str, fix: Fix) -> 
         .collect::<Result<Vec<_>>>()?;
     if let Some(l) = local {
         // import doesn't replace an existing session: back up, delete and import
-        backup_bytes(&export(&r.id, &l.path)?, &format!("opencode-{}.json", r.id))?;
+        backup(l, Copy::Bytes(&export(&r.id, &l.path)?), "pull")?;
         delete(&r.id, &l.path)?;
     }
     let (stored, here) = (stored_format(r), format!("opencode-v{}", version().unwrap_or(2)));
@@ -724,7 +734,7 @@ pub fn other_branch(l: &Session, r: &Session, fix: Fix) -> Result<Vec<Turn>> {
 
 pub fn append(l: &mut Session, text: &str, ack: &str) -> Result<()> {
     let raw = export(&l.id, &l.path)?;
-    backup_bytes(&raw, &format!("opencode-{}.json", l.id))?;
+    backup(l, Copy::Bytes(&raw), "merge")?;
     let mut exp: Value = serde_json::from_slice(&raw)?;
     let one = format_of(&exp) == 1;
     let model = export_model(&exp).or_else(last_model).ok_or_else(no_model)?;

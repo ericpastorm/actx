@@ -120,3 +120,31 @@ fn a_conversation_from_the_other_opencode_version_is_converted() {
         ("Fix the login form", clone.to_str().unwrap(), 2)
     ); // question + flattened answer
 }
+
+#[test]
+fn opencode_syncs_automatically() {
+    needs!("opencode");
+    let w = World::new();
+    let (a, b, repo, clone, _) = setup(&w).unwrap();
+    let out = b.actx(&["sync", "--auto"]);
+    assert!(out.contains("↓") && out.contains("Fix the login form"), "{out}");
+    assert_eq!(opencode_sessions(&b)[OC_SID].1, clone.to_string_lossy());
+
+    opencode_continue(&a, &repo, "and on Windows?", "Use the Task Manager (desk)");
+    assert!(a.actx(&["sync", "--auto"]).contains("↑"));
+    // it was just imported: it may be open
+    assert!(b.actx(&["sync", "--auto"]).contains("is open in opencode"));
+    let table = if opencode_major() == Some(2) {
+        "session_v2"
+    } else {
+        "session"
+    };
+    let con = rusqlite::Connection::open(b.opencode_db()).unwrap();
+    con.execute(&format!("update {table} set time_updated = time_updated - 3600000"), [])
+        .unwrap();
+    drop(con);
+    let out = b.actx(&["sync", "--auto"]);
+    assert!(out.contains("↓"), "{out}");
+    assert_eq!(opencode_sessions(&b)[OC_SID].2, 3 + 2);
+    assert_eq!(b.actx(&["sync", "--auto"]), "");
+}

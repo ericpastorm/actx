@@ -25,10 +25,14 @@ portátil$  claude --resume …    # sigues donde lo dejaste
   que sabe qué subir, qué bajar y cuándo han cambiado los dos lados. Entonces puedes **mezclar**: te
   quedas con la versión de este PC más un resumen de lo hecho en el otro, y la otra versión se
   guarda aparte como una rama.
+- **Automático, si quieres.** `actx auto on`, y las conversaciones se sincronizan al abrirlas o
+  cerrarlas en Claude Code o Codex, y cada 10 minutos. Nunca reemplaza una conversación abierta en un agente.
 - **Claude Code ⇄ opencode ⇄ Codex.** Copia una conversación a otro programa y sigue allí.
-- **Seguro.** Copias de seguridad antes de sobrescribir, escrituras atómicas en la carpeta compartida
-  y avisos de git cuando el código no cuadra (cambios sin commitear, otro commit).
-- **Un binario pequeño.** Escrito en Rust; solo necesita git y fzf. Interfaz en inglés y español.
+- **Seguro.** Copias de seguridad antes de sobrescribir (`actx restore`), escrituras atómicas y un
+  bloqueo en la carpeta compartida, y avisos de git cuando el código no cuadra (cambios sin commitear,
+  otro commit).
+- **Un binario pequeño.** Escrito en Rust; solo necesita git y fzf. Linux y macOS. Interfaz en inglés y
+  español.
 
 ## Instalación
 
@@ -49,6 +53,9 @@ Para funcionar necesita `git` y [`fzf`](https://github.com/junegunn/fzf). En los
 binario desde uno que lo tenga: actx deja una copia en la carpeta compartida (`_bin/`), y `actx update` la
 mantiene al día.
 
+Autocompletado: `actx completions bash|zsh|fish` (el PKGBUILD lo instala), p. ej.
+`actx completions bash > ~/.local/share/bash-completion/completions/actx`.
+
 Programas soportados: **Claude Code**, **opencode** 1.x y 2.x (cada PC puede tener cualquiera: una
 conversación guardada con una se convierte al llegar a la otra) y **Codex**.
 
@@ -58,6 +65,7 @@ En cada PC, una vez:
 
 ```
 actx init            # eliges la carpeta compartida (te sugiere unidades de red y carpetas sincronizadas)
+actx auto on         # opcional: que se sincronice solo (ver «Sincronización automática»)
 ```
 
 Y luego:
@@ -69,6 +77,9 @@ Y luego:
 | `actx` / `actx ls [proyecto]` | Proyectos y estado de cada conversación: `↑ subir`, `↓ bajar`, `↓ nueva`, `⚠ conflicto`, `✓ al día`. |
 | `actx cv [proyecto]` | Copia una conversación a otro programa (Claude Code, opencode, Codex). |
 | `actx rm <proyecto>` | Quita conversaciones de un proyecto (en tus PCs no se borra nada). |
+| `actx auto [on\|off]` | Sincronización automática: hooks en Claude Code y Codex, y un temporizador. `actx auto` a secas dice cómo va. |
+| `actx restore` | Recupera una conversación de una copia de seguridad. |
+| `actx doctor` | Comprueba la carpeta compartida, los programas y la sincronización automática. |
 | `actx update` | Instala la última versión de actx que haya en la carpeta compartida (si lo copiaste a mano). |
 
 Selectores: escribe para filtrar, <kbd>Tab</kbd> marca varias, <kbd>Ctrl</kbd>+<kbd>A</kbd> todas, <kbd>Enter</kbd> confirma.
@@ -102,6 +113,30 @@ otro (y una respuesta del agente confirmándolo), así el agente sabe lo que pas
 versión también se guarda, entera, como *«título (rama de portátil)»*. Antes de sobrescribir nada,
 se guarda una copia en `~/.local/state/actx/backups/`.
 
+### Sincronización automática
+
+`actx auto on` instala en este PC:
+
+- **hooks en Claude Code** (`~/.claude/settings.json`) **y en Codex** (`~/.codex/hooks.json`), junto a
+  los que ya tengas. Al empezar una conversación, actx sincroniza en segundo plano; si la que retomas
+  tiene mensajes más nuevos de otro PC, Claude Code o Codex te lo avisan (sal, ejecuta `actx sync` y
+  vuelve a abrirla). Al terminar, se sube. Codex te pide revisar los hooks nuevos una vez: acéptalos en
+  `/hooks`.
+- **un temporizador** cada 10 minutos (un timer de usuario de systemd en Linux, un LaunchAgent en macOS).
+  Es lo que mantiene opencode al día, y recoge lo que se les escape a los hooks.
+
+Cada ejecución es `actx sync --auto`: sube lo que ha cambiado y baja lo nuevo, pero como no pregunta,
+solo hace lo seguro. No baja encima de una conversación abierta en un agente (espera a que la cierres), y
+deja los conflictos, y las conversaciones nuevas que no sabe dónde poner, para `actx sync`. Lo que hace
+queda en `~/.local/state/actx/auto.log`; `actx auto` enseña las últimas líneas. `actx auto off` lo quita
+todo.
+
+### Copias de seguridad
+
+Antes de reemplazar una conversación en este PC (al bajar, mezclar o restaurar), actx guarda una copia en
+`~/.local/state/actx/backups/` durante 30 días. `actx restore` las lista y recupera la que elijas (antes
+guarda una copia de la actual).
+
 ### Convertir entre programas
 
 `actx cv` crea una copia en el programa que elijas. Se conservan tus mensajes y las respuestas; las
@@ -116,6 +151,7 @@ el que tengas por defecto.
 ```
 <carpeta compartida>/
   .actx                         marca
+  .lock                         quién está escribiendo ahora (los PCs se turnan)
   <proyecto>/
     claude/<id de sesión>/      meta.json · preview.txt · session.jsonl.zst · extra.tar.zst
     opencode/<id de sesión>/    meta.json · preview.txt · session.json.zst · child-*.json.zst
@@ -124,8 +160,10 @@ el que tengas por defecto.
 ```
 
 Vale cualquier carpeta a la que lleguen todos tus PCs: una unidad SMB/NFS, una carpeta de Syncthing o
-Dropbox… Si tu herramienta de sincronización no es en tiempo real, evita tocar el mismo proyecto en
-dos PCs a la vez.
+Dropbox… En una unidad de red, los PCs se turnan para escribir (el fichero `.lock` dice quién está en
+ello; si se queda uno de una ejecución que murió, caduca a los 5 minutos), y un sync que tuvo que esperar
+se salta lo que se haya subido mientras tanto. Una herramienta de sincronización que no es en tiempo
+real no puede ofrecer eso: evita sincronizar el mismo proyecto en dos PCs a la vez.
 
 ## Configuración
 
@@ -161,7 +199,7 @@ no confiarías tu código.
   salvo entre opencode 1.x y 2.x, que pasa por la misma conversión. Para mezclar hace falta la misma
   versión de opencode.
 - opencode se maneja con su CLI: mientras importas una sesión, no la tengas abierta en opencode.
-- Pensado para Linux. En macOS probablemente funcione; Windows no está soportado.
+- Linux y macOS (los dos probados en la CI). Windows no está soportado.
 
 ## Desarrollo
 
@@ -172,12 +210,13 @@ cargo test            # los tests de opencode y Codex se ejecutan si están inst
 Los tests de extremo a extremo montan PCs simulados (cada uno con su home y sus datos de Claude Code,
 opencode y Codex) que comparten una carpeta, y ejecutan el binario de verdad en ellos: sincronizaciones,
 mezclas y conversiones. Lo manejan con `ACTX_HOST` (el nombre del PC), `ACTX_PICK` (qué eligen los
-selectores) y `ACTX_ANSWER` (la respuesta a cada pregunta). La CI también pasa `cargo fmt --check` y
-`cargo clippy -- -D warnings`.
+selectores), `ACTX_ANSWER` (la respuesta a cada pregunta), `ACTX_LOCK_WAIT` (segundos de espera por el
+bloqueo de la carpeta compartida) y `ACTX_HOOK_WAIT` (los hooks esperan al sync que lanzan). La CI los
+ejecuta en Linux y macOS, y además pasa `cargo fmt --check` y `cargo clippy -- -D warnings`.
 
-actx 0.3 es una reescritura en Rust del script en Python de las versiones 0.1–0.2. Lee y escribe la
-misma carpeta compartida y el mismo estado local, así que puedes mezclar versiones mientras actualizas
-tus PCs.
+actx 0.3 es una reescritura en Rust del script en Python de las versiones 0.1–0.2. Todas las versiones
+leen y escriben la misma carpeta compartida y el mismo estado local, así que puedes mezclarlas mientras
+actualizas tus PCs (la 0.4 añade el bloqueo, que las anteriores ignoran).
 
 ## Licencia
 

@@ -8,7 +8,7 @@ use crate::ctx::{Result, jstr};
 use crate::git::{fixer_for, git_info};
 use crate::harness;
 use crate::session::Session;
-use crate::state::{State, backup_file};
+use crate::state::{Copy, State, backup};
 use crate::store::push_one;
 use crate::tr;
 use crate::turns::{BRANCH_SUFFIX, Turn};
@@ -67,7 +67,7 @@ pub fn merge_one(root: &Path, l: &mut Session, r: &Session, st: &mut State) -> R
     );
     let branch = h.branch_copy(r, &l.path, fix.as_ref(), &title)?;
     if let Some(src) = &l.src {
-        backup_file(src, &format!("{}-{}.jsonl", l.harness, l.id))?; // opencode backs up inside its append
+        backup(l, Copy::File(src), "merge")?; // opencode backs up inside its append
     }
     let ack = tr!(
         "Got it: I'm taking into account what was done on {host}, and we continue from here.",

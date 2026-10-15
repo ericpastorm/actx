@@ -28,6 +28,10 @@ pub struct Ctx {
     pub pick: Option<Vec<String>>,
     /// tests: the answer to every question (ACTX_ANSWER)
     pub answer: Option<String>,
+    /// tests: how long to wait for the shared folder's lock, in seconds (ACTX_LOCK_WAIT)
+    pub lock_wait: Option<u64>,
+    /// tests: hooks wait for the sync they start instead of leaving it in the background (ACTX_HOOK_WAIT)
+    pub hook_wait: bool,
 }
 
 fn env(name: &str) -> Option<String> {
@@ -74,6 +78,8 @@ impl Ctx {
                 .ok()
                 .map(|v| v.split(',').filter(|p| !p.is_empty()).map(String::from).collect()),
             answer: std::env::var("ACTX_ANSWER").ok(),
+            lock_wait: env("ACTX_LOCK_WAIT").and_then(|v| v.parse().ok()),
+            hook_wait: env("ACTX_HOOK_WAIT").is_some(),
             home,
         }
     }

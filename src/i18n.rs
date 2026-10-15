@@ -39,9 +39,9 @@ macro_rules! tr {
     };
 }
 
-pub const HELP: &str = "actx (agent context): keep your Claude Code, opencode and Codex conversations in sync across\nmachines, grouped into projects, through any shared folder (a NAS, Syncthing, ...).\n\n  actx init [folder]   choose the shared folder (once per machine)\n  actx mk <project>    create a project (or open one) and pick conversations to save in it\n  actx sync [project]  push what you continued here and pull what's new (pick projects; --all)\n  actx ls [project]    projects and the state of each conversation (also: plain actx)\n  actx rm <project>    remove conversations from a project (remove them all to delete it)\n  actx cv [project]    copy a conversation into another tool (Claude Code, opencode, Codex)\n  actx update          install the newest actx found in the shared folder\n\nConversations don't depend on folder paths. When pulling one, actx looks for its repo on this\nmachine by the first commit (other paths, clones and worktrees all work); otherwise it tries\nthe same path; otherwise it asks once and remembers. Run it inside the project and it goes\nthere. Paths inside the conversation are rewritten to this machine's.\n\nIf you continued a conversation on two machines, sync lets you merge them: you keep this one\nplus a summary of what was done on the other, and the other version is kept separately.\n\nPickers: type to filter, TAB marks several, Ctrl-A all, Enter confirms, Esc quits.\nLanguage: English or Spanish, from your locale; set ACTX_LANG=en|es or `actx init --lang`.\n";
+pub const HELP: &str = "actx (agent context): keep your Claude Code, opencode and Codex conversations in sync across\nmachines, grouped into projects, through any shared folder (a NAS, Syncthing, ...).\n\n  actx init [folder]   choose the shared folder (once per machine)\n  actx mk <project>    create a project (or open one) and pick conversations to save in it\n  actx sync [project]  push what you continued here and pull what's new (pick projects; --all)\n  actx ls [project]    projects and the state of each conversation (also: plain actx)\n  actx rm <project>    remove conversations from a project (remove them all to delete it)\n  actx cv [project]    copy a conversation into another tool (Claude Code, opencode, Codex)\n  actx auto [on|off]   sync by itself: when a conversation starts or ends, and every 10 min\n  actx restore         put back a conversation from a backup\n  actx doctor          check the shared folder, the tools and automatic sync\n  actx update          install the newest actx found in the shared folder\n\nConversations don't depend on folder paths. When pulling one, actx looks for its repo on this\nmachine by the first commit (other paths, clones and worktrees all work); otherwise it tries\nthe same path; otherwise it asks once and remembers. Run it inside the project and it goes\nthere. Paths inside the conversation are rewritten to this machine's.\n\nIf you continued a conversation on two machines, sync lets you merge them: you keep this one\nplus a summary of what was done on the other, and the other version is kept separately.\n\nPickers: type to filter, TAB marks several, Ctrl-A all, Enter confirms, Esc quits.\nLanguage: English or Spanish, from your locale; set ACTX_LANG=en|es or `actx init --lang`.\n";
 
-const HELP_ES: &str = "actx (agent context): mantiene tus conversaciones de Claude Code, opencode y Codex al día\nentre tus PCs, agrupadas en proyectos, a través de cualquier carpeta compartida (un NAS, Syncthing...).\n\n  actx init [carpeta]   elige la carpeta compartida (una vez en cada PC)\n  actx mk <proyecto>    crea un proyecto (o abre uno) y eliges qué conversaciones guardar\n  actx sync [proyecto]  sube lo que has seguido aquí y baja lo nuevo (eliges proyectos; --all)\n  actx ls [proyecto]    proyectos y estado de cada conversación (también: actx a secas)\n  actx rm <proyecto>    quita conversaciones de un proyecto (si quitas todas, lo borra)\n  actx cv [proyecto]    copia una conversación a otro programa (Claude Code, opencode, Codex)\n  actx update           instala la última versión de actx que haya en la carpeta compartida\n\nLas conversaciones no dependen de la carpeta. Al bajar una, actx busca su repo en este PC por\nel primer commit (vale con otras rutas, clones y worktrees); si no, prueba la misma ruta; y si\ntampoco, te pregunta una vez y se acuerda. Si lo lanzas dentro del proyecto, va ahí. Las rutas\ndentro de la conversación se cambian a las de este PC.\n\nSi seguiste una conversación en dos PCs, sync te deja mezclarlas: sigues con la de aquí más un\nresumen de lo hecho en el otro, y la otra versión queda aparte.\n\nSelectores: escribe para filtrar, TAB marca varias, Ctrl-A todas, Enter confirma, Esc sale.\nIdioma: inglés o español, según tu sistema; o ACTX_LANG=en|es, o `actx init --lang`.\n";
+const HELP_ES: &str = "actx (agent context): mantiene tus conversaciones de Claude Code, opencode y Codex al día\nentre tus PCs, agrupadas en proyectos, a través de cualquier carpeta compartida (un NAS, Syncthing...).\n\n  actx init [carpeta]   elige la carpeta compartida (una vez en cada PC)\n  actx mk <proyecto>    crea un proyecto (o abre uno) y eliges qué conversaciones guardar\n  actx sync [proyecto]  sube lo que has seguido aquí y baja lo nuevo (eliges proyectos; --all)\n  actx ls [proyecto]    proyectos y estado de cada conversación (también: actx a secas)\n  actx rm <proyecto>    quita conversaciones de un proyecto (si quitas todas, lo borra)\n  actx cv [proyecto]    copia una conversación a otro programa (Claude Code, opencode, Codex)\n  actx auto [on|off]    sincroniza solo: al abrir o cerrar una conversación y cada 10 min\n  actx restore          recupera una conversación de una copia de seguridad\n  actx doctor           comprueba la carpeta compartida, los programas y el modo auto\n  actx update           instala la última versión de actx que haya en la carpeta compartida\n\nLas conversaciones no dependen de la carpeta. Al bajar una, actx busca su repo en este PC por\nel primer commit (vale con otras rutas, clones y worktrees); si no, prueba la misma ruta; y si\ntampoco, te pregunta una vez y se acuerda. Si lo lanzas dentro del proyecto, va ahí. Las rutas\ndentro de la conversación se cambian a las de este PC.\n\nSi seguiste una conversación en dos PCs, sync te deja mezclarlas: sigues con la de aquí más un\nresumen de lo hecho en el otro, y la otra versión queda aparte.\n\nSelectores: escribe para filtrar, TAB marca varias, Ctrl-A todas, Enter confirma, Esc sale.\nIdioma: inglés o español, según tu sistema; o ACTX_LANG=en|es, o `actx init --lang`.\n";
 
 pub static ES: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| {
     HashMap::from([
@@ -383,6 +383,172 @@ pub static ES: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
             "instalar la última versión de actx de la carpeta compartida",
         ),
         ("show the version", "ver la versión"),
+        (
+            "actx: «{title}» has newer messages from {host} ({ago}). To get them, exit, run actx sync and resume it again.",
+            "actx: «{title}» tiene mensajes más nuevos de {host} ({ago}). Para tenerlos, sal, ejecuta actx sync y vuelve a abrirla.",
+        ),
+        (
+            "actx: «{title}» also changed on {host} ({ago}). Exit and run actx sync to merge both versions.",
+            "actx: «{title}» también ha cambiado en {host} ({ago}). Sal y ejecuta actx sync para mezclar las dos versiones.",
+        ),
+        (
+            "{path} isn't valid JSON ({err}): not touching it",
+            "{path} no es un JSON válido ({err}): no lo toco",
+        ),
+        (
+            "{path} isn't a JSON object: not touching it",
+            "{path} no es un objeto JSON: no lo toco",
+        ),
+        (
+            "This is a development build: the hooks will run {path} until you turn this on again from an installed actx.",
+            "Esto es una build de desarrollo: los hooks ejecutarán {path} hasta que lo vuelvas a activar desde un actx instalado.",
+        ),
+        (
+            "Codex asks you to review new hooks once: accept them in /hooks",
+            "Codex te pide revisar los hooks nuevos una vez: acéptalos en /hooks",
+        ),
+        ("{tool}: hooks in {path}", "{tool}: hooks en {path}"),
+        (
+            "Every {n} min ({name}): this covers opencode too",
+            "Cada {n} min ({name}): esto cubre también opencode",
+        ),
+        (
+            "Couldn't start the timer ({name}). Without it, opencode only syncs when you run actx sync. With cron: {cmd}",
+            "No he podido poner en marcha el temporizador ({name}). Sin él, opencode solo se sincroniza cuando ejecutas actx sync. Con cron: {cmd}",
+        ),
+        ("The timer: {err}", "El temporizador: {err}"),
+        (
+            "Automatic sync is on: when a conversation starts or ends, and every {n} minutes, actx pushes what changed and pulls what's new. It never pulls over a conversation that's open in an agent, and leaves conflicts and new folders for {cmd}.",
+            "Sincronización automática activada: al abrir o cerrar una conversación, y cada {n} minutos, actx sube lo que ha cambiado y baja lo nuevo. Nunca baja encima de una conversación abierta en un agente, y deja los conflictos y las carpetas nuevas para {cmd}.",
+        ),
+        ("Log: {path}", "Registro: {path}"),
+        ("{tool}: hooks removed", "{tool}: hooks quitados"),
+        ("Timer removed ({name})", "Temporizador quitado ({name})"),
+        (
+            "Automatic sync wasn't on",
+            "La sincronización automática no estaba activada",
+        ),
+        ("{tool} hooks", "hooks de {tool}"),
+        ("timer ({name})", "temporizador ({name})"),
+        ("Automatic sync: {state}", "Sincronización automática: {state}"),
+        ("on", "activada"),
+        ("off", "desactivada"),
+        ("Last runs ({path}):", "Últimas ejecuciones ({path}):"),
+        ("Turn it on with {cmd}", "Actívala con {cmd}"),
+        (
+            "{host} is writing to the shared folder (since {time}): waiting…",
+            "{host} está escribiendo en la carpeta compartida (desde las {time}): esperando…",
+        ),
+        (
+            "The shared folder is still busy ({host}, since {time}). Try again in a while; if nothing is running there, delete {path}",
+            "La carpeta compartida sigue ocupada ({host}, desde las {time}). Prueba en un rato; si allí no se está ejecutando nada, borra {path}",
+        ),
+        (
+            "Can't write to the shared folder: {err}",
+            "No puedo escribir en la carpeta compartida: {err}",
+        ),
+        (
+            "«{title}» changed in the shared folder meanwhile: run actx sync again",
+            "«{title}» ha cambiado en la carpeta compartida mientras tanto: vuelve a ejecutar actx sync",
+        ),
+        (
+            "«{title}» is open in {tool} right now: what you do there would be lost. Replace it anyway?",
+            "«{title}» está abierta ahora mismo en {tool}: lo que hagas allí se perdería. ¿La reemplazo igualmente?",
+        ),
+        (
+            "{project} · «{title}» changed here and on {host}: run actx sync to decide",
+            "{project} · «{title}» ha cambiado aquí y en {host}: ejecuta actx sync para decidir",
+        ),
+        (
+            "«{title}» is open in {tool}: it'll be pulled later",
+            "«{title}» está abierta en {tool}: se bajará más tarde",
+        ),
+        (
+            "it's open in {tool} right now: close it first",
+            "está abierta ahora mismo en {tool}: ciérrala antes",
+        ),
+        (
+            "No backups yet: actx makes one before replacing a conversation on this machine.",
+            "Aún no hay copias de seguridad: actx hace una antes de reemplazar una conversación en este PC.",
+        ),
+        ("backed up {ago}", "copia de {ago}"),
+        (
+            "Backups, newest first (kept {n} days) · Enter restores one",
+            "Copias de seguridad, las más nuevas primero (se guardan {n} días) · Enter restaura una",
+        ),
+        (
+            "Replace «{title}» on this machine with the copy from {when}? (the current one is backed up first)",
+            "¿Reemplazo «{title}» en este PC por la copia del {when}? (antes se guarda una copia de la actual)",
+        ),
+        ("Restore «{title}» from {when}?", "¿Restauro «{title}» del {when}?"),
+        ("Restored «{title}»", "«{title}» restaurada"),
+        (
+            "If it's in a project, the next sync pushes it (or asks, if it changed elsewhere too).",
+            "Si está en un proyecto, el próximo sync la sube (o te pregunta, si también ha cambiado en otro sitio).",
+        ),
+        ("shared folder", "carpeta compartida"),
+        ("not configured: run {cmd}", "sin configurar: ejecuta {cmd}"),
+        (
+            "{path}: can't reach it (if it's a network share: is it mounted?)",
+            "{path}: no llego (si es una unidad de red: ¿está montada?)",
+        ),
+        (
+            "{path} · {p} project(s), {n} conversation(s)",
+            "{path} · {p} proyecto(s), {n} conversación(es)",
+        ),
+        ("can't write to it", "no puedo escribir en ella"),
+        ("lock", "bloqueo"),
+        (
+            "{host} is writing to it (since {ago}); if nothing is running there, delete {path}",
+            "{host} está escribiendo en ella ({ago}); si allí no se está ejecutando nada, borra {path}",
+        ),
+        ("config: {path}", "configuración: {path}"),
+        ("Tools", "Programas"),
+        ("not found: actx needs it", "no está: actx lo necesita"),
+        ("not installed", "no instalado"),
+        ("{version} · {n} conversation(s)", "{version} · {n} conversación(es)"),
+        (
+            "the CLI is {a}.x but its database is from {b}.x",
+            "el CLI es {a}.x pero su base de datos es de {b}.x",
+        ),
+        ("Automatic sync", "Sincronización automática"),
+        ("last: {line}", "última: {line}"),
+        ("turn it on with actx auto on", "actívala con actx auto on"),
+        ("agents running now: {list}", "agentes abiertos ahora: {list}"),
+        ("This machine", "Este PC"),
+        ("state", "estado"),
+        (
+            "{n} conversation(s) tracked · {path}",
+            "{n} conversación(es) seguidas · {path}",
+        ),
+        ("backups", "copias"),
+        (
+            "{n} · {size} · kept {days} days (actx restore)",
+            "{n} · {size} · se guardan {days} días (actx restore)",
+        ),
+        ("All good", "Todo bien"),
+        ("{n} problem(s) above", "{n} problema(s) arriba"),
+        (
+            "what automatic sync runs: no questions, only what's safe",
+            "lo que ejecuta el modo auto: sin preguntas, solo lo seguro",
+        ),
+        (
+            "automatic sync: hooks in Claude Code and Codex, and a timer",
+            "sincronización automática: hooks en Claude Code y Codex, y un temporizador",
+        ),
+        (
+            "turn it on or off (otherwise: how it's doing)",
+            "activarla o desactivarla (si no: cómo va)",
+        ),
+        (
+            "put back a conversation from a backup",
+            "recuperar una conversación de una copia de seguridad",
+        ),
+        ("check that everything is in place", "comprobar que todo está en orden"),
+        (
+            "shell completions (e.g. actx completions bash > ~/.local/share/bash-completion/completions/actx)",
+            "autocompletado para tu shell (p. ej. actx completions bash > ~/.local/share/bash-completion/completions/actx)",
+        ),
     ])
 });
 

@@ -2,7 +2,7 @@
 
 pkgname=actx-git
 _pkgname=actx
-pkgver=0.3.0.r0.g0000000
+pkgver=0.4.0.r0.g0000000
 pkgrel=1
 pkgdesc="Keep Claude Code, opencode and Codex conversations in sync across machines, by project"
 arch=('x86_64' 'aarch64')
@@ -48,6 +48,13 @@ check() {
 package() {
   cd "$_pkgname"
   install -Dm755 target/release/actx "$pkgdir/usr/bin/actx"
+  local shell
+  for shell in bash zsh fish; do
+    ACTX_LANG=en target/release/actx completions "$shell" > "completions.$shell"
+  done
+  install -Dm644 completions.bash "$pkgdir/usr/share/bash-completion/completions/actx"
+  install -Dm644 completions.zsh "$pkgdir/usr/share/zsh/site-functions/_actx"
+  install -Dm644 completions.fish "$pkgdir/usr/share/fish/vendor_completions.d/actx.fish"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
   install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
 }

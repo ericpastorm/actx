@@ -3,28 +3,29 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use serde_json::{Value, json};
 
+use crate::agents::{ACTIVE_SECS, in_use, in_use_by_agent};
 use crate::ctx::{ctx, jstr};
 use crate::git::{ask_folder, check_git, fixer_for, git_id, git_info, git_label, resolve_folder, warn_dirty};
 use crate::harness::{self, NAMES, all_local};
 use crate::i18n;
+use crate::lock::{Holder, LockError, SharedLock};
 use crate::paths::short;
 use crate::session::{Session, badge, status};
-use crate::state::{self, State};
+use crate::state::{self, Backup, State};
 use crate::store::{
-    find_project, install_kind, modified, project_dirs, push_one, remove_stored, shared_binary, store_root,
+    find_project, install_kind, modified, project_dirs, push_one, pushed_at, remove_stored, shared_binary, store_root,
     stored_sessions, sync_self,
 };
 use crate::tr;
 use crate::turns::{COPY_SUFFIX, fit};
 use crate::ui::{
-    Row, ago, ask, bold, clip, confirm, die, dim, fail, fzf, harness_tag, interactive, local_time, ok, pad, paint,
-    render, warn,
+    Row, ago, ask, bold, clip, confirm, die, dim, fail, fzf, harness_tag, interactive, is_auto, local_time, ok, pad,
+    paint, render, say, set_auto, warn,
 };
-
-const ACTIVE_SECS: f64 = 120.0; // a conversation file touched this recently is probably still open
 
 #[derive(Default)]
 pub struct Args {
@@ -32,6 +33,11 @@ pub struct Args {
     pub folder: Option<String>,
     pub lang: Option<String>,
     pub all: bool,
+    /// sync: an automatic run (no questions, output to a log)
+    pub auto: bool,
+    /// sync --auto: seconds to wait first, and a conversation that's opening right now
+    pub delay: u64,
+    pub busy: Option<String>,
 }
 
 fn local_index() -> HashMap<String, Session> {
@@ -99,7 +105,7 @@ fn relevance(name: &str, s: &Session) -> u8 {
     u8::from(norm(&s.title).contains(&n))
 }
 
-fn save(st: &State) {
+fn save(st: &mut State) {
     if let Err(e) = state::save(st) {
         fail(&e.0);
     }
@@ -141,22 +147,49 @@ fn is_store(d: &Path) -> bool {
             .unwrap_or(false)
 }
 
-/// (folders that already hold actx data, suggested new folders), from network mounts and sync apps.
-fn store_candidates() -> (Vec<String>, Vec<String>) {
-    let mut bases: Vec<String> = std::fs::read_to_string("/proc/mounts")
-        .unwrap_or_default()
+/// Network shares mounted on this machine.
+fn network_mounts() -> Vec<String> {
+    if let Ok(mounts) = std::fs::read_to_string("/proc/mounts") {
+        return mounts
+            .lines()
+            .filter_map(|line| {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                let (point, fs) = (*parts.get(1)?, *parts.get(2)?);
+                let skip = point.starts_with("/proc") || point.starts_with("/sys") || point.starts_with("/run/user");
+                (NET_FS.contains(&fs) && !skip).then(|| point.replace("\\040", " "))
+            })
+            .collect();
+    }
+    // macOS and the BSDs: "//me@nas/share on /Volumes/share (smbfs, nodev, nosuid, mounted by me)"
+    let out = Command::new("mount").output().map(|o| o.stdout).unwrap_or_default();
+    String::from_utf8_lossy(&out)
         .lines()
         .filter_map(|line| {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            let (point, fs) = (*parts.get(1)?, *parts.get(2)?);
-            let skip = point.starts_with("/proc") || point.starts_with("/sys") || point.starts_with("/run/user");
-            (NET_FS.contains(&fs) && !skip).then(|| point.replace("\\040", " "))
+            let (_, rest) = line.split_once(" on ")?;
+            let (point, opts) = rest.rsplit_once(" (")?;
+            let fs = opts.split([',', ')']).next()?.trim();
+            (NET_FS.contains(&fs) || ["afpfs", "webdav"].contains(&fs)).then(|| point.to_string())
         })
-        .collect();
+        .collect()
+}
+
+/// (folders that already hold actx data, suggested new folders), from network mounts and sync apps.
+fn store_candidates() -> (Vec<String>, Vec<String>) {
+    let mut bases = network_mounts();
+    let home = &ctx().home;
+    let mut synced: Vec<PathBuf> = SYNC_DIRS.iter().map(|d| home.join(d)).collect();
+    // macOS: Dropbox, Google Drive, OneDrive… live in ~/Library/CloudStorage; iCloud Drive elsewhere
+    synced.extend(
+        std::fs::read_dir(home.join("Library/CloudStorage"))
+            .into_iter()
+            .flatten()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path()),
+    );
+    synced.push(home.join("Library/Mobile Documents/com~apple~CloudDocs"));
     bases.extend(
-        SYNC_DIRS
-            .iter()
-            .map(|d| ctx().home.join(d))
+        synced
+            .into_iter()
             .filter(|p| p.is_dir())
             .map(|p| p.to_string_lossy().into_owned()),
     );
@@ -401,7 +434,12 @@ pub fn mk(args: Args) {
         todo.push(s);
     }
     warn_dirty(&todo.iter().map(|s| s.path.clone()).collect());
+    let Some(_lock) = lock_store(&root) else { return };
+    let now = crate::store::pushed_now(&root);
     for s in todo {
+        if moved_on(&now, &s.key(), remote.get(&s.key()).map(pushed_at), &s.title) {
+            continue;
+        }
         match push_one(&root, &name, s, git_info(&s.path), &mut st, &remote) {
             Ok(moved) => {
                 let note = moved
@@ -412,7 +450,7 @@ pub fn mk(args: Args) {
             Err(e) => fail(&format!("{}: {e}", s.title)),
         }
     }
-    save(&st);
+    save(&mut st);
     println!("\n{}", tr!("On your other machines: {cmd}", cmd = bold("actx sync")));
     sync_self(&root);
 }
@@ -483,17 +521,101 @@ fn pick_sync_projects(pending: &BTreeMap<String, Vec<Pending>>, args: &Args) -> 
     )
 }
 
+/// Take the shared folder's lock before writing to it. None: busy (automatic runs give up quietly).
+fn lock_store(root: &Path) -> Option<SharedLock> {
+    let auto = is_auto();
+    let wait = Duration::from_secs(ctx().lock_wait.unwrap_or(if auto { 120 } else { 60 }));
+    let waiting = |h: &Holder| {
+        if !auto {
+            println!(
+                "{}",
+                dim(&tr!(
+                    "{host} is writing to the shared folder (since {time}): waiting…",
+                    host = h.host,
+                    time = local_time(h.since, "%H:%M")
+                ))
+            );
+        }
+    };
+    match SharedLock::acquire(root, wait, waiting) {
+        Ok(lock) => Some(lock),
+        Err(LockError::Busy(h)) => {
+            let msg = tr!(
+                "The shared folder is still busy ({host}, since {time}). Try again in a while; if nothing is running there, delete {path}",
+                host = h.host,
+                time = local_time(h.since, "%H:%M"),
+                path = root.join(".lock").display()
+            );
+            if auto {
+                say(&msg)
+            } else {
+                die(&msg)
+            }
+            None
+        }
+        Err(LockError::Io(e)) => {
+            let msg = tr!("Can't write to the shared folder: {err}", err = e);
+            if auto {
+                say(&msg)
+            } else {
+                die(&msg)
+            }
+            None
+        }
+    }
+}
+
+/// Did someone push `key` since we looked (`was`: when it had been pushed then, None if it wasn't there)?
+fn moved_on(now: &HashMap<String, f64>, key: &str, was: Option<f64>, title: &str) -> bool {
+    let changed = now.get(key).copied() != was;
+    if changed {
+        warn(&tr!(
+            "«{title}» changed in the shared folder meanwhile: run actx sync again",
+            title = title
+        ));
+    }
+    changed
+}
+
+/// An open conversation can't be replaced. Automatic runs leave it for later; otherwise ask.
+fn may_replace(l: &Session, args: &Args) -> bool {
+    if is_auto() {
+        return !(in_use(l) || args.busy.as_deref() == Some(l.key().as_str()));
+    }
+    if !in_use_by_agent(l) {
+        return true;
+    }
+    confirm(&tr!(
+        "«{title}» is open in {tool} right now: what you do there would be lost. Replace it anyway?",
+        title = l.title,
+        tool = harness::get(l.harness).label()
+    ))
+}
+
 pub fn sync(args: Args) {
-    let root = store_root(false).expect("a shared folder");
+    let auto = args.auto;
+    let root = if auto {
+        set_auto();
+        crate::auto::rotate_log();
+        std::thread::sleep(Duration::from_secs(args.delay));
+        match crate::store::reachable_root(Duration::from_secs(10)) {
+            Some(root) => root,
+            None => return, // away from home, say: next time
+        }
+    } else {
+        store_root(false).expect("a shared folder")
+    };
     let mut remote = stored_sessions(&root);
     if remote.is_empty() {
-        println!(
-            "{}",
-            tr!(
-                "No conversations in the shared folder yet. Start with: {cmd}",
-                cmd = bold(&format!("actx mk <{}>", tr!("project")))
-            )
-        );
+        if !auto {
+            println!(
+                "{}",
+                tr!(
+                    "No conversations in the shared folder yet. Start with: {cmd}",
+                    cmd = bold(&format!("actx mk <{}>", tr!("project")))
+                )
+            );
+        }
         return;
     }
     let mut st = state::load();
@@ -516,13 +638,19 @@ pub fn sync(args: Args) {
         }
     }
     if pending.is_empty() {
-        save(&st);
-        ok(&tr!("All in sync ({n} conversations)", n = in_sync));
+        save(&mut st);
+        if !auto {
+            ok(&tr!("All in sync ({n} conversations)", n = in_sync));
+        }
         return;
     }
-    let chosen = pick_sync_projects(&pending, &args);
+    let chosen = if auto {
+        pending.keys().cloned().collect()
+    } else {
+        pick_sync_projects(&pending, &args)
+    };
     if chosen.is_empty() {
-        save(&st);
+        save(&mut st);
         return;
     }
     let skipped: usize = pending
@@ -543,6 +671,15 @@ pub fn sync(args: Args) {
     let mut merges = Vec::new();
     for (l, r) in conflicts {
         let host = jstr(r.meta(), "host").to_string();
+        if auto {
+            warn(&tr!(
+                "{project} · «{title}» changed here and on {host}: run actx sync to decide",
+                project = r.project.clone().unwrap_or_default(),
+                title = r.title,
+                host = host,
+            ));
+            continue;
+        }
         warn(&tr!(
             "{project} · «{title}» changed here and on {host} since the last sync.",
             project = r.project.clone().unwrap_or_default(),
@@ -573,74 +710,114 @@ pub fn sync(args: Args) {
             _ => println!("{}", dim(&format!("  {}", tr!("skipped")))),
         }
     }
-    let none = HashMap::new();
-    warn_dirty(
-        &up.iter()
-            .filter_map(|(l, _)| l.as_ref().map(|l| l.path.clone()))
-            .collect::<BTreeSet<_>>(),
-    );
-    for (l, r) in &up {
-        let Some(l) = l else { continue };
-        let project = r.project.clone().unwrap_or_default();
-        match push_one(&root, &project, l, git_info(&l.path), &mut st, &none) {
-            Ok(_) => println!(
-                "{} {} {} {}",
-                paint("33", "↑"),
-                pad(&project, 14),
-                harness_tag(r.harness),
-                r.title
-            ),
-            Err(e) => fail(&format!("{}: {e}", r.title)),
+    // where each pull goes: decided (and asked) before taking the lock
+    let mut placed = Vec::new();
+    for (l, r) in down {
+        if let Some(l) = &l
+            && !may_replace(l, &args)
+        {
+            if auto {
+                say(&dim(&tr!(
+                    "«{title}» is open in {tool}: it'll be pulled later",
+                    title = r.title,
+                    tool = harness::get(r.harness).label()
+                )));
+            } else {
+                println!("{}", dim(&format!("  {}", tr!("skipped"))));
+            }
+            continue;
         }
-    }
-    let mut checked = HashSet::new();
-    let mut ready = Vec::new();
-    for (l, r) in &down {
         // if you already have it, it stays where it is; if it's new, find its place
-        let folder = match l {
+        let folder = match &l {
             Some(l) if Path::new(&l.path).is_dir() => Some(l.path.clone()),
+            _ if auto => resolve_folder(r.meta(), &st), // nobody to ask: `actx sync` will
             _ => resolve_folder(r.meta(), &st).or_else(|| ask_folder(r.meta(), &mut st)),
         };
-        let Some(folder) = folder else {
-            warn(&tr!(
+        match folder {
+            Some(folder) => placed.push((l, r, folder)),
+            None if !auto => warn(&tr!(
                 "{project} · «{title}»: I don't know which folder it goes in on this machine; skipping",
                 project = r.project.clone().unwrap_or_default(),
                 title = r.title,
-            ));
-            continue;
-        };
-        if checked.insert(folder.clone()) {
-            check_git(r.meta(), &folder);
+            )),
+            None => {}
         }
-        let fix = fixer_for(r.meta(), &folder);
-        match harness::get(r.harness).install(r, l.as_ref(), &folder, fix.as_ref()) {
-            Ok(weight) => {
-                st.base.insert(r.key(), (weight, r.weight));
-                let project = r.project.clone().unwrap_or_default();
-                println!(
-                    "{} {} {} {}  {}",
-                    paint("36", "↓"),
+    }
+    if !auto {
+        warn_dirty(
+            &up.iter()
+                .filter_map(|(l, _)| l.as_ref().map(|l| l.path.clone()))
+                .collect::<BTreeSet<_>>(),
+        );
+    }
+    let mut ready = Vec::new();
+    if !(up.is_empty() && placed.is_empty() && merges.is_empty())
+        && let Some(_lock) = lock_store(&root)
+    {
+        let now = crate::store::pushed_now(&root);
+        let none = HashMap::new();
+        for (l, r) in &up {
+            let Some(l) = l else { continue };
+            if moved_on(&now, &r.key(), Some(pushed_at(r)), &r.title) {
+                continue;
+            }
+            let project = r.project.clone().unwrap_or_default();
+            match push_one(&root, &project, l, git_info(&l.path), &mut st, &none) {
+                Ok(_) => say(&format!(
+                    "{} {} {} {}",
+                    paint("33", "↑"),
                     pad(&project, 14),
                     harness_tag(r.harness),
-                    r.title,
-                    dim(&format!("→ {}", short(&folder)))
-                );
-                ready.push((r, folder));
+                    r.title
+                )),
+                Err(e) => fail(&format!("{}: {e}", r.title)),
             }
-            Err(e) => fail(&format!("{}: {e}", r.title)),
+        }
+        let mut checked = HashSet::new();
+        for (l, r, folder) in &placed {
+            if moved_on(&now, &r.key(), Some(pushed_at(r)), &r.title) {
+                continue;
+            }
+            if !auto && checked.insert(folder.clone()) {
+                check_git(r.meta(), folder);
+            }
+            let fix = fixer_for(r.meta(), folder);
+            match harness::get(r.harness).install(r, l.as_ref(), folder, fix.as_ref()) {
+                Ok(weight) => {
+                    st.base.insert(r.key(), (weight, r.weight));
+                    let project = r.project.clone().unwrap_or_default();
+                    say(&format!(
+                        "{} {} {} {}  {}",
+                        paint("36", "↓"),
+                        pad(&project, 14),
+                        harness_tag(r.harness),
+                        r.title,
+                        dim(&format!("→ {}", short(folder)))
+                    ));
+                    ready.push((r, folder));
+                }
+                Err(e) => fail(&format!("{}: {e}", r.title)),
+            }
+        }
+        for (l, r) in merges {
+            let Some(mut l) = l else { continue };
+            if moved_on(&now, &r.key(), Some(pushed_at(&r)), &r.title) {
+                continue;
+            }
+            if let Err(e) = crate::merge::merge_one(&root, &mut l, &r, &mut st) {
+                fail(&tr!(
+                    "{title}: couldn't merge ({err}); nothing else was touched",
+                    title = r.title,
+                    err = e
+                ));
+            }
         }
     }
-    for (l, r) in merges {
-        let Some(mut l) = l else { continue };
-        if let Err(e) = crate::merge::merge_one(&root, &mut l, &r, &mut st) {
-            fail(&tr!(
-                "{title}: couldn't merge ({err}); nothing else was touched",
-                title = r.title,
-                err = e
-            ));
-        }
+    save(&mut st);
+    if auto {
+        sync_self(&root);
+        return;
     }
-    save(&st);
     if in_sync > 0 {
         ok(&tr!("{n} in sync", n = in_sync));
     }
@@ -652,7 +829,7 @@ pub fn sync(args: Args) {
         for (r, folder) in ready {
             println!(
                 "  {}   {}",
-                resume_cmd(r, &folder),
+                resume_cmd(r, folder),
                 dim(crate::ui::take_chars(&r.title, 50))
             );
         }
@@ -794,6 +971,7 @@ pub fn rm(args: Args) {
     if !confirm(&question) {
         return;
     }
+    let Some(_lock) = lock_store(&root) else { return };
     let mut st = state::load();
     for r in &chosen {
         if let Err(e) = remove_stored(r) {
@@ -804,7 +982,7 @@ pub fn rm(args: Args) {
     if everything {
         let _ = std::fs::remove_dir_all(&pdir);
     }
-    save(&st);
+    save(&mut st);
     ok(&if everything {
         tr!("Project {name} deleted", name = pname)
     } else {
@@ -981,6 +1159,7 @@ pub fn cv(args: Args) {
         if let (Some(root), Some(r)) = (&root, remote.get(&s.key())) {
             // the copy travels with its project
             let project = r.project.clone().unwrap_or_default();
+            let _lock = lock_store(root);
             note = match push_one(root, &project, &new, git_info(&new.path), &mut st, &HashMap::new()) {
                 Ok(_) => dim(&format!("  {}", tr!("(also saved in {project})", project = project))),
                 Err(e) => paint(
@@ -1000,7 +1179,7 @@ pub fn cv(args: Args) {
         ));
         ready.push(new);
     }
-    save(&st);
+    save(&mut st);
     if !ready.is_empty() {
         println!("\n{}", tr!("To continue:"));
         for new in &ready {
@@ -1084,4 +1263,347 @@ pub fn update() {
         "actx updated from the shared folder (saved {ago})",
         ago = ago(modified(&shared))
     ));
+}
+
+// ── restore ─────────────────────────────────────────────────────────────────
+
+fn backup_title(b: &Backup, local: &HashMap<String, Session>) -> String {
+    if !b.title.is_empty() {
+        return b.title.clone();
+    }
+    local
+        .get(&format!("{}:{}", b.harness, b.id))
+        .map(|l| l.title.clone())
+        .unwrap_or_else(|| b.id.clone())
+}
+
+/// Put a backed-up conversation back. Returns its folder.
+fn restore_one(b: &Backup, current: Option<&Session>) -> crate::ctx::Result<String> {
+    use crate::ctx::Error;
+    use crate::state::{Copy, backup};
+    if let Some(c) = current
+        && in_use_by_agent(c)
+    {
+        return Err(Error(tr!(
+            "it's open in {tool} right now: close it first",
+            tool = harness::get(c.harness).label()
+        )));
+    }
+    let folder = current
+        .map(|c| c.path.clone())
+        .filter(|p| !p.is_empty())
+        .unwrap_or_else(|| b.path.clone());
+    if b.harness == "opencode" {
+        if folder.is_empty() || !Path::new(&folder).is_dir() {
+            return Err(Error(tr!("I don't know which folder it goes in on this machine")));
+        }
+        let data = std::fs::read(&b.file)?;
+        if let Some(c) = current {
+            backup(c, Copy::Bytes(&crate::opencode::export(&c.id, &c.path)?), "restore")?;
+            crate::opencode::delete(&c.id, &c.path)?;
+        }
+        crate::opencode::import(&data, &folder)?;
+        return Ok(folder);
+    }
+    let dest = current
+        .and_then(|c| c.src.clone())
+        .or_else(|| b.src.clone())
+        .ok_or_else(|| Error(tr!("I don't know which folder it goes in on this machine")))?;
+    if let Some(c) = current
+        && let Some(src) = &c.src
+    {
+        backup(c, Copy::File(src), "restore")?;
+    }
+    if let Some(dir) = dest.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = dest.with_extension("actx-tmp");
+    std::fs::copy(&b.file, &tmp)?;
+    std::fs::rename(&tmp, &dest)?;
+    Ok(folder)
+}
+
+pub fn restore() {
+    let all = state::backups();
+    if all.is_empty() {
+        println!(
+            "{}",
+            tr!("No backups yet: actx makes one before replacing a conversation on this machine.")
+        );
+        return;
+    }
+    let local = local_index();
+    let rows: Vec<Row> = all
+        .iter()
+        .map(|b| {
+            let title = backup_title(b, &local);
+            let size = b.file.metadata().map(|m| m.len()).unwrap_or(0);
+            let msgs = if b.harness == "opencode" {
+                crate::opencode::file_preview(&b.file)
+            } else {
+                let mut s = Session::local(b.harness, b.id.clone(), title.clone(), b.path.clone(), b.at, size);
+                s.src = Some(b.file.clone());
+                harness::get(b.harness).preview(&s)
+            };
+            Row {
+                key: b.file.to_string_lossy().into_owned(),
+                line: format!(
+                    "{}  {} {}  {}",
+                    local_time(b.at, "%d %b %H:%M"),
+                    harness_tag(b.harness),
+                    pad(&clip(&title, 42), 42),
+                    dim(&format!("{} · {}", short(&b.path), crate::ui::human(size)))
+                ),
+                preview: format!(
+                    "{}\n{}\n\n{}",
+                    bold(&title),
+                    dim(&tr!("backed up {ago}", ago = ago(b.at))),
+                    render(&msgs, b.harness)
+                ),
+            }
+        })
+        .collect();
+    let header = tr!(
+        "Backups, newest first (kept {n} days) · Enter restores one",
+        n = state::KEEP_BACKUP_DAYS
+    );
+    let Some(picked) = fzf(&rows, &header, false, true).into_iter().next() else {
+        return;
+    };
+    let Some(b) = all.iter().find(|b| b.file.to_string_lossy() == picked) else {
+        return;
+    };
+    let title = backup_title(b, &local);
+    let current = local.get(&format!("{}:{}", b.harness, b.id));
+    let when = local_time(b.at, "%d %b %H:%M");
+    let question = if current.is_some() {
+        tr!(
+            "Replace «{title}» on this machine with the copy from {when}? (the current one is backed up first)",
+            title = title,
+            when = when
+        )
+    } else {
+        tr!("Restore «{title}» from {when}?", title = title, when = when)
+    };
+    if !confirm(&question) {
+        return;
+    }
+    match restore_one(b, current) {
+        Ok(folder) => {
+            ok(&tr!("Restored «{title}»", title = title));
+            println!(
+                "{}",
+                dim(&tr!(
+                    "If it's in a project, the next sync pushes it (or asks, if it changed elsewhere too)."
+                ))
+            );
+            println!(
+                "\n{}\n  {}",
+                tr!("To continue:"),
+                harness::get(b.harness).resume(&b.id, &folder)
+            );
+        }
+        Err(e) => fail(&format!("{title}: {e}")),
+    }
+}
+
+// ── doctor ──────────────────────────────────────────────────────────────────
+
+fn first_line(program: &str, args: &[&str]) -> Option<String> {
+    let out = Command::new(program).args(args).output().ok()?;
+    let text = String::from_utf8_lossy(&[out.stdout, out.stderr].concat()).into_owned();
+    text.lines()
+        .next()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+}
+
+pub fn doctor() {
+    let line = |mark: &str, what: &str, detail: &str| println!("  {mark} {} {detail}", pad(what, 18));
+    let good = |what: &str, detail: &str| line(&paint("32", "✓"), what, detail);
+    let bad = |what: &str, detail: &str| line(&paint("31", "✗"), what, detail);
+    let meh = |what: &str, detail: &str| line(&paint("33", "⚠"), what, detail);
+    let none = |what: &str, detail: &str| line(&dim("·"), what, &dim(detail));
+    let mut problems = 0;
+
+    println!(
+        "{} {}",
+        bold(&format!("actx {}", crate::ctx::VERSION)),
+        dim(&format!(
+            "· {} · {}",
+            install_kind(),
+            short(&ctx().self_path.to_string_lossy())
+        ))
+    );
+    let config = short(&ctx().config_file.to_string_lossy());
+    match crate::store::configured_root() {
+        None => {
+            problems += 1;
+            bad(
+                &tr!("shared folder"),
+                &tr!("not configured: run {cmd}", cmd = bold("actx init")),
+            );
+        }
+        Some(root) => match crate::store::reachable_root(Duration::from_secs(5)) {
+            None => {
+                problems += 1;
+                bad(
+                    &tr!("shared folder"),
+                    &tr!(
+                        "{path}: can't reach it (if it's a network share: is it mounted?)",
+                        path = short(&root.to_string_lossy())
+                    ),
+                );
+            }
+            Some(root) => {
+                let writable = tempfile::tempfile_in(&root).is_ok();
+                let stored = stored_sessions(&root);
+                let detail = tr!(
+                    "{path} · {p} project(s), {n} conversation(s)",
+                    path = short(&root.to_string_lossy()),
+                    p = project_dirs(&root).len(),
+                    n = stored.len()
+                );
+                if writable {
+                    good(&tr!("shared folder"), &detail);
+                } else {
+                    problems += 1;
+                    bad(
+                        &tr!("shared folder"),
+                        &format!("{detail} · {}", tr!("can't write to it")),
+                    );
+                }
+                let lock = root.join(".lock");
+                if let Some(v) = std::fs::read_to_string(&lock)
+                    .ok()
+                    .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+                {
+                    let since = v.get("since").and_then(Value::as_f64).unwrap_or(0.0);
+                    meh(
+                        &tr!("lock"),
+                        &tr!(
+                            "{host} is writing to it (since {ago}); if nothing is running there, delete {path}",
+                            host = jstr(&v, "host"),
+                            ago = ago(since),
+                            path = lock.display()
+                        ),
+                    );
+                }
+            }
+        },
+    }
+    println!("  {}", dim(&tr!("config: {path}", path = config)));
+
+    println!("\n{}", bold(&tr!("Tools")));
+    for (program, what) in [("git", "git"), ("fzf", "fzf")] {
+        match first_line(program, &["--version"]) {
+            Some(v) => good(what, &v),
+            None => {
+                problems += 1;
+                bad(what, &tr!("not found: actx needs it"));
+            }
+        }
+    }
+    for name in NAMES {
+        let h = harness::get(name);
+        if !h.installed() {
+            none(h.label(), &tr!("not installed"));
+            continue;
+        }
+        let count = h.local().len();
+        let version = match name {
+            "claude" => crate::claude::version().to_string(),
+            "codex" => crate::codex::version().to_string(),
+            _ => first_line("opencode", &["--version"])
+                .and_then(|v| {
+                    v.split_whitespace()
+                        .last()
+                        .map(|v| v.trim_start_matches('v').to_string())
+                })
+                .unwrap_or_default(),
+        };
+        let detail = tr!("{version} · {n} conversation(s)", version = version, n = count);
+        if name == "opencode" {
+            let cli = version.split('.').next().and_then(|v| v.parse::<u8>().ok());
+            let db = crate::opencode::version();
+            if let (Some(cli), Some(db)) = (cli, db)
+                && cli != db
+            {
+                problems += 1;
+                meh(
+                    h.label(),
+                    &format!(
+                        "{detail} · {}",
+                        tr!("the CLI is {a}.x but its database is from {b}.x", a = cli, b = db)
+                    ),
+                );
+                continue;
+            }
+        }
+        good(h.label(), &detail);
+    }
+
+    println!("\n{}", bold(&tr!("Automatic sync")));
+    let parts = crate::auto::parts();
+    if parts.iter().any(|(_, on)| *on) {
+        for (what, on) in &parts {
+            if *on {
+                good(what, "");
+            } else {
+                none(what, "");
+            }
+        }
+        if let Some(last) = crate::auto::last_log(1).pop() {
+            println!("  {}", dim(&tr!("last: {line}", line = last)));
+        }
+    } else {
+        none(&tr!("off"), &tr!("turn it on with actx auto on"));
+    }
+    let running = crate::agents::summary();
+    if !running.is_empty() {
+        let mut seen = BTreeSet::new();
+        let mut open: Vec<String> = running
+            .iter()
+            .filter(|(_, cwd)| seen.insert(cwd.clone()))
+            .map(|(tool, cwd)| format!("{tool} {}", short(cwd)))
+            .collect();
+        if open.len() > 4 {
+            let more = open.len() - 3;
+            open.truncate(3);
+            open.push(format!("+{more}"));
+        }
+        println!("  {}", dim(&tr!("agents running now: {list}", list = open.join(", "))));
+    }
+
+    println!("\n{}", bold(&tr!("This machine")));
+    let st = state::load();
+    let backups = state::backups();
+    let size: u64 = backups
+        .iter()
+        .filter_map(|b| b.file.metadata().ok())
+        .map(|m| m.len())
+        .sum();
+    good(
+        &tr!("state"),
+        &tr!(
+            "{n} conversation(s) tracked · {path}",
+            n = st.base.len(),
+            path = short(&ctx().state_file().to_string_lossy())
+        ),
+    );
+    good(
+        &tr!("backups"),
+        &tr!(
+            "{n} · {size} · kept {days} days (actx restore)",
+            n = backups.len(),
+            size = crate::ui::human(size),
+            days = state::KEEP_BACKUP_DAYS
+        ),
+    );
+    println!();
+    if problems == 0 {
+        ok(&tr!("All good"));
+    } else {
+        warn(&tr!("{n} problem(s) above", n = problems));
+    }
 }

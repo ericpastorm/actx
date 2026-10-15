@@ -16,8 +16,8 @@ use crate::claude::{chunks, jsonl, lines};
 use crate::ctx::{Result, ctx, jstr, now_ms};
 use crate::paths::Fix;
 use crate::session::Session;
-use crate::state::backup_file;
-use crate::store::{COMP, Pushed, stored_lines, write_compressed};
+use crate::state::{Copy, backup};
+use crate::store::{COMP, Pushed, complete_lines, stored_lines, write_compressed};
 use crate::tr;
 use crate::turns::{Turn, add_turn, as_text, iso, iso_ms, tool_call, tool_text};
 use crate::ui::{local_time, render};
@@ -291,11 +291,13 @@ pub fn push(s: &Session, tmp: &Path) -> Result<Pushed> {
         .unwrap_or_default();
     let files = json!({"session": session, "name": src.file_name().unwrap_or_default().to_string_lossy(), "dir": dir});
     let updated = epoch(src);
-    let weight = write_compressed(&tmp.join(&session), File::open(src)?)?;
+    let (file, seen) = complete_lines(src)?;
+    let weight = write_compressed(&tmp.join(&session), file)?;
     Ok(Pushed {
         files,
         updated,
         weight,
+        seen,
         preview: render(&messages(&chunks(src)?.1), "codex"),
     })
 }
@@ -306,8 +308,8 @@ pub fn install(r: &Session, local: Option<&Session>, _folder: &str, fix: Fix) ->
     std::fs::create_dir_all(&dir)?;
     let dest = dir.join(jstr(files, "name"));
     let local_src = local.and_then(|l| l.src.clone());
-    if let Some(src) = &local_src {
-        backup_file(src, &format!("codex-{}.jsonl", r.id))?;
+    if let (Some(l), Some(src)) = (local, &local_src) {
+        backup(l, Copy::File(src), "pull")?;
     }
     let size = crate::claude::install_file(r, &dest, fix)?;
     if let Some(src) = local_src.filter(|s| *s != dest) {

@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, Read};
+use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
@@ -52,6 +52,28 @@ pub fn untar(archive: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
+/// A conversation file up to its last complete line (an agent may be writing the next one), and
+/// its whole size.
+pub fn complete_lines(path: &Path) -> Result<(io::Take<File>, u64)> {
+    let mut file = File::open(path)?;
+    let size = file.metadata()?.len();
+    let mut buf = vec![0u8; 64 << 10];
+    let mut end = size;
+    while end > 0 {
+        let start = end.saturating_sub(buf.len() as u64);
+        let chunk = &mut buf[..(end - start) as usize];
+        file.seek(SeekFrom::Start(start))?;
+        file.read_exact(chunk)?;
+        if let Some(i) = memchr::memrchr(b'\n', chunk) {
+            file.seek(SeekFrom::Start(0))?;
+            return Ok((file.take(start + i as u64 + 1), size));
+        }
+        end = start;
+    }
+    file.seek(SeekFrom::Start(0))?;
+    Ok((file.take(size), size))
+}
+
 /// Each line of a stored file, decompressed and with this machine's paths.
 pub fn stored_lines(path: &Path, fix: crate::paths::Fix) -> Result<Vec<Vec<u8>>> {
     let mut lines = Vec::new();
@@ -61,12 +83,29 @@ pub fn stored_lines(path: &Path, fix: crate::paths::Fix) -> Result<Vec<Vec<u8>>>
     Ok(lines)
 }
 
-pub fn store_root(optional: bool) -> Option<PathBuf> {
-    let setting = std::env::var("ACTX_ROOT")
+/// The shared folder's path, as configured.
+pub fn configured_root() -> Option<PathBuf> {
+    std::env::var("ACTX_ROOT")
         .ok()
         .filter(|v| !v.is_empty())
-        .or_else(|| ctx().config.get("root").and_then(Value::as_str).map(String::from));
-    let Some(setting) = setting else {
+        .or_else(|| ctx().config.get("root").and_then(Value::as_str).map(String::from))
+        .map(|s| PathBuf::from(shellexpand(&s)))
+}
+
+/// The shared folder, if it's there, without waiting more than `timeout` for it (a network share
+/// that's gone can hang for a minute) and without saying anything. For automatic syncs.
+pub fn reachable_root(timeout: std::time::Duration) -> Option<PathBuf> {
+    let root = configured_root()?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    let probe = root.clone();
+    std::thread::spawn(move || {
+        let _ = tx.send(probe.join(".actx").exists() || probe.is_dir());
+    });
+    rx.recv_timeout(timeout).unwrap_or(false).then_some(root)
+}
+
+pub fn store_root(optional: bool) -> Option<PathBuf> {
+    let Some(root) = configured_root() else {
         if optional {
             return None;
         }
@@ -75,7 +114,6 @@ pub fn store_root(optional: bool) -> Option<PathBuf> {
             cmd = bold("actx init")
         ));
     };
-    let root = PathBuf::from(shellexpand(&setting));
     if let Err(e) = std::fs::create_dir(&root)
         && e.kind() != io::ErrorKind::AlreadyExists
     {
@@ -131,42 +169,65 @@ pub fn find_project(root: &Path, name: &str) -> Option<PathBuf> {
         .find(|d| d.file_name().map(|n| n.to_string_lossy().to_lowercase()) == Some(name.to_lowercase()))
 }
 
+/// The conversation stored in `dir` (<project>/<tool>/<id>).
+fn stored_session(dir: PathBuf, project: &str) -> Option<Session> {
+    let meta = std::fs::read_to_string(dir.join("meta.json"))
+        .ok()
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok())?; // none: a half-written upload
+    let harness = crate::harness::known(jstr(&meta, "harness"))?; // stored by a newer actx that knows more tools
+    let path = match meta.get("rel").and_then(Value::as_str) {
+        Some(rel) => crate::paths::under_home(rel),
+        None => jstr(&meta, "path").to_string(),
+    };
+    let mut s = Session::local(
+        harness,
+        jstr(&meta, "id").to_string(),
+        jstr(&meta, "title").to_string(),
+        path,
+        meta.get("updated").and_then(Value::as_f64).unwrap_or(0.0),
+        meta.get("weight").and_then(Value::as_u64).unwrap_or(0),
+    );
+    s.meta = Some(meta);
+    s.store_dir = Some(dir);
+    s.project = Some(project.to_string());
+    Some(s)
+}
+
+fn project_name(dir: &Path) -> String {
+    dir.file_name().unwrap_or_default().to_string_lossy().into_owned()
+}
+
 pub fn stored_sessions(root: &Path) -> Vec<Session> {
     let mut out = Vec::new();
     for project in project_dirs(root) {
-        let pname = project.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let pname = project_name(&project);
         for tool in names(&project).into_iter().filter(|n| !n.starts_with('.')) {
             for id in names(&project.join(&tool)).into_iter().filter(|n| !n.starts_with('.')) {
-                let dir = project.join(&tool).join(&id);
-                let Some(meta) = std::fs::read_to_string(dir.join("meta.json"))
-                    .ok()
-                    .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-                else {
-                    continue; // half-written uploads
-                };
-                let Some(harness) = crate::harness::known(jstr(&meta, "harness")) else {
-                    continue; // stored by a newer actx that knows more tools
-                };
-                let path = match meta.get("rel").and_then(Value::as_str) {
-                    Some(rel) => crate::paths::under_home(rel),
-                    None => jstr(&meta, "path").to_string(),
-                };
-                let mut s = Session::local(
-                    harness,
-                    jstr(&meta, "id").to_string(),
-                    jstr(&meta, "title").to_string(),
-                    path,
-                    meta.get("updated").and_then(Value::as_f64).unwrap_or(0.0),
-                    meta.get("weight").and_then(Value::as_u64).unwrap_or(0),
-                );
-                s.meta = Some(meta);
-                s.store_dir = Some(dir);
-                s.project = Some(pname.clone());
-                out.push(s);
+                out.extend(stored_session(project.join(&tool).join(&id), &pname));
             }
         }
     }
     out
+}
+
+/// One conversation, wherever it's stored.
+pub fn find_stored(root: &Path, harness: &str, id: &str) -> Option<Session> {
+    if id.is_empty() || id.contains('/') || id.starts_with('.') {
+        return None;
+    }
+    project_dirs(root)
+        .into_iter()
+        .find_map(|p| stored_session(p.join(harness).join(id), &project_name(&p)))
+}
+
+/// When a stored conversation was last pushed, to notice if someone pushed it again meanwhile.
+pub fn pushed_at(r: &Session) -> f64 {
+    r.meta().get("pushed_at").and_then(Value::as_f64).unwrap_or(0.0)
+}
+
+/// key → when it was last pushed, for everything in the shared folder now.
+pub fn pushed_now(root: &Path) -> HashMap<String, f64> {
+    stored_sessions(root).iter().map(|r| (r.key(), pushed_at(r))).collect()
 }
 
 /// What a tool's push leaves in the upload folder.
@@ -174,6 +235,8 @@ pub struct Pushed {
     pub files: Value,
     pub updated: f64,
     pub weight: u64,
+    /// this machine's weight of what was pushed (it may still be growing)
+    pub seen: u64,
     pub preview: String,
 }
 
@@ -193,7 +256,7 @@ pub fn push_one(
     let old = parent.join(format!(".old-{}-{pid}", s.id));
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(&tmp)?;
-    let result = (|| -> Result<u64> {
+    let result = (|| -> Result<(u64, u64)> {
         let pushed = crate::harness::get(s.harness).push(s, &tmp)?;
         let meta = json!({
             "v": 2, "harness": s.harness, "id": s.id, "title": s.title,
@@ -208,14 +271,10 @@ pub fn push_one(
         }
         std::fs::rename(&tmp, &dest)?;
         let _ = std::fs::remove_dir_all(&old);
-        Ok(pushed.weight)
+        Ok((pushed.seen, pushed.weight))
     })();
     let _ = std::fs::remove_dir_all(&tmp);
-    let weight = result?;
-    st.base.insert(
-        s.key(),
-        (if s.harness == "opencode" { s.weight } else { weight }, weight),
-    );
+    st.base.insert(s.key(), result?);
     if let Some(prev) = remote.get(&s.key())
         && prev.project.as_deref() != Some(project)
     {
@@ -286,7 +345,7 @@ pub fn sync_self(root: &Path) {
         return;
     }
     if shared.exists() && mtime(&shared) > mtime(me) + 2.0 {
-        if kind == "user" {
+        if kind == "user" && !crate::ui::is_auto() {
             warn(&tr!(
                 "There's a newer actx in the shared folder: {cmd}",
                 cmd = bold("actx update")
@@ -301,5 +360,29 @@ pub fn sync_self(root: &Path) {
             .and_then(|f| f.metadata())
             .and_then(|m| File::options().write(true).open(&tmp)?.set_modified(m.modified()?));
         let _ = std::fs::rename(&tmp, &shared);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_line_being_written_is_left_for_next_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("s.jsonl");
+        let long = format!("{{\"x\":\"{}\"}}\n", "y".repeat(100_000)); // longer than one read
+        for (text, kept) in [
+            (format!("{{\"a\":1}}\n{long}{{\"b\":"), format!("{{\"a\":1}}\n{long}")),
+            ("{\"a\":1}\n".to_string(), "{\"a\":1}\n".to_string()),
+            ("{\"a\":".to_string(), "{\"a\":".to_string()), // nothing complete: all of it
+            (String::new(), String::new()),
+        ] {
+            std::fs::write(&f, &text).unwrap();
+            let (mut file, size) = complete_lines(&f).unwrap();
+            let mut got = String::new();
+            file.read_to_string(&mut got).unwrap();
+            assert_eq!((got, size), (kept, text.len() as u64));
+        }
     }
 }
