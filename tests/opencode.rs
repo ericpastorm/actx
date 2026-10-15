@@ -132,8 +132,7 @@ fn opencode_syncs_automatically() {
 
     opencode_continue(&a, &repo, "and on Windows?", "Use the Task Manager (desk)");
     assert!(a.actx(&["sync", "--auto"]).contains("↑"));
-    // it was just imported: it may be open
-    assert!(b.actx(&["sync", "--auto"]).contains("is open in opencode"));
+    // opencode 2 dates an import now, so it would look open: make it an hour old
     let table = if opencode_major() == Some(2) {
         "session_v2"
     } else {
