@@ -1,7 +1,4 @@
-__pycache__/
-*.pyc
-.pytest_cache/
-.venv/
+/target
 # makepkg leftovers
 packaging/aur/src/
 packaging/aur/pkg/

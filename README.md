@@ -26,15 +26,14 @@ laptop$  claude --resume …     # carry on where you left off
 - **Claude Code ⇄ opencode ⇄ Codex.** Copy a conversation into another tool and keep going there.
 - **Safe.** Backups before overwriting, atomic writes in the shared folder, and git warnings when the
   code is out of step (uncommitted changes, a different commit).
-- **One file, no dependencies.** Python 3.12+, git and fzf. English and Spanish interface.
+- **One small binary.** Written in Rust; it only needs git and fzf. English and Spanish interface.
 
 ## Install
 
-It's a single script:
+With [Rust](https://rustup.rs) installed:
 
 ```
-curl -fsSL --create-dirs -o ~/.local/bin/actx https://raw.githubusercontent.com/ericpastorm/actx/main/actx
-chmod +x ~/.local/bin/actx
+cargo install --git https://github.com/ericpastorm/actx
 ```
 
 **Arch Linux:** the AUR package is on its way. Meanwhile you can build it with the PKGBUILD in this repo:
@@ -44,9 +43,9 @@ git clone https://github.com/ericpastorm/actx
 cd actx/packaging/aur && makepkg -si
 ```
 
-Requires Python 3.12+ (3.14+ recommended: conversations are compressed with zstd, gzip otherwise),
-`git` and [`fzf`](https://github.com/junegunn/fzf). All your machines should use the same
-compression, so either all on 3.14+ or all below.
+At runtime it needs `git` and [`fzf`](https://github.com/junegunn/fzf). On machines without Rust, copy the
+binary from one that has it: actx leaves a copy in the shared folder (`_bin/`), and `actx update` keeps it
+current.
 
 Supported tools: **Claude Code**, **opencode** 1.x and 2.x (each machine can have either: a conversation
 saved with one is converted when it reaches the other), and **Codex**.
@@ -68,7 +67,7 @@ Then:
 | `actx` / `actx ls [project]` | Projects and the state of each conversation: `↑ push`, `↓ pull`, `↓ new`, `⚠ conflict`, `✓ synced`. |
 | `actx cv [project]` | Copy a conversation into another tool (Claude Code, opencode, Codex). |
 | `actx rm <project>` | Remove conversations from a project (nothing is deleted on your machines). |
-| `actx update` | Install the newest actx found in the shared folder (for script installs). |
+| `actx update` | Install the newest actx found in the shared folder (for copies installed by hand). |
 
 Pickers: type to filter, <kbd>Tab</kbd> marks several, <kbd>Ctrl</kbd>+<kbd>A</kbd> all, <kbd>Enter</kbd> confirms.
 
@@ -118,7 +117,7 @@ keep working. In opencode, the copy uses the last model you used there; in Codex
     claude/<session id>/        meta.json · preview.txt · session.jsonl.zst · extra.tar.zst
     opencode/<session id>/      meta.json · preview.txt · session.json.zst · child-*.json.zst
     codex/<session id>/         meta.json · preview.txt · rollout.jsonl.zst
-  _bin/actx                     a copy of actx, for `actx update` on script installs
+  _bin/actx-<arch>-<os>         a copy of actx, for `actx update` on copies installed by hand
 ```
 
 Anything that all your machines can reach works: an SMB/NFS mount, a Syncthing or Dropbox folder…
@@ -163,12 +162,16 @@ private, and don't use a public sync service you wouldn't trust with your code.
 ## Development
 
 ```
-pip install pytest
-pytest                # opencode and Codex tests run if they are installed, and are skipped otherwise
+cargo test            # opencode and Codex tests run if they are installed, and are skipped otherwise
 ```
 
-The tests build fake machines (each with its own home, Claude Code, opencode and Codex data) that share one
-folder, and run real syncs, merges and conversions between them.
+The end-to-end tests build fake machines (each with its own home, Claude Code, opencode and Codex data)
+that share one folder, and run the real binary on them: syncs, merges and conversions. They steer it with
+`ACTX_HOST` (the machine's name), `ACTX_PICK` (what the pickers choose) and `ACTX_ANSWER` (the reply to
+every question). CI also runs `cargo fmt --check` and `cargo clippy -- -D warnings`.
+
+actx 0.3 is a Rust rewrite of the 0.1–0.2 Python script. It reads and writes the same shared folder and
+the same local state, so you can mix versions while you upgrade your machines.
 
 ## License
 

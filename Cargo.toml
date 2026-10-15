@@ -1,0 +1,37 @@
+[package]
+name = "actx"
+version = "0.3.0"
+edition = "2024"
+description = "Keep Claude Code, opencode and Codex conversations in sync across machines, by project"
+license = "MIT"
+repository = "https://github.com/ericpastorm/actx"
+readme = "README.md"
+keywords = ["claude-code", "opencode", "codex", "sync", "cli"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+clap = { version = "4.6.7", features = ["string", "wrap_help"] }
+flate2 = "1.1.10"
+gethostname = "1.1.0"
+memchr = "2.8.3"
+regex = "1.13.1"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
+tar = "0.4.46"
+tempfile = "3.27.0"
+uuid = { version = "1.28.0", features = ["v4", "v7"] }
+zstd = "0.14.2"
+
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1
+
+[dev-dependencies]
+flate2 = "1.1.10"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+serde_json = "1.0.154"
+uuid = { version = "1.28.0", features = ["v4", "v7"] }
+zstd = "0.14.2"

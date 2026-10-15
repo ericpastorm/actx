@@ -28,15 +28,14 @@ portátil$  claude --resume …    # sigues donde lo dejaste
 - **Claude Code ⇄ opencode ⇄ Codex.** Copia una conversación a otro programa y sigue allí.
 - **Seguro.** Copias de seguridad antes de sobrescribir, escrituras atómicas en la carpeta compartida
   y avisos de git cuando el código no cuadra (cambios sin commitear, otro commit).
-- **Un solo archivo, sin dependencias.** Python 3.12+, git y fzf. Interfaz en inglés y español.
+- **Un binario pequeño.** Escrito en Rust; solo necesita git y fzf. Interfaz en inglés y español.
 
 ## Instalación
 
-Es un único script:
+Con [Rust](https://rustup.rs) instalado:
 
 ```
-curl -fsSL --create-dirs -o ~/.local/bin/actx https://raw.githubusercontent.com/ericpastorm/actx/main/actx
-chmod +x ~/.local/bin/actx
+cargo install --git https://github.com/ericpastorm/actx
 ```
 
 **Arch Linux:** el paquete de AUR está en camino. Mientras tanto puedes construirlo con el PKGBUILD de este repo:
@@ -46,9 +45,9 @@ git clone https://github.com/ericpastorm/actx
 cd actx/packaging/aur && makepkg -si
 ```
 
-Necesita Python 3.12+ (mejor 3.14+: las conversaciones se comprimen con zstd; si no, con gzip),
-`git` y [`fzf`](https://github.com/junegunn/fzf). Todos tus PCs deberían usar la misma compresión:
-o todos con 3.14+, o todos por debajo.
+Para funcionar necesita `git` y [`fzf`](https://github.com/junegunn/fzf). En los PCs sin Rust, copia el
+binario desde uno que lo tenga: actx deja una copia en la carpeta compartida (`_bin/`), y `actx update` la
+mantiene al día.
 
 Programas soportados: **Claude Code**, **opencode** 1.x y 2.x (cada PC puede tener cualquiera: una
 conversación guardada con una se convierte al llegar a la otra) y **Codex**.
@@ -70,7 +69,7 @@ Y luego:
 | `actx` / `actx ls [proyecto]` | Proyectos y estado de cada conversación: `↑ subir`, `↓ bajar`, `↓ nueva`, `⚠ conflicto`, `✓ al día`. |
 | `actx cv [proyecto]` | Copia una conversación a otro programa (Claude Code, opencode, Codex). |
 | `actx rm <proyecto>` | Quita conversaciones de un proyecto (en tus PCs no se borra nada). |
-| `actx update` | Instala la última versión de actx que haya en la carpeta compartida (si lo instalaste como script). |
+| `actx update` | Instala la última versión de actx que haya en la carpeta compartida (si lo copiaste a mano). |
 
 Selectores: escribe para filtrar, <kbd>Tab</kbd> marca varias, <kbd>Ctrl</kbd>+<kbd>A</kbd> todas, <kbd>Enter</kbd> confirma.
 
@@ -121,7 +120,7 @@ el que tengas por defecto.
     claude/<id de sesión>/      meta.json · preview.txt · session.jsonl.zst · extra.tar.zst
     opencode/<id de sesión>/    meta.json · preview.txt · session.json.zst · child-*.json.zst
     codex/<id de sesión>/       meta.json · preview.txt · rollout.jsonl.zst
-  _bin/actx                     una copia de actx, para `actx update` si lo instalaste como script
+  _bin/actx-<arq>-<so>          una copia de actx, para `actx update` si lo copiaste a mano
 ```
 
 Vale cualquier carpeta a la que lleguen todos tus PCs: una unidad SMB/NFS, una carpeta de Syncthing o
@@ -167,12 +166,18 @@ no confiarías tu código.
 ## Desarrollo
 
 ```
-pip install pytest
-pytest                # los tests de opencode y Codex se ejecutan si están instalados y se saltan si no
+cargo test            # los tests de opencode y Codex se ejecutan si están instalados y se saltan si no
 ```
 
-Los tests montan PCs simulados (cada uno con su home y sus datos de Claude Code, opencode y Codex) que
-comparten una carpeta, y hacen sincronizaciones, mezclas y conversiones reales entre ellos.
+Los tests de extremo a extremo montan PCs simulados (cada uno con su home y sus datos de Claude Code,
+opencode y Codex) que comparten una carpeta, y ejecutan el binario de verdad en ellos: sincronizaciones,
+mezclas y conversiones. Lo manejan con `ACTX_HOST` (el nombre del PC), `ACTX_PICK` (qué eligen los
+selectores) y `ACTX_ANSWER` (la respuesta a cada pregunta). La CI también pasa `cargo fmt --check` y
+`cargo clippy -- -D warnings`.
+
+actx 0.3 es una reescritura en Rust del script en Python de las versiones 0.1–0.2. Lee y escribe la
+misma carpeta compartida y el mismo estado local, así que puedes mezclar versiones mientras actualizas
+tus PCs.
 
 ## Licencia
 

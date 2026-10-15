@@ -1,13 +1,15 @@
 pkgbase = actx-git
 	pkgdesc = Keep Claude Code, opencode and Codex conversations in sync across machines, by project
-	pkgver = 0.1.0.r0.g0000000
+	pkgver = 0.3.0.r0.g0000000
 	pkgrel = 1
 	url = https://github.com/ericpastorm/actx
-	arch = any
+	arch = x86_64
+	arch = aarch64
 	license = MIT
-	checkdepends = python-pytest
+	makedepends = cargo
 	makedepends = git
-	depends = python>=3.12
+	depends = gcc-libs
+	depends = glibc
 	depends = git
 	depends = fzf
 	optdepends = claude-code: sync and convert Claude Code conversations
@@ -15,6 +17,8 @@ pkgbase = actx-git
 	optdepends = openai-codex-bin: sync and convert Codex conversations
 	provides = actx
 	conflicts = actx
+	options = !lto
+	options = !debug
 	source = actx::git+https://github.com/ericpastorm/actx.git
 	sha256sums = SKIP
 

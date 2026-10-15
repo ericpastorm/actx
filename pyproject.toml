@@ -1,4 +1,0 @@
-# actx is a single script (./actx); this file only configures the tests.
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-addopts = "-p no:cacheprovider"
