@@ -2441,7 +2441,7 @@ def cmd_cv(args) -> None:
 def cmd_update(args) -> None:
     kind = install_kind()
     if kind == "package":
-        print(tr("actx was installed with your package manager: update it there (e.g. {cmd}).", cmd="yay -Syu"))
+        print(tr("actx was installed with your package manager: update it there (e.g. {cmd}).", cmd="makepkg -si"))
         return
     if kind == "git":
         print(tr("This is a git checkout: update it with {cmd}.", cmd=f"git -C {shlex.quote(str(SELF.parent))} pull"))

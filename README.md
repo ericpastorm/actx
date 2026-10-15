@@ -30,17 +30,18 @@ laptop$  claude --resume …     # carry on where you left off
 
 ## Install
 
-**Arch Linux (AUR):**
+It's a single script:
 
 ```
-yay -S actx-git
-```
-
-**Anywhere else:** it's a single script.
-
-```
-curl -fsSLo ~/.local/bin/actx https://raw.githubusercontent.com/ericpastorm/actx/main/actx
+curl -fsSL --create-dirs -o ~/.local/bin/actx https://raw.githubusercontent.com/ericpastorm/actx/main/actx
 chmod +x ~/.local/bin/actx
+```
+
+**Arch Linux:** the AUR package is on its way. Meanwhile you can build it with the PKGBUILD in this repo:
+
+```
+git clone https://github.com/ericpastorm/actx
+cd actx/packaging/aur && makepkg -si
 ```
 
 Requires Python 3.12+ (3.14+ recommended: conversations are compressed with zstd, gzip otherwise),
