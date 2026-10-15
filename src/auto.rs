@@ -30,7 +30,7 @@ pub fn log_file() -> PathBuf {
 }
 
 /// Run `actx sync --auto` in the background, detached from the agent that called us.
-fn spawn_sync(delay: u64, busy: Option<&str>) {
+fn spawn_sync(delay: u64, busy: Option<&str>, after: Option<u32>) {
     let _ = std::fs::create_dir_all(&ctx().state_dir);
     let Ok(log) = File::options().create(true).append(true).open(log_file()) else {
         return;
@@ -42,6 +42,9 @@ fn spawn_sync(delay: u64, busy: Option<&str>) {
     }
     if let Some(key) = busy {
         c.args(["--busy", key]);
+    }
+    if let Some(pid) = after {
+        c.args(["--after", &pid.to_string()]);
     }
     let err = log.try_clone().map(Stdio::from).unwrap_or_else(|_| Stdio::null());
     let child = c.stdin(Stdio::null()).stdout(log).stderr(err).process_group(0).spawn();
@@ -63,13 +66,18 @@ pub fn hook(tool: &str, event: &str) {
     let harness = if tool == "codex" { "codex" } else { "claude" };
     let sid = jstr(&payload, "session_id");
     if event != "start" {
-        // give the agent a moment to finish writing and exit
-        spawn_sync(3, None);
+        // once the agent has finished writing and exited (or, if we can't tell which it is, in a moment)
+        let agent = crate::agents::calling_agent();
+        spawn_sync(if agent.is_some() { 1 } else { 3 }, None, agent);
         return;
     }
     if matches!(jstr(&payload, "source"), "" | "startup" | "resume") {
         // this one is opening right now: never pull over it
-        spawn_sync(0, (!sid.is_empty()).then(|| format!("{harness}:{sid}")).as_deref());
+        spawn_sync(
+            0,
+            (!sid.is_empty()).then(|| format!("{harness}:{sid}")).as_deref(),
+            None,
+        );
     }
     if let Some(message) = outdated(harness, sid, jstr(&payload, "transcript_path")) {
         println!("{}", json!({"systemMessage": message}));
@@ -78,7 +86,11 @@ pub fn hook(tool: &str, event: &str) {
 
 /// If the conversation being opened has news in the shared folder, what to tell the user.
 fn outdated(harness: &'static str, sid: &str, transcript: &str) -> Option<String> {
-    let weight = Path::new(transcript).metadata().ok()?.len();
+    let weight = if harness == "claude" {
+        crate::claude::content_weight(Path::new(transcript)).ok()?
+    } else {
+        Path::new(transcript).metadata().ok()?.len()
+    };
     let root = reachable_root(Duration::from_secs(3))?;
     let r = find_stored(&root, harness, sid)?;
     let here = Session::local(harness, sid.to_string(), r.title.clone(), String::new(), 0.0, weight);

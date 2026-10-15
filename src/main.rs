@@ -92,7 +92,13 @@ fn cli() -> Command {
                         .value_parser(clap::value_parser!(u64))
                         .hide(true),
                 )
-                .arg(Arg::new("busy").long("busy").hide(true)),
+                .arg(Arg::new("busy").long("busy").hide(true))
+                .arg(
+                    Arg::new("after")
+                        .long("after")
+                        .value_parser(clap::value_parser!(u32))
+                        .hide(true),
+                ),
         )
         .subcommand(
             Command::new("ls")
@@ -141,6 +147,20 @@ fn cli() -> Command {
 }
 
 fn main() {
+    // `actx ls | head`: when whoever reads the output stops, stop quietly (like other commands do)
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let msg = info
+            .payload()
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| info.payload().downcast_ref::<&str>().copied())
+            .unwrap_or("");
+        if msg.contains("Broken pipe") {
+            std::process::exit(141);
+        }
+        default_hook(info);
+    }));
     let argv: Vec<String> = std::env::args().collect();
     if argv.len() == 4 && argv[1] == "_show" {
         // what fzf runs for previews
@@ -165,6 +185,7 @@ fn main() {
             all: m.get_flag("all"),
             auto: m.get_flag("auto"),
             delay: m.get_one::<u64>("delay").copied().unwrap_or(0),
+            after: m.get_one::<u32>("after").copied(),
             busy: get(m, "busy"),
             ..Default::default()
         }),

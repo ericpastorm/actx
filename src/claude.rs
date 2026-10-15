@@ -45,6 +45,31 @@ pub fn chunks(f: &Path) -> io::Result<(Vec<u8>, Vec<u8>)> {
     Ok((head, tail))
 }
 
+/// How much conversation a file has: up to the end of its last message (messages are the lines
+/// with a "uuid"). Claude Code appends bookkeeping lines (mode, costs, the last prompt…) just by
+/// opening and closing a conversation: they don't count, or merely looking at one would change it.
+pub fn content_weight(f: &Path) -> io::Result<u64> {
+    let mut file = File::open(f)?;
+    let size = file.metadata()?.len();
+    let mut end = size;
+    while end > 0 {
+        let start = end.saturating_sub(2 << 20);
+        let mut buf = Vec::new();
+        file.seek(SeekFrom::Start(start))?;
+        (&mut file).take(end - start).read_to_end(&mut buf)?;
+        let complete = memchr::memrchr(b'\n', &buf).map_or(0, |i| i + 1); // a line being written doesn't count yet
+        if let Some(i) = memchr::memmem::rfind(&buf[..complete], b"\"uuid\":\"") {
+            let line_end = memchr::memchr(b'\n', &buf[i..]).map_or(complete, |p| i + p + 1);
+            return Ok(start + line_end as u64);
+        }
+        if start == 0 {
+            break;
+        }
+        end = start + 64; // overlap, in case the marker was cut in two
+    }
+    Ok(0)
+}
+
 /// The JSON lines of a buffer, skipping any cut by a chunk boundary.
 pub fn lines(buf: &[u8]) -> impl Iterator<Item = Value> + '_ {
     buf.split(|b| *b == b'\n')
@@ -183,7 +208,8 @@ pub fn local() -> Vec<Session> {
             }
             let id = f.file_stem().unwrap_or_default().to_string_lossy().into_owned();
             let updated = meta.modified().map(epoch).unwrap_or(0.0);
-            let mut s = Session::local("claude", id, title(&head, &tail), String::new(), updated, meta.len());
+            let weight = content_weight(&f).unwrap_or(meta.len());
+            let mut s = Session::local("claude", id, title(&head, &tail), String::new(), updated, weight);
             s.src = Some(f.clone());
             found.push(s);
         }
@@ -208,8 +234,9 @@ pub fn push(s: &Session, tmp: &Path) -> Result<Pushed> {
     let updated = epoch(src.metadata()?.modified()?);
     let session = format!("session.jsonl.{COMP}");
     // an agent may be writing to it right now: up to its last complete line
-    let (file, seen) = complete_lines(src)?;
-    let weight = write_compressed(&tmp.join(&session), file)?;
+    let weight = content_weight(src)?;
+    let (file, _) = complete_lines(src)?;
+    write_compressed(&tmp.join(&session), file)?;
     let mut files = json!({"session": session});
     let extra = src.with_extension(""); // <id>/ with subagents and tool results
     if extra.is_dir() {
@@ -222,7 +249,7 @@ pub fn push(s: &Session, tmp: &Path) -> Result<Pushed> {
         files,
         updated,
         weight,
-        seen,
+        seen: weight,
         preview,
     })
 }
@@ -279,14 +306,14 @@ pub fn install(r: &Session, local: Option<&Session>, folder: &str, fix: Fix) -> 
     if let (Some(l), Some(src)) = (local, &local_src) {
         backup(l, Copy::File(src), "pull")?;
     }
-    let size = install_file(r, &dest, fix)?;
+    install_file(r, &dest, fix)?;
     if let Some(src) = local_src.filter(|s| *s != dest) {
         let _ = std::fs::remove_file(src); // it lived under another folder; it has a backup
     }
     if let Some(extra) = r.meta()["files"].get("extra").and_then(Value::as_str) {
         untar(&r.store_dir().join(extra), &tdir)?;
     }
-    Ok(size)
+    Ok(content_weight(&dest)?)
 }
 
 enum Block {
@@ -598,6 +625,22 @@ pub fn branch_copy(r: &Session, folder: &str, fix: Fix, title: &str) -> Result<S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bookkeeping_lines_dont_count() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("s.jsonl");
+        let msg = |n: u32| {
+            json!({"type": "user", "uuid": format!("u{n}"), "message": {"content": "x".repeat(1000)}}).to_string()
+                + "\n"
+        };
+        let messages: String = (0..3000).map(msg).collect(); // over one 2MB read
+        let book = "{\"type\":\"cost-state\",\"sessionId\":\"s\"}\n{\"type\":\"last-prompt\",\"leafUuid\":\"u2\"}\n";
+        std::fs::write(&f, format!("{messages}{book}{{\"type\":\"user\",\"uuid\":\"half")).unwrap();
+        assert_eq!(content_weight(&f).unwrap(), messages.len() as u64);
+        std::fs::write(&f, book).unwrap();
+        assert_eq!(content_weight(&f).unwrap(), 0);
+    }
 
     #[test]
     fn the_title_is_found_whatever_the_size() {

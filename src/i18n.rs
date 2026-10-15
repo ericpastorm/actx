@@ -448,6 +448,10 @@ pub static ES: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
             "No puedo escribir en la carpeta compartida: {err}",
         ),
         (
+            "«{title}» changed in the shared folder meanwhile: next time",
+            "«{title}» ha cambiado en la carpeta compartida mientras tanto: la próxima vez",
+        ),
+        (
             "«{title}» changed in the shared folder meanwhile: run actx sync again",
             "«{title}» ha cambiado en la carpeta compartida mientras tanto: vuelve a ejecutar actx sync",
         ),

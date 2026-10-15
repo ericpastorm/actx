@@ -26,14 +26,27 @@ struct Running {
     /// Claude Code says which conversation each of its processes has open
     claude_open: HashSet<String>,
     claude_registered: HashSet<u32>,
+    /// this Claude Code keeps that list (~/.claude/sessions)
+    claude_lists: bool,
 }
 
 fn tool_of(program: &str) -> Option<&'static str> {
     let name = Path::new(program).file_name()?.to_string_lossy().to_lowercase();
-    let name = name.trim_start_matches('.');
+    let name = name.trim_start_matches('.').trim_end_matches(".js");
     ["claude", "codex", "opencode"]
         .into_iter()
         .find(|t| name == *t || name.starts_with(&format!("{t}-")))
+}
+
+/// Which agent a command line runs, by the name it was started with: the same executable can
+/// play other parts (Claude Code runs its built-in grep as `ugrep`). Through npm: node <…>/codex.js;
+/// or a wrapper script: sh <…>/claude.
+fn tool_of_command(args: &[&str]) -> Option<&'static str> {
+    let first = *args.first()?;
+    let runtime = Path::new(first)
+        .file_name()
+        .is_some_and(|n| ["node", "bun", "sh", "bash", "dash", "zsh"].iter().any(|r| n == *r));
+    if runtime { tool_of(args.get(1)?) } else { tool_of(first) }
 }
 
 #[cfg(target_os = "linux")]
@@ -44,15 +57,10 @@ fn processes() -> Vec<Proc> {
             continue;
         };
         let dir = e.path();
-        let comm = std::fs::read_to_string(dir.join("comm")).unwrap_or_default();
-        let mut tool = tool_of(comm.trim());
-        if tool.is_none() && matches!(comm.trim(), "node" | "bun") {
-            // installed with npm: node <...>/bin/codex
-            let cmdline = std::fs::read(dir.join("cmdline")).unwrap_or_default();
-            let script = cmdline.split(|b| *b == 0).nth(1).unwrap_or_default();
-            tool = tool_of(&String::from_utf8_lossy(script));
-        }
-        let Some(tool) = tool else { continue };
+        let cmdline = std::fs::read(dir.join("cmdline")).unwrap_or_default();
+        let cmdline = String::from_utf8_lossy(&cmdline);
+        let args: Vec<&str> = cmdline.split('\0').take(2).collect();
+        let Some(tool) = tool_of_command(&args) else { continue };
         let cwd = std::fs::read_link(dir.join("cwd")).unwrap_or_default();
         let files = std::fs::read_dir(dir.join("fd"))
             .into_iter()
@@ -72,13 +80,14 @@ fn processes() -> Vec<Proc> {
 #[cfg(not(target_os = "linux"))]
 fn processes() -> Vec<Proc> {
     // macOS and the BSDs: ps for the programs, lsof for their folders
-    let ps = std::process::Command::new("ps").args(["-axo", "pid=,comm="]).output();
+    let ps = std::process::Command::new("ps").args(["-axo", "pid=,args="]).output();
     let mut out: Vec<Proc> = String::from_utf8_lossy(&ps.map(|o| o.stdout).unwrap_or_default())
         .lines()
         .filter_map(|l| {
-            let (pid, program) = l.trim().split_once(' ')?;
+            let (pid, command) = l.trim().split_once(' ')?;
+            let args: Vec<&str> = command.split_whitespace().take(2).collect();
             Some(Proc {
-                tool: tool_of(program.trim())?,
+                tool: tool_of_command(&args)?,
                 pid: pid.parse().ok()?,
                 cwd: String::new(),
                 files: Vec::new(),
@@ -116,6 +125,7 @@ fn running() -> &'static Running {
         let live: HashMap<u32, &Proc> = procs.iter().map(|p| (p.pid, p)).collect();
         let (mut claude_open, mut claude_registered) = (HashSet::new(), HashSet::new());
         let registry = ctx().claude_projects.parent().map(|d| d.join("sessions"));
+        let claude_lists = registry.as_ref().is_some_and(|d| d.is_dir());
         for f in registry
             .and_then(|d| std::fs::read_dir(d).ok())
             .into_iter()
@@ -138,6 +148,7 @@ fn running() -> &'static Running {
             procs,
             claude_open,
             claude_registered,
+            claude_lists,
         }
     })
 }
@@ -145,7 +156,9 @@ fn running() -> &'static Running {
 /// Is `s` (a conversation on this machine) open in a running agent, or was it just being written
 /// (by an agent actx doesn't recognize, say)?
 pub fn in_use(s: &Session) -> bool {
-    now() - s.updated < ACTIVE_SECS || in_use_by_agent(s)
+    // Claude Code's own list is exact: then a conversation closed seconds ago is free
+    let exact = s.harness == "claude" && running().claude_lists;
+    (!exact && now() - s.updated < ACTIVE_SECS) || in_use_by_agent(s)
 }
 
 /// Is `s` open in a running Claude Code, Codex or opencode?
@@ -162,6 +175,58 @@ pub fn in_use_by_agent(s: &Session) -> bool {
             .iter()
             .any(|p| here(p) || (p.tool == "codex" && s.src.as_ref().is_some_and(|f| p.files.contains(f)))),
         _ => r.procs.iter().any(here),
+    }
+}
+
+/// The agent that started this process (a hook's caller): its pid. Hooks run directly or through a
+/// shell, so it looks a couple of parents up, and no further: an agent beyond that isn't the caller.
+pub fn calling_agent() -> Option<u32> {
+    let mut pid = std::os::unix::process::parent_id();
+    for _ in 0..3 {
+        let (ppid, args) = parent_and_args(pid)?;
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        if tool_of_command(&args).is_some() {
+            return Some(pid);
+        }
+        if ppid <= 1 {
+            return None;
+        }
+        pid = ppid;
+    }
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn parent_and_args(pid: u32) -> Option<(u32, Vec<String>)> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // "pid (name) state ppid …", and the name may have spaces or parentheses
+    let ppid = stat.rsplit_once(')')?.1.split_whitespace().nth(1)?.parse().ok()?;
+    let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+    let args = String::from_utf8_lossy(&cmdline)
+        .split('\0')
+        .take(2)
+        .map(String::from)
+        .collect();
+    Some((ppid, args))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn parent_and_args(pid: u32) -> Option<(u32, Vec<String>)> {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "ppid=,args=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    let (ppid, args) = text.trim().split_once(' ')?;
+    let args = args.split_whitespace().take(2).map(String::from).collect();
+    Some((ppid.trim().parse().ok()?, args))
+}
+
+/// Wait (up to a minute) for a process to end.
+pub fn wait_for(pid: u32) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while crate::lock::alive(pid) && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(250));
     }
 }
 
@@ -182,6 +247,14 @@ mod tests {
         assert_eq!(tool_of("/opt/codex/codex-x86_64-unknown-linux-musl"), Some("codex"));
         assert_eq!(tool_of("bash"), None);
         assert_eq!(tool_of("claudette"), None);
+        assert_eq!(
+            tool_of_command(&["/usr/bin/node", "/usr/lib/node_modules/@openai/codex/bin/codex.js"]),
+            Some("codex")
+        );
+        assert_eq!(tool_of_command(&["claude", "--resume"]), Some("claude"));
+        // Claude Code's own grep: the claude executable, started as ugrep
+        assert_eq!(tool_of_command(&["ugrep", "-G"]), None);
+        assert_eq!(tool_of_command(&["node", "server.js"]), None);
     }
 
     #[test]

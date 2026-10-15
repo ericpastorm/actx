@@ -338,3 +338,77 @@ fn what_was_pushed_while_waiting_for_the_lock_is_not_overwritten() {
     );
     assert!(!texts(&b, &sid).contains(&"Coupons on desk".to_string()));
 }
+
+#[test]
+fn opening_a_conversation_doesnt_change_it() {
+    let w = World::new();
+    let (a, b, _clone, sid) = setup(&w);
+    b.actx(&["sync"]);
+    let b_path = claude_transcript(&b, &sid).0;
+    // what Claude Code writes just by opening and closing a conversation
+    append(
+        &b_path,
+        &format!(
+            "{{\"type\":\"permission-mode\",\"permissionMode\":\"default\",\"sessionId\":\"{sid}\"}}\n{{\"type\":\"cost-state\",\"sessionId\":\"{sid}\",\"totalCostUSD\":0}}\n"
+        ),
+    );
+    assert!(b.actx(&["ls"]).contains("✓ synced"));
+    claude_continue(
+        &claude_transcript(&a, &sid).0,
+        &[("user", "coupons"), ("assistant", "Coupons on desk")],
+        None,
+    );
+    a.actx(&["sync"]);
+    assert!(b.actx(&["ls"]).contains("↓ pull"), "not a conflict");
+}
+
+#[test]
+fn the_end_hook_waits_for_the_agent_to_exit() {
+    use std::os::unix::fs::PermissionsExt;
+    let w = World::new();
+    let (a, _b, _clone, sid) = setup(&w);
+    let path = claude_transcript(&a, &sid).0;
+    // the last message, which our stand-in for Claude Code writes after calling the hook
+    let copy = w.dir.path().join("copy.jsonl");
+    std::fs::copy(&path, &copy).unwrap();
+    claude_continue(&copy, &[("user", "one more"), ("assistant", "Late message")], None);
+    let late = w.dir.path().join("late.jsonl");
+    std::fs::write(
+        &late,
+        &std::fs::read(&copy).unwrap()[std::fs::metadata(&path).unwrap().len() as usize..],
+    )
+    .unwrap();
+    let payload = w.dir.path().join("payload.json");
+    std::fs::write(
+        &payload,
+        json!({"session_id": sid, "transcript_path": path}).to_string(),
+    )
+    .unwrap();
+    let bin = w.dir.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let agent = bin.join("claude");
+    std::fs::write(
+        &agent,
+        "#!/bin/sh\n\"$ACTX_BIN\" hook claude end < \"$1\"\nsleep 5\ncat \"$2\" >> \"$3\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&agent, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let ok = a
+        .command(agent.to_str().unwrap())
+        .args([&payload, &late, &path])
+        .env("ACTX_BIN", ACTX)
+        .status()
+        .unwrap()
+        .success();
+    assert!(ok);
+    let stored = w.store().join("shop/claude").join(&sid).join("session.jsonl.zst");
+    let pushed = (0..60).any(|_| {
+        std::thread::sleep(Duration::from_millis(250));
+        std::fs::File::open(&stored)
+            .ok()
+            .and_then(|f| zstd::decode_all(f).ok())
+            .is_some_and(|d| String::from_utf8_lossy(&d).contains("Late message"))
+    });
+    assert!(pushed, "{}", log(&a));
+}

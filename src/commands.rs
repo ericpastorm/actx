@@ -35,7 +35,9 @@ pub struct Args {
     pub all: bool,
     /// sync: an automatic run (no questions, output to a log)
     pub auto: bool,
-    /// sync --auto: seconds to wait first, and a conversation that's opening right now
+    /// sync --auto: a process to wait for (the agent that just closed), seconds to wait, and a
+    /// conversation that's opening right now
+    pub after: Option<u32>,
     pub delay: u64,
     pub busy: Option<String>,
 }
@@ -568,7 +570,12 @@ fn lock_store(root: &Path) -> Option<SharedLock> {
 /// Did someone push `key` since we looked (`was`: when it had been pushed then, None if it wasn't there)?
 fn moved_on(now: &HashMap<String, f64>, key: &str, was: Option<f64>, title: &str) -> bool {
     let changed = now.get(key).copied() != was;
-    if changed {
+    if changed && is_auto() {
+        say(&dim(&tr!(
+            "«{title}» changed in the shared folder meanwhile: next time",
+            title = title
+        )));
+    } else if changed {
         warn(&tr!(
             "«{title}» changed in the shared folder meanwhile: run actx sync again",
             title = title
@@ -597,6 +604,9 @@ pub fn sync(args: Args) {
     let root = if auto {
         set_auto();
         crate::auto::rotate_log();
+        if let Some(pid) = args.after {
+            crate::agents::wait_for(pid);
+        }
         std::thread::sleep(Duration::from_secs(args.delay));
         match crate::store::reachable_root(Duration::from_secs(10)) {
             Some(root) => root,
