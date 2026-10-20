@@ -86,14 +86,16 @@ pub fn hook(tool: &str, event: &str) {
 
 /// If the conversation being opened has news in the shared folder, what to tell the user.
 fn outdated(harness: &'static str, sid: &str, transcript: &str) -> Option<String> {
+    let size = Path::new(transcript).metadata().ok()?.len();
     let weight = if harness == "claude" {
         crate::claude::content_weight(Path::new(transcript)).ok()?
     } else {
-        Path::new(transcript).metadata().ok()?.len()
+        size
     };
     let root = reachable_root(Duration::from_secs(3))?;
     let r = find_stored(&root, harness, sid)?;
-    let here = Session::local(harness, sid.to_string(), r.title.clone(), String::new(), 0.0, weight);
+    let mut here = Session::local(harness, sid.to_string(), r.title.clone(), String::new(), 0.0, weight);
+    here.size = (harness == "claude").then_some(size);
     let base = crate::state::load().base.get(&r.key()).copied();
     let (host, when) = (jstr(r.meta(), "host"), ago(r.updated));
     match status(Some(&here), Some(&r), base) {

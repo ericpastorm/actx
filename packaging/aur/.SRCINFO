@@ -1,6 +1,6 @@
 pkgbase = actx-git
 	pkgdesc = Keep Claude Code, opencode and Codex conversations in sync across machines, by project
-	pkgver = 0.4.0.r0.g0000000
+	pkgver = 0.4.1.r0.g0000000
 	pkgrel = 1
 	url = https://github.com/ericpastorm/actx
 	arch = x86_64

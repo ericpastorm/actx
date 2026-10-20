@@ -1,6 +1,6 @@
 [package]
 name = "actx"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2024"
 description = "Keep Claude Code, opencode and Codex conversations in sync across machines, by project"
 license = "MIT"

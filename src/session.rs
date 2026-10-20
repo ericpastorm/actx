@@ -18,6 +18,10 @@ pub struct Session {
     pub updated: f64,
     /// to tell whether it changed: bytes (claude, codex) or number of messages (opencode)
     pub weight: u64,
+    /// Claude Code: the file's size. Lines are only ever added to the end, so a weight saved at the
+    /// last sync between `weight` and `size` means nothing but lines that don't count came since
+    /// (and weights saved by older versions, which counted more, still match)
+    pub size: Option<u64>,
     /// file-based tools: the conversation file
     pub src: Option<PathBuf>,
     /// stored ones: their meta.json, folder and project
@@ -35,10 +39,19 @@ impl Session {
             path,
             updated,
             weight,
+            size: None,
             src: None,
             meta: None,
             store_dir: None,
             project: None,
+        }
+    }
+
+    /// Is this (local) conversation still the one that weighed `weight`?
+    pub fn same(&self, weight: u64) -> bool {
+        match self.size {
+            Some(size) => self.weight <= weight && weight <= size,
+            None => self.weight == weight,
         }
     }
 
@@ -75,7 +88,7 @@ pub fn status(local: Option<&Session>, remote: Option<&Session>, base: Option<(u
         return if remote.is_none() { "local" } else { "new" };
     };
     if let Some((was_here, was_there)) = base {
-        let (changed_here, changed_there) = (local.weight != was_here, remote.weight != was_there);
+        let (changed_here, changed_there) = (!local.same(was_here), remote.weight != was_there);
         return match (changed_here, changed_there) {
             (true, true) => "conflict",
             (true, false) => "push",
@@ -83,7 +96,7 @@ pub fn status(local: Option<&Session>, remote: Option<&Session>, base: Option<(u
             (false, false) => "synced",
         };
     }
-    if local.weight == remote.weight {
+    if local.same(remote.weight) {
         "synced"
     } else if local.weight > remote.weight {
         "push"
@@ -123,6 +136,18 @@ mod tests {
         // sizes differ but nothing changed since the last sync (e.g. paths were rewritten)
         assert_eq!(status(Some(&s(90)), Some(&s(100)), Some((90, 100))), "synced");
         assert_eq!(status(Some(&s(150)), Some(&s(100)), None), "push"); // no base: longer wins
+        // Claude Code: lines that don't count after the last message (size 130 > weight 100), and
+        // bases saved by versions that counted more (up to 120)
+        let mut c = s(100);
+        c.size = Some(130);
+        assert_eq!(status(Some(&c), Some(&s(150)), Some((120, 100))), "pull");
+        assert_eq!(status(Some(&c), Some(&s(100)), Some((100, 100))), "synced");
+        assert_eq!(status(Some(&c), Some(&s(120)), None), "synced");
+        c.weight = 125; // a message after the base
+        assert_eq!(status(Some(&c), Some(&s(150)), Some((120, 100))), "conflict");
+        c.weight = 50; // replaced by a shorter one
+        c.size = Some(60);
+        assert_eq!(status(Some(&c), Some(&s(100)), Some((100, 100))), "push");
     }
 
     #[test]

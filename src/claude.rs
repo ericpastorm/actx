@@ -45,27 +45,50 @@ pub fn chunks(f: &Path) -> io::Result<(Vec<u8>, Vec<u8>)> {
     Ok((head, tail))
 }
 
-/// How much conversation a file has: up to the end of its last message (messages are the lines
-/// with a "uuid"). Claude Code appends bookkeeping lines (mode, costs, the last prompt…) just by
-/// opening and closing a conversation: they don't count, or merely looking at one would change it.
+/// How much conversation a file has: up to the end of its last message, said or answered
+/// ("type": "user" or "assistant"). Opening and closing a conversation appends lines of its own
+/// (mode, costs, the last prompt, the output of SessionStart hooks, notices…): they don't count,
+/// or merely looking at one would change it.
 pub fn content_weight(f: &Path) -> io::Result<u64> {
+    #[derive(serde::Deserialize)]
+    struct Line {
+        #[serde(rename = "type")]
+        kind: Option<String>,
+    }
     let mut file = File::open(f)?;
-    let size = file.metadata()?.len();
-    let mut end = size;
+    let mut end = file.metadata()?.len(); // what's before `end` is still to look at
+    let mut chunk: u64 = 2 << 20;
     while end > 0 {
-        let start = end.saturating_sub(2 << 20);
+        let start = end.saturating_sub(chunk);
         let mut buf = Vec::new();
         file.seek(SeekFrom::Start(start))?;
         (&mut file).take(end - start).read_to_end(&mut buf)?;
         let complete = memchr::memrchr(b'\n', &buf).map_or(0, |i| i + 1); // a line being written doesn't count yet
-        if let Some(i) = memchr::memmem::rfind(&buf[..complete], b"\"uuid\":\"") {
-            let line_end = memchr::memchr(b'\n', &buf[i..]).map_or(complete, |p| i + p + 1);
-            return Ok(start + line_end as u64);
+        // the first line may have begun before this chunk: it's looked at with the next one
+        let first = if start == 0 {
+            0
+        } else {
+            memchr::memchr(b'\n', &buf[..complete]).map_or(complete, |i| i + 1)
+        };
+        if first == complete && start > 0 {
+            chunk *= 2; // no whole line in it: a long one
+            continue;
+        }
+        let mut line_end = complete;
+        for line in buf[first..complete.saturating_sub(1)].rsplit(|b| *b == b'\n') {
+            if memchr::memmem::find(line, b"\"uuid\":\"").is_some() {
+                let kind = serde_json::from_slice::<Line>(line).ok().and_then(|l| l.kind);
+                if matches!(kind.as_deref(), Some("user" | "assistant")) {
+                    return Ok(start + line_end as u64);
+                }
+            }
+            line_end = line_end.saturating_sub(line.len() + 1);
         }
         if start == 0 {
             break;
         }
-        end = start + 64; // overlap, in case the marker was cut in two
+        end = start + first as u64;
+        chunk = 2 << 20;
     }
     Ok(0)
 }
@@ -210,6 +233,7 @@ pub fn local() -> Vec<Session> {
             let updated = meta.modified().map(epoch).unwrap_or(0.0);
             let weight = content_weight(&f).unwrap_or(meta.len());
             let mut s = Session::local("claude", id, title(&head, &tail), String::new(), updated, weight);
+            s.size = Some(meta.len());
             s.src = Some(f.clone());
             found.push(s);
         }
@@ -635,11 +659,20 @@ mod tests {
                 + "\n"
         };
         let messages: String = (0..3000).map(msg).collect(); // over one 2MB read
-        let book = "{\"type\":\"cost-state\",\"sessionId\":\"s\"}\n{\"type\":\"last-prompt\",\"leafUuid\":\"u2\"}\n";
+        // resuming one adds these too, with a uuid: SessionStart hooks' output, notices
+        let book = concat!(
+            "{\"type\":\"cost-state\",\"sessionId\":\"s\"}\n{\"type\":\"last-prompt\",\"leafUuid\":\"u2\"}\n",
+            "{\"parentUuid\":\"u2\",\"type\":\"attachment\",\"attachment\":{\"type\":\"hook_success\",\"content\":\"{\\\"type\\\":\\\"user\\\"}\"},\"uuid\":\"a1\"}\n",
+            "{\"parentUuid\":\"a1\",\"type\":\"system\",\"subtype\":\"informational\",\"uuid\":\"a2\"}\n",
+        );
         std::fs::write(&f, format!("{messages}{book}{{\"type\":\"user\",\"uuid\":\"half")).unwrap();
         assert_eq!(content_weight(&f).unwrap(), messages.len() as u64);
         std::fs::write(&f, book).unwrap();
         assert_eq!(content_weight(&f).unwrap(), 0);
+        // a message longer than one read, with a notice after it
+        let long = msg(1).replace(&"x".repeat(1000), &"y".repeat(5 << 20));
+        std::fs::write(&f, format!("{}{long}{book}", msg(0))).unwrap();
+        assert_eq!(content_weight(&f).unwrap(), (msg(0).len() + long.len()) as u64);
     }
 
     #[test]

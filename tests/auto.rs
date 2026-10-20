@@ -345,13 +345,24 @@ fn opening_a_conversation_doesnt_change_it() {
     let (a, b, _clone, sid) = setup(&w);
     b.actx(&["sync"]);
     let b_path = claude_transcript(&b, &sid).0;
-    // what Claude Code writes just by opening and closing a conversation
-    append(
-        &b_path,
-        &format!(
-            "{{\"type\":\"permission-mode\",\"permissionMode\":\"default\",\"sessionId\":\"{sid}\"}}\n{{\"type\":\"cost-state\",\"sessionId\":\"{sid}\",\"totalCostUSD\":0}}\n"
-        ),
-    );
+    // what Claude Code writes just by opening and closing a conversation: bookkeeping, and with a
+    // uuid, the output of SessionStart hooks and notices
+    let resumed = |n: u32| {
+        format!(
+            concat!(
+                "{{\"type\":\"permission-mode\",\"permissionMode\":\"default\",\"sessionId\":\"{sid}\"}}\n",
+                "{{\"parentUuid\":null,\"type\":\"attachment\",\"attachment\":{{\"type\":\"hook_success\",\"hookName\":\"SessionStart:resume\",\"content\":\"\"}},\"uuid\":\"hook-{n}\",\"sessionId\":\"{sid}\"}}\n",
+                "{{\"parentUuid\":\"hook-{n}\",\"type\":\"system\",\"subtype\":\"informational\",\"content\":\"notice\",\"uuid\":\"notice-{n}\",\"sessionId\":\"{sid}\"}}\n",
+                "{{\"type\":\"cost-state\",\"sessionId\":\"{sid}\",\"totalCostUSD\":0}}\n",
+            ),
+            sid = sid,
+            n = n
+        )
+    };
+    append(&b_path, &resumed(1));
+    assert!(b.actx(&["ls"]).contains("✓ synced"));
+    b.actx(&["sync"]);
+    append(&b_path, &resumed(2));
     assert!(b.actx(&["ls"]).contains("✓ synced"));
     claude_continue(
         &claude_transcript(&a, &sid).0,

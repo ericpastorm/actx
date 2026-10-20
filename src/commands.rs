@@ -639,7 +639,7 @@ pub fn sync(args: Args) {
         if state == "synced" {
             in_sync += 1;
             let l = l.expect("synced means it's here");
-            st.base.entry(r.key()).or_insert((l.weight, r.weight));
+            st.base.entry(r.key()).or_insert((l.weight, r.weight)).0 = l.weight; // as this version measures it
         } else {
             pending
                 .entry(r.project.clone().unwrap_or_default())
