@@ -29,12 +29,13 @@ pub fn bold(s: &str) -> String {
 }
 
 pub fn harness_tag(h: &str) -> String {
-    let color = match h {
-        "claude" => "38;5;173",
-        "opencode" => "36",
-        _ => "38;5;75",
+    let (color, name) = match h {
+        "claude" => ("38;5;173", h),
+        "opencode" => ("36", h),
+        "antigravity" => ("38;5;141", "agy"),
+        _ => ("38;5;75", h),
     };
-    paint(color, &format!("{h:<8}"))
+    paint(color, &format!("{name:<8}"))
 }
 
 static AUTO: AtomicBool = AtomicBool::new(false);

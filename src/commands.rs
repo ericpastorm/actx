@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use crate::agents::{ACTIVE_SECS, in_use, in_use_by_agent};
 use crate::ctx::{ctx, jstr};
 use crate::git::{ask_folder, check_git, fixer_for, git_id, git_info, git_label, resolve_folder, warn_dirty};
-use crate::harness::{self, NAMES, all_local};
+use crate::harness::{self, all_local};
 use crate::i18n;
 use crate::lock::{Holder, LockError, SharedLock};
 use crate::paths::short;
@@ -1006,14 +1006,14 @@ pub fn rm(args: Args) {
 /// The tool to copy the chosen conversations into: asked only if there's more than one option.
 fn pick_target(chosen: &[&Session]) -> Option<&'static str> {
     let sources: HashSet<&str> = chosen.iter().map(|s| s.harness).collect();
-    let options: Vec<&'static str> = NAMES
+    let options: Vec<&'static str> = harness::CONVERTS
         .iter()
         .copied()
         .filter(|n| harness::get(n).installed() && !(sources.len() == 1 && sources.contains(n)))
         .collect();
     match options.len() {
         0 => die(&tr!(
-            "There's no other tool to convert to: install Claude Code, opencode or Codex"
+            "There's no other tool to convert to: install Claude Code, opencode, Codex or Antigravity"
         )),
         1 => Some(options[0]),
         _ => {
@@ -1071,7 +1071,8 @@ pub fn cv(args: Args) {
         .as_ref()
         .map(|r| stored_sessions(r).into_iter().map(|s| (s.key(), s)).collect())
         .unwrap_or_default();
-    let local = all_local();
+    let mut local = all_local();
+    local.extend(harness::get("antigravity").local()); // it converts, though it doesn't sync
     let have: HashSet<String> = local.iter().map(Session::key).collect();
     let mut candidates: Vec<Session> = local;
     candidates.extend(
@@ -1095,7 +1096,9 @@ pub fn cv(args: Args) {
         }
     }
     if candidates.is_empty() {
-        die(&tr!("No Claude Code, opencode or Codex conversations found"));
+        die(&tr!(
+            "No Claude Code, opencode, Codex or Antigravity conversations found"
+        ));
     }
     candidates.sort_by(|a, b| b.updated.total_cmp(&a.updated));
     let rows: Vec<Row> = candidates
@@ -1167,7 +1170,9 @@ pub fn cv(args: Args) {
             }
         };
         let mut note = String::new();
-        if let (Some(root), Some(r)) = (&root, remote.get(&s.key())) {
+        if let (Some(root), Some(r)) = (&root, remote.get(&s.key()))
+            && harness::syncs(new.harness)
+        {
             // the copy travels with its project
             let project = r.project.clone().unwrap_or_default();
             let _lock = lock_store(root);
@@ -1515,7 +1520,7 @@ pub fn doctor() {
             }
         }
     }
-    for name in NAMES {
+    for name in harness::CONVERTS {
         let h = harness::get(name);
         if !h.installed() {
             none(h.label(), &tr!("not installed"));
@@ -1525,6 +1530,7 @@ pub fn doctor() {
         let version = match name {
             "claude" => crate::claude::version().to_string(),
             "codex" => crate::codex::version().to_string(),
+            "antigravity" => first_line("agy", &["--version"]).unwrap_or_default(),
             _ => first_line("opencode", &["--version"])
                 .and_then(|v| {
                     v.split_whitespace()
@@ -1533,7 +1539,14 @@ pub fn doctor() {
                 })
                 .unwrap_or_default(),
         };
-        let detail = tr!("{version} · {n} conversation(s)", version = version, n = count);
+        let mut detail = if version.is_empty() {
+            tr!("{n} conversation(s)", n = count)
+        } else {
+            tr!("{version} · {n} conversation(s)", version = version, n = count)
+        };
+        if !harness::syncs(name) {
+            detail += &format!(" · {}", tr!("converts, doesn't sync yet"));
+        }
         if name == "opencode" {
             let cli = version.split('.').next().and_then(|v| v.parse::<u8>().ok());
             let db = crate::opencode::version();

@@ -3,13 +3,13 @@
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
-use crate::ctx::{Result, ctx, which};
+use crate::ctx::{Error, Result, ctx, which};
 use crate::paths::{Fix, apply, short};
 use crate::session::Session;
 use crate::store::{Pushed, open_read};
 use crate::turns::Turn;
 use crate::ui::shell_quote;
-use crate::{claude, codex, opencode};
+use crate::{antigravity, claude, codex, opencode};
 
 pub trait Harness: Sync {
     fn label(&self) -> &'static str;
@@ -33,19 +33,28 @@ pub trait Harness: Sync {
     fn resume(&self, sid: &str, folder: &str) -> String;
 }
 
+/// The tools whose conversations sync between machines.
 pub const NAMES: [&str; 3] = ["claude", "opencode", "codex"];
+/// The tools conversations convert between: those, and Antigravity.
+pub const CONVERTS: [&str; 4] = ["claude", "opencode", "codex", "antigravity"];
 
 pub fn get(name: &str) -> &'static dyn Harness {
     match name {
         "claude" => &Claude,
         "opencode" => &Opencode,
+        "antigravity" => &Antigravity,
         _ => &Codex,
     }
 }
 
 /// The tool's name as a static string, if actx knows it.
 pub fn known(name: &str) -> Option<&'static str> {
-    NAMES.iter().find(|n| **n == name).copied()
+    CONVERTS.iter().find(|n| **n == name).copied()
+}
+
+/// Does this tool's conversations sync (or only convert)?
+pub fn syncs(name: &str) -> bool {
+    NAMES.contains(&name)
 }
 
 pub fn all_local() -> Vec<Session> {
@@ -198,5 +207,55 @@ impl Harness for Codex {
     }
     fn resume(&self, sid: &str, folder: &str) -> String {
         format!("cd {} && codex resume {sid}", shell_path(folder))
+    }
+}
+
+pub struct Antigravity;
+
+fn only_converts<T>() -> Result<T> {
+    Err(Error(crate::tr!(
+        "Antigravity conversations can be converted, but they don't sync yet"
+    )))
+}
+
+impl Harness for Antigravity {
+    fn label(&self) -> &'static str {
+        "Antigravity"
+    }
+    fn installed(&self) -> bool {
+        antigravity::home().is_dir() || which("agy")
+    }
+    fn local(&self) -> Vec<Session> {
+        antigravity::local()
+    }
+    fn preview(&self, s: &Session) -> Vec<(String, String)> {
+        antigravity::preview(s)
+    }
+    fn push(&self, _s: &Session, _tmp: &Path) -> Result<Pushed> {
+        only_converts()
+    }
+    fn install(&self, _r: &Session, _local: Option<&Session>, _folder: &str, _fix: Fix) -> Result<u64> {
+        only_converts()
+    }
+    fn local_turns(&self, s: &Session) -> Result<(Vec<Turn>, Option<String>)> {
+        Ok((antigravity::turns(s.src.as_ref().expect("local"))?, None))
+    }
+    fn stored_turns(&self, _r: &Session, _fix: Fix) -> Result<(Vec<Turn>, Option<String>)> {
+        only_converts()
+    }
+    fn write(&self, turns: &[Turn], folder: &str, title: &str, _model: Option<&str>) -> Result<Session> {
+        antigravity::write(turns, folder, title)
+    }
+    fn other_branch(&self, _l: &Session, _r: &Session, _fix: Fix) -> Result<Vec<Turn>> {
+        only_converts()
+    }
+    fn append(&self, _l: &mut Session, _text: &str, _ack: &str) -> Result<()> {
+        only_converts()
+    }
+    fn branch_copy(&self, _r: &Session, _folder: &str, _fix: Fix, _title: &str) -> Result<Session> {
+        only_converts()
+    }
+    fn resume(&self, sid: &str, folder: &str) -> String {
+        format!("cd {} && agy --conversation {sid}", shell_path(folder))
     }
 }

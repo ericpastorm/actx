@@ -25,7 +25,8 @@ laptop$  claude --resume …     # carry on where you left off
   plus a summary of what was done on the other, and the other version is kept as a separate branch.
 - **Automatic, if you want.** `actx auto on`, and conversations sync when you open or close them in
   Claude Code or Codex, and every 10 minutes. It never replaces a conversation that's open in an agent.
-- **Claude Code ⇄ opencode ⇄ Codex.** Copy a conversation into another tool and keep going there.
+- **Claude Code ⇄ opencode ⇄ Codex ⇄ Antigravity.** Copy a conversation into another tool and keep going
+  there.
 - **Safe.** Backups before overwriting (`actx restore`), atomic writes and a lock in the shared folder,
   and git warnings when the code is out of step (uncommitted changes, a different commit).
 - **One small binary.** Written in Rust; it only needs git and fzf. Linux and macOS. English and Spanish
@@ -54,7 +55,8 @@ Shell completions: `actx completions bash|zsh|fish` (the PKGBUILD installs them)
 `actx completions bash > ~/.local/share/bash-completion/completions/actx`.
 
 Supported tools: **Claude Code**, **opencode** 1.x and 2.x (each machine can have either: a conversation
-saved with one is converted when it reaches the other), and **Codex**.
+saved with one is converted when it reaches the other), and **Codex**. **Antigravity CLI** (`agy`)
+converts to and from the others, but its conversations don't sync yet.
 
 ## Quick start
 
@@ -72,7 +74,7 @@ Then:
 | `actx mk <project>` | Create a project (or open one) and pick conversations to save in it. Those that look like they belong (same folder, name in the title) come first. |
 | `actx sync [project]` | Push what you continued here, pull what's new. Pick the projects, or `--all`. |
 | `actx` / `actx ls [project]` | Projects and the state of each conversation: `↑ push`, `↓ pull`, `↓ new`, `⚠ conflict`, `✓ synced`. |
-| `actx cv [project]` | Copy a conversation into another tool (Claude Code, opencode, Codex). |
+| `actx cv [project]` | Copy a conversation into another tool (Claude Code, opencode, Codex, Antigravity). |
 | `actx rm <project>` | Remove conversations from a project (nothing is deleted on your machines). |
 | `actx auto [on\|off]` | Automatic sync: hooks in Claude Code and Codex, and a timer. Plain `actx auto` shows how it's doing. |
 | `actx restore` | Put back a conversation from a backup. |
@@ -141,7 +143,9 @@ version is backed up first).
 become text (what was run and what came out, outputs trimmed to 1500 characters); internal
 reasoning and images are dropped. If the conversation was compacted, only the summary and what
 followed are converted (that's what the agent had in context). It's an approximation, but enough to
-keep working. In opencode, the copy uses the last model you used there; in Codex, your default one.
+keep working. In opencode, the copy uses the last model you used there; in Codex and Antigravity, your
+default one. Antigravity has no import: actx writes the conversation into its database (the steps, the
+index and the title), and `agy --conversation <id>` resumes it.
 
 ### The shared folder
 
@@ -188,8 +192,10 @@ private, and don't use a public sync service you wouldn't trust with your code.
 ## Limitations
 
 - actx reads the **internal, undocumented formats** of Claude Code (`~/.claude/projects/*.jsonl`),
-  opencode (its SQLite database and its export/import commands) and Codex (`~/.codex/sessions` rollouts).
-  They can change without notice. Tested with Claude Code 2.1, opencode 1.19 and 2.0, and Codex 0.160;
+  opencode (its SQLite database and its export/import commands), Codex (`~/.codex/sessions` rollouts)
+  and Antigravity CLI (`~/.gemini/antigravity-cli`: a SQLite database of protocol buffers per
+  conversation). They can change without notice. Tested with Claude Code 2.1, opencode 1.19 and 2.0,
+  Codex 0.160 and Antigravity CLI 1.4;
   the test suite runs against the real opencode and Codex (weekly too) to catch format changes early.
   If something breaks, please open an issue.
 - Conversion between tools is lossy (see above). Syncing within the same tool is not, except between

@@ -20,7 +20,7 @@ pub const OUT_MAX: usize = 1500;
 pub const CONV_BUDGET: usize = 400_000;
 
 pub static COPY_SUFFIX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r" \((?:from|de) (?:Claude Code|opencode|Codex)\)$").unwrap());
+    LazyLock::new(|| Regex::new(r" \((?:from|de) (?:Claude Code|opencode|Codex|Antigravity)\)$").unwrap());
 pub static BRANCH_SUFFIX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r" \((?:branch from|rama de) [^)]*\)$").unwrap());
 static IMPORT_NOTE: LazyLock<Regex> = LazyLock::new(|| {

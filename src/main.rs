@@ -2,6 +2,7 @@
 //! machines, grouped into projects, through any shared folder (a NAS, Syncthing, ...).
 
 mod agents;
+mod antigravity;
 mod auto;
 mod claude;
 mod codex;
@@ -14,6 +15,7 @@ mod lock;
 mod merge;
 mod opencode;
 mod paths;
+mod pb;
 mod session;
 mod state;
 mod store;

@@ -27,7 +27,7 @@ portátil$  claude --resume …    # sigues donde lo dejaste
   guarda aparte como una rama.
 - **Automático, si quieres.** `actx auto on`, y las conversaciones se sincronizan al abrirlas o
   cerrarlas en Claude Code o Codex, y cada 10 minutos. Nunca reemplaza una conversación abierta en un agente.
-- **Claude Code ⇄ opencode ⇄ Codex.** Copia una conversación a otro programa y sigue allí.
+- **Claude Code ⇄ opencode ⇄ Codex ⇄ Antigravity.** Copia una conversación a otro programa y sigue allí.
 - **Seguro.** Copias de seguridad antes de sobrescribir (`actx restore`), escrituras atómicas y un
   bloqueo en la carpeta compartida, y avisos de git cuando el código no cuadra (cambios sin commitear,
   otro commit).
@@ -57,7 +57,8 @@ Autocompletado: `actx completions bash|zsh|fish` (el PKGBUILD lo instala), p. ej
 `actx completions bash > ~/.local/share/bash-completion/completions/actx`.
 
 Programas soportados: **Claude Code**, **opencode** 1.x y 2.x (cada PC puede tener cualquiera: una
-conversación guardada con una se convierte al llegar a la otra) y **Codex**.
+conversación guardada con una se convierte al llegar a la otra) y **Codex**. **Antigravity CLI** (`agy`)
+se convierte desde y hacia los demás, pero sus conversaciones aún no se sincronizan.
 
 ## Primeros pasos
 
@@ -75,7 +76,7 @@ Y luego:
 | `actx mk <proyecto>` | Crea un proyecto (o abre uno) y eliges qué conversaciones guardar. Salen primero las que parecen suyas (misma carpeta, el nombre en el título). |
 | `actx sync [proyecto]` | Sube lo que has seguido aquí y baja lo nuevo. Eliges los proyectos, o `--all`. |
 | `actx` / `actx ls [proyecto]` | Proyectos y estado de cada conversación: `↑ subir`, `↓ bajar`, `↓ nueva`, `⚠ conflicto`, `✓ al día`. |
-| `actx cv [proyecto]` | Copia una conversación a otro programa (Claude Code, opencode, Codex). |
+| `actx cv [proyecto]` | Copia una conversación a otro programa (Claude Code, opencode, Codex, Antigravity). |
 | `actx rm <proyecto>` | Quita conversaciones de un proyecto (en tus PCs no se borra nada). |
 | `actx auto [on\|off]` | Sincronización automática: hooks en Claude Code y Codex, y un temporizador. `actx auto` a secas dice cómo va. |
 | `actx restore` | Recupera una conversación de una copia de seguridad. |
@@ -144,8 +145,9 @@ guarda una copia de la actual).
 herramientas pasan a texto (qué se ejecutó y qué salió, recortado a 1500 caracteres por salida); el
 razonamiento interno y las imágenes se pierden. Si la conversación se compactó, solo se convierte el
 resumen y lo que vino después (que es lo que el agente tenía en contexto). Es una aproximación, pero
-basta para seguir trabajando. En opencode, la copia usa el último modelo que hayas usado allí; en Codex,
-el que tengas por defecto.
+basta para seguir trabajando. En opencode, la copia usa el último modelo que hayas usado allí; en Codex y
+Antigravity, el que tengas por defecto. Antigravity no tiene forma de importar: actx escribe la
+conversación en su base de datos (los pasos, el índice y el título), y `agy --conversation <id>` la retoma.
 
 ### La carpeta compartida
 
@@ -193,9 +195,10 @@ no confiarías tu código.
 ## Limitaciones
 
 - actx lee **formatos internos y sin documentar** de Claude Code (`~/.claude/projects/*.jsonl`), de
-  opencode (su base de datos SQLite y sus comandos de exportar/importar) y de Codex (los rollouts de
-  `~/.codex/sessions`). Pueden cambiar sin aviso. Probado con Claude Code 2.1, opencode 1.19 y 2.0, y
-  Codex 0.160; los tests se ejecutan contra opencode y Codex de verdad (también cada semana) para
+  opencode (su base de datos SQLite y sus comandos de exportar/importar), de Codex (los rollouts de
+  `~/.codex/sessions`) y de Antigravity CLI (`~/.gemini/antigravity-cli`: una base de datos SQLite de
+  protocol buffers por conversación). Pueden cambiar sin aviso. Probado con Claude Code 2.1, opencode
+  1.19 y 2.0, Codex 0.160 y Antigravity CLI 1.4; los tests se ejecutan contra opencode y Codex de verdad (también cada semana) para
   detectar cambios de formato cuanto antes. Si algo se rompe, abre un issue.
 - La conversión entre programas pierde detalle (ver arriba). Sincronizar dentro del mismo programa, no,
   salvo entre opencode 1.x y 2.x, que pasa por la misma conversión. Para mezclar hace falta la misma
