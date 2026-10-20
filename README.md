@@ -48,7 +48,7 @@ cd actx/packaging/aur && makepkg -si
 
 At runtime it needs `git` and [`fzf`](https://github.com/junegunn/fzf). On machines without Rust, copy the
 binary from one that has it: actx leaves a copy in the shared folder (`_bin/`), and `actx update` keeps it
-current.
+current (machines still on the old Python version move to this one too: run `actx update` twice).
 
 Shell completions: `actx completions bash|zsh|fish` (the PKGBUILD installs them), e.g.
 `actx completions bash > ~/.local/share/bash-completion/completions/actx`.
@@ -153,6 +153,7 @@ keep working. In opencode, the copy uses the last model you used there; in Codex
     opencode/<session id>/      meta.json · preview.txt · session.json.zst · child-*.json.zst
     codex/<session id>/         meta.json · preview.txt · rollout.jsonl.zst
   _bin/actx-<arch>-<os>         a copy of actx, for `actx update` on copies installed by hand
+  _bin/actx                     for machines on the old Python version: moves them to the above
 ```
 
 Anything that all your machines can reach works: an SMB/NFS mount, a Syncthing or Dropbox folder…

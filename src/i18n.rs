@@ -563,7 +563,7 @@ mod tests {
     /// Every tr!("...") in the source has a Spanish translation, with the same placeholders.
     #[test]
     fn every_interface_string_is_translated() {
-        let call = regex::Regex::new(r#"tr!\(\s*"((?:[^"\\]|\\.)*)""#).unwrap();
+        let call = regex::Regex::new(r#"\btr!\(\s*"((?:[^"\\]|\\.)*)""#).unwrap();
         let placeholder = regex::Regex::new(r"\{(\w+)\}").unwrap();
         let names = |s: &str| {
             placeholder

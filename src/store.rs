@@ -329,12 +329,33 @@ pub fn modified(p: &Path) -> f64 {
     mtime(p)
 }
 
+/// Stands in for the Python actx of old in the shared folder (src/bridge.py).
+const BRIDGE: &str = include_str!("bridge.py");
+
 /// Leave a copy of actx in the shared folder, to install it on machines without a package.
 pub fn sync_self(root: &Path) {
     let kind = install_kind();
     if kind == "package" {
         return;
     }
+    share_binary(root, kind);
+    leave_bridge(root);
+}
+
+/// Machines still on the Python version update from _bin/actx, a Python script: leave one there
+/// that moves them to this program.
+fn leave_bridge(root: &Path) {
+    let bridge = root.join("_bin").join("actx");
+    if !shared_binary(root).exists() || std::fs::read(&bridge).is_ok_and(|b| b == BRIDGE.as_bytes()) {
+        return;
+    }
+    let tmp = bridge.with_extension("tmp");
+    if std::fs::write(&tmp, BRIDGE).is_ok() {
+        let _ = std::fs::rename(&tmp, &bridge);
+    }
+}
+
+fn share_binary(root: &Path, kind: &str) {
     let shared = shared_binary(root);
     let me = &ctx().self_path;
     let same = std::fs::read(&shared)

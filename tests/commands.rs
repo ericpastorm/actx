@@ -112,3 +112,37 @@ fn update_defers_to_git_and_packages() {
     std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
     assert!(out.contains("package manager"), "{out}");
 }
+
+#[test]
+fn machines_on_the_python_version_move_to_this_one() {
+    needs!("python3");
+    let w = World::new();
+    let (m, mine, shared) = installed_copy(&w);
+    run(&m, &mine, &["update"]);
+    assert_eq!(std::fs::read(&shared).unwrap(), std::fs::read(ACTX).unwrap());
+    // the Python version updates from _bin/actx, which it checks is Python before installing it
+    let bridge = w.store().join("_bin/actx");
+    let check = m
+        .command("python3")
+        .args([
+            "-c",
+            "import sys; compile(open(sys.argv[1]).read(), sys.argv[1], 'exec')",
+        ])
+        .arg(&bridge)
+        .status()
+        .unwrap();
+    assert!(check.success());
+    let old = w.dir.path().join("bin/old-actx");
+    std::fs::copy(&bridge, &old).unwrap();
+    std::fs::set_permissions(&old, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // its first run puts this program in its place, and runs it
+    assert!(run(&m, &old, &["--version"]).starts_with("actx "));
+    assert_eq!(std::fs::read(&old).unwrap(), std::fs::read(ACTX).unwrap());
+    assert!(run(&m, &old, &["--version"]).starts_with("actx "));
+    // and it's left there only once
+    let when = bridge.metadata().unwrap().modified().unwrap();
+    std::fs::remove_file(&shared).unwrap();
+    run(&m, &mine, &["update"]);
+    assert!(shared.exists());
+    assert_eq!(bridge.metadata().unwrap().modified().unwrap(), when);
+}

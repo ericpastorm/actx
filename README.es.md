@@ -51,7 +51,7 @@ cd actx/packaging/aur && makepkg -si
 
 Para funcionar necesita `git` y [`fzf`](https://github.com/junegunn/fzf). En los PCs sin Rust, copia el
 binario desde uno que lo tenga: actx deja una copia en la carpeta compartida (`_bin/`), y `actx update` la
-mantiene al día.
+mantiene al día (los PCs con la versión antigua en Python también se pasan a esta: ejecuta `actx update` dos veces).
 
 Autocompletado: `actx completions bash|zsh|fish` (el PKGBUILD lo instala), p. ej.
 `actx completions bash > ~/.local/share/bash-completion/completions/actx`.
@@ -157,6 +157,7 @@ el que tengas por defecto.
     opencode/<id de sesión>/    meta.json · preview.txt · session.json.zst · child-*.json.zst
     codex/<id de sesión>/       meta.json · preview.txt · rollout.jsonl.zst
   _bin/actx-<arq>-<so>          una copia de actx, para `actx update` si lo copiaste a mano
+  _bin/actx                     para equipos con la versión antigua en Python: los pasa a la de arriba
 ```
 
 Vale cualquier carpeta a la que lleguen todos tus PCs: una unidad SMB/NFS, una carpeta de Syncthing o
