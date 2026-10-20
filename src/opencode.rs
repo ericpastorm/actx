@@ -255,7 +255,13 @@ fn cmd(sub: &[&str], rest: &[&str], cwd: &str) -> Result<Command> {
         return Err(Error(tr!("opencode is not installed on this machine")));
     }
     let mut c = crate::ctx::command("opencode");
-    c.args(sub).args(&ctx().opencode_args).args(rest);
+    c.args(sub).args(&ctx().opencode_args);
+    // opencode 2.x talks to a background service (that it starts, and may wait on) unless told
+    // not to: automatic runs have to work without it
+    if version() == Some(2) && std::env::var_os("ACTX_OPENCODE_ARGS").is_none() {
+        c.arg("--standalone");
+    }
+    c.args(rest);
     c.current_dir(if Path::new(cwd).is_dir() {
         Path::new(cwd)
     } else {
