@@ -652,6 +652,7 @@ pub fn sync(args: Args) {
         if !auto {
             ok(&tr!("All in sync ({n} conversations)", n = in_sync));
         }
+        sync_self(&root);
         return;
     }
     let chosen = if auto {

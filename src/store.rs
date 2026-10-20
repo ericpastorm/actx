@@ -358,11 +358,16 @@ fn leave_bridge(root: &Path) {
 fn share_binary(root: &Path, kind: &str) {
     let shared = shared_binary(root);
     let me = &ctx().self_path;
-    let same = std::fs::read(&shared)
-        .ok()
-        .zip(std::fs::read(me).ok())
-        .map(|(a, b)| a == b);
-    if same == Some(true) {
+    let len = |p: &Path| std::fs::metadata(p).map(|m| m.len()).ok();
+    // the copy keeps this one's date: same size and date is the same file, without reading it all
+    let same = len(&shared).is_some()
+        && len(&shared) == len(me)
+        && (mtime(&shared) == mtime(me)
+            || std::fs::read(&shared)
+                .ok()
+                .zip(std::fs::read(me).ok())
+                .is_some_and(|(a, b)| a == b));
+    if same {
         return;
     }
     if shared.exists() && mtime(&shared) > mtime(me) + 2.0 {
