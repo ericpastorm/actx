@@ -93,8 +93,9 @@ When a conversation arrives on a machine for the first time, actx looks for:
 1. a folder you picked before for that repo;
 2. the same path (relative to your home);
 3. the folder you're in, if it's the same repo;
-4. any clone or worktree of the repo under your home (`ACTX_SCAN`), identified by its **first
-   commit**, so it works whatever the path or folder name;
+4. any clone or worktree of the repo under your home (`ACTX_SCAN`), or next to folders it put
+   conversations in before (projects on another disk, say), identified by its **first commit**, so it
+   works whatever the path or folder name;
 5. otherwise it asks once (with *here* as the first option) and remembers.
 
 Paths inside the conversation are rewritten from the other machine's to this one's.

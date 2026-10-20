@@ -92,7 +92,9 @@ pub fn git_label(g: &Value) -> String {
     label
 }
 
-pub fn local_repos() -> &'static Vec<GitId> {
+/// The repos on this machine: in your home (or ACTX_SCAN), and next to the folders conversations
+/// were put in before (projects kept on another disk, say).
+pub fn local_repos(st: &State) -> &'static Vec<GitId> {
     static REPOS: OnceLock<Vec<GitId>> = OnceLock::new();
     REPOS.get_or_init(|| {
         fn walk(d: &Path, depth: usize, found: &mut Vec<GitId>) {
@@ -119,6 +121,17 @@ pub fn local_repos() -> &'static Vec<GitId> {
         let mut found = Vec::new();
         for root in &ctx().scan_roots {
             walk(root, SCAN_DEPTH, &mut found);
+        }
+        let mut near: Vec<&Path> = st
+            .folders
+            .values()
+            .filter_map(|f| Path::new(f).parent())
+            .filter(|p| !ctx().scan_roots.iter().any(|r| p.starts_with(r)))
+            .collect();
+        near.sort();
+        near.dedup();
+        for d in near {
+            walk(d, 1, &mut found);
         }
         found
     })
@@ -196,7 +209,7 @@ pub fn resolve_folder(meta: &Value, st: &State) -> Option<String> {
         if let Some(here) = git_id(&cwd()).filter(|h| h.root.as_deref() == Some(root)) {
             return Some(join_sub(&here.top, &sub)); // you're inside the project (e.g. its terminal in your IDE)
         }
-        let matches: Vec<&GitId> = local_repos()
+        let matches: Vec<&GitId> = local_repos(st)
             .iter()
             .filter(|r| r.root.as_deref() == Some(root))
             .collect();
@@ -243,13 +256,13 @@ pub fn ask_folder(meta: &Value, st: &mut State) -> Option<String> {
     let mut options = vec![cwd.clone()];
     if let Some((_, root)) = git {
         options.extend(
-            local_repos()
+            local_repos(st)
                 .iter()
                 .filter(|r| r.root.as_deref() == Some(root))
                 .map(|r| r.top.clone()),
         );
     }
-    let mut others: Vec<String> = local_repos().iter().map(|r| r.top.clone()).collect();
+    let mut others: Vec<String> = local_repos(st).iter().map(|r| r.top.clone()).collect();
     others.sort_by_key(|t| (likeness(t), t.clone()));
     options.extend(others);
     options.push(ctx().home_str());

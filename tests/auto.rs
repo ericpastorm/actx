@@ -423,3 +423,40 @@ fn the_end_hook_waits_for_the_agent_to_exit() {
     });
     assert!(pushed, "{}", log(&a));
 }
+
+#[test]
+fn repos_next_to_folders_used_before_are_found() {
+    let w = World::new();
+    let (a, b) = (w.machine("desk"), w.machine("laptop"));
+    let disk = w.dir.path().join("disk/projects"); // the laptop keeps its projects outside its home
+    let shop = git_repo(&a.home.join("code/shop"));
+    let blog = git_repo(&a.home.join("code/blog"));
+    git_clone(&shop, &disk.join("shop"));
+    git_clone(&blog, &disk.join("blog"));
+    // where the shop went, as picked there once
+    let first = Command::new("git")
+        .args(["rev-list", "--max-parents=0", "HEAD"])
+        .current_dir(&shop)
+        .output()
+        .unwrap();
+    let first = String::from_utf8_lossy(&first.stdout).trim().to_string();
+    let state = b.home.join(".local/state/actx/state.json");
+    std::fs::create_dir_all(state.parent().unwrap()).unwrap();
+    std::fs::write(
+        &state,
+        serde_json::json!({"base": {}, "folders": {format!("git:{first}"): disk.join("shop")}}).to_string(),
+    )
+    .unwrap();
+    let session = claude_session(
+        &a,
+        &blog,
+        &[("user", "a post"), ("assistant", "Posted on desk")],
+        Some("Post"),
+    );
+    let sid = session.file_stem().unwrap().to_string_lossy().into_owned();
+    a.pick(&["mk", "blog"], &[&sid]);
+    b.actx(&["sync", "--auto"]);
+    let (path, _, cwds) = claude_transcript(&b, &sid);
+    assert!(path.exists(), "the blog wasn't found next to the shop");
+    assert!(cwds.iter().all(|c| Path::new(c) == disk.join("blog")), "{cwds:?}");
+}

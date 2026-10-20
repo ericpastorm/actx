@@ -184,7 +184,9 @@ pub fn git_repo(path: &Path) -> PathBuf {
         assert!(ok, "git {args:?}");
     };
     run(&["init", "-q", "-b", "main"]);
-    run(&["commit", "-q", "--allow-empty", "-m", "init"]);
+    // each its own first commit (empty ones made in the same second would be the same)
+    let name = path.file_name().unwrap().to_string_lossy();
+    run(&["commit", "-q", "--allow-empty", "-m", &format!("init {name}")]);
     path.to_path_buf()
 }
 
