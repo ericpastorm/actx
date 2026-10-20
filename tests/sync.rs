@@ -32,7 +32,10 @@ fn roundtrip_between_different_paths() {
     let (a, b, repo, clone, sid) = setup(&w);
 
     let out = b.actx(&["sync"]); // no terminal: all projects
-    assert!(out.contains("Cart fix") && out.contains("~/work/shop-laptop"), "{out}");
+    assert!(
+        out.contains("Cart fix") && out.replace('\\', "/").contains("~/work/shop-laptop"),
+        "{out}"
+    );
     let (path, texts, cwds) = claude_transcript(&b, &sid);
     assert_eq!(
         path.parent().unwrap().file_name().unwrap().to_string_lossy(),

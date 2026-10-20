@@ -2,7 +2,7 @@
 
 use std::fmt;
 use std::io::IsTerminal;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use serde_json::Value;
@@ -40,8 +40,20 @@ fn env(name: &str) -> Option<String> {
 
 impl Ctx {
     fn load() -> Ctx {
-        let home = PathBuf::from(env("HOME").unwrap_or_else(|| "/".into()));
-        let xdg = |var: &str, default: &str| env(var).map(PathBuf::from).unwrap_or_else(|| home.join(default));
+        // Windows: USERPROFILE is the real home; HOME may be a Git Bash style /c/Users/me
+        let home = PathBuf::from(
+            (if cfg!(windows) {
+                env("USERPROFILE").or_else(|| env("HOME"))
+            } else {
+                env("HOME")
+            })
+            .unwrap_or_else(|| if cfg!(windows) { "C:\\".into() } else { "/".into() }),
+        );
+        let xdg = |var: &str, default: &str| {
+            env(var)
+                .map(PathBuf::from)
+                .unwrap_or_else(|| home.join(crate::paths::native(default)))
+        };
         let config_file = xdg("XDG_CONFIG_HOME", ".config").join("actx").join("config.json");
         let config = std::fs::read_to_string(&config_file)
             .ok()
@@ -49,7 +61,7 @@ impl Ctx {
             .filter(Value::is_object)
             .unwrap_or_else(|| Value::Object(Default::default()));
         let self_path = std::env::current_exe()
-            .and_then(|p| p.canonicalize())
+            .and_then(|p| crate::paths::canonical(&p))
             .unwrap_or_default();
         Ctx {
             config_file,
@@ -73,7 +85,7 @@ impl Ctx {
                 .unwrap_or_default(),
             host: env("ACTX_HOST").unwrap_or_else(|| gethostname::gethostname().to_string_lossy().into_owned()),
             self_path,
-            no_color: std::env::var_os("NO_COLOR").is_some() || !std::io::stdout().is_terminal(),
+            no_color: std::env::var_os("NO_COLOR").is_some() || !std::io::stdout().is_terminal() || !ansi_terminal(),
             pick: std::env::var("ACTX_PICK")
                 .ok()
                 .map(|v| v.split(',').filter(|p| !p.is_empty()).map(String::from).collect()),
@@ -123,6 +135,13 @@ impl fmt::Display for Error {
 
 impl From<std::io::Error> for Error {
     fn from(e: std::io::Error) -> Self {
+        // Windows, ERROR_CLOUD_FILE_ACCESS_DENIED: Synology Drive, OneDrive… keep the file online only
+        if cfg!(windows) && e.raw_os_error() == Some(395) {
+            return Error(crate::tr!(
+                "{err}. The shared folder keeps its files online only: set it to «Always keep on this device» (or run: attrib +P \"<folder>\" /S /D)",
+                err = e
+            ));
+        }
         Error(e.to_string())
     }
 }
@@ -163,9 +182,66 @@ pub fn now_ms() -> i64 {
     (now() * 1000.0) as i64
 }
 
+/// Can the terminal show colors? Always, except on Windows consoles that don't say they can.
+fn ansi_terminal() -> bool {
+    !cfg!(windows)
+        || ["WT_SESSION", "TERM", "ConEmuANSI", "ANSICON", "TERM_PROGRAM"]
+            .iter()
+            .any(|v| std::env::var_os(v).is_some())
+}
+
+/// Where `cmd` is on the PATH. On Windows `claude` finds claude.exe, claude.cmd (npm's shims)…
+pub fn find_program(cmd: &str) -> Option<PathBuf> {
+    let paths = std::env::var_os("PATH")?;
+    let exts: Vec<String> = if cfg!(windows) && Path::new(cmd).extension().is_none() {
+        std::env::var("PATHEXT")
+            .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into())
+            .split(';')
+            .filter(|e| !e.is_empty())
+            .map(|e| e.to_lowercase())
+            .collect()
+    } else {
+        Vec::new()
+    };
+    std::env::split_paths(&paths).find_map(|dir| {
+        let plain = dir.join(cmd);
+        if exts.is_empty() {
+            return plain.is_file().then_some(plain);
+        }
+        exts.iter().map(|e| dir.join(format!("{cmd}{e}"))).find(|p| p.is_file())
+    })
+}
+
 /// Is `cmd` on the PATH?
 pub fn which(cmd: &str) -> bool {
-    std::env::var_os("PATH")
-        .map(|paths| std::env::split_paths(&paths).any(|dir| dir.join(cmd).is_file()))
-        .unwrap_or(false)
+    find_program(cmd).is_some()
+}
+
+/// Windows: run a console program without opening a window for it (a program started without a
+/// console of its own, like a hook or a scheduled task, would otherwise flash one).
+pub fn hide_window(c: &mut std::process::Command) -> &mut std::process::Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    c
+}
+
+/// A command for a system tool (`powershell.exe`, `tasklist`…), with no window on Windows.
+pub fn quiet(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+    let mut c = std::process::Command::new(program);
+    hide_window(&mut c);
+    c
+}
+
+/// A command that runs `program` the way a shell would: on Windows that finds .cmd and .bat
+/// shims too (std only looks for .exe), and opens no window.
+pub fn command(program: &str) -> std::process::Command {
+    quiet(find_program(program).unwrap_or_else(|| PathBuf::from(program)))
+}
+
+/// Like `command`, for a program that draws on the terminal (fzf): it keeps our console.
+pub fn console_command(program: &str) -> std::process::Command {
+    std::process::Command::new(find_program(program).unwrap_or_else(|| PathBuf::from(program)))
 }

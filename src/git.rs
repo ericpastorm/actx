@@ -2,13 +2,13 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+
 use std::sync::{Mutex, OnceLock};
 
 use serde_json::{Value, json};
 
 use crate::ctx::{ctx, jstr};
-use crate::paths::{PathFixer, short, under_home};
+use crate::paths::{PathFixer, base_name, short, slashed, under_home};
 use crate::state::State;
 use crate::tr;
 use crate::ui::{Row, ask, fzf, interactive, paint, warn};
@@ -35,7 +35,12 @@ pub struct GitId {
 }
 
 fn git(path: &str, args: &[&str]) -> Option<String> {
-    let out = Command::new("git").arg("-C").arg(path).args(args).output().ok()?;
+    let out = crate::ctx::command("git")
+        .arg("-C")
+        .arg(path)
+        .args(args)
+        .output()
+        .ok()?;
     out.status
         .success()
         .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
@@ -52,7 +57,7 @@ pub fn git_id(path: &str) -> Option<GitId> {
         if !Path::new(path).is_dir() {
             return None;
         }
-        let top = git(path, &["rev-parse", "--show-toplevel"])?;
+        let top = crate::paths::native(&git(path, &["rev-parse", "--show-toplevel"])?);
         let root = git(path, &["rev-list", "--max-parents=0", "HEAD"])
             .and_then(|r| r.split_whitespace().min().map(String::from));
         Some(GitId {
@@ -148,11 +153,23 @@ pub fn local_repos(st: &State) -> &'static Vec<GitId> {
 }
 
 /// Like Python's os.path.relpath for a path inside `base` ("." for base itself, ".." if outside).
+/// Works on paths from any machine (`/home/me/shop` or `C:\Users\me\shop`) and gives it with `/`.
 pub fn relpath(path: &str, base: &str) -> String {
-    match Path::new(path).strip_prefix(base) {
-        Ok(rel) if rel.as_os_str().is_empty() => ".".to_string(),
-        Ok(rel) => rel.to_string_lossy().into_owned(),
-        Err(_) => "..".to_string(),
+    let (path, base) = (slashed(path), slashed(base));
+    let base = base.trim_end_matches('/');
+    let same = |a: &str, b: &str| {
+        if cfg!(windows) {
+            a.eq_ignore_ascii_case(b)
+        } else {
+            a == b
+        }
+    };
+    if same(&path, base) {
+        return ".".to_string();
+    }
+    match path.get(..base.len() + 1) {
+        Some(head) if same(head, &format!("{base}/")) => path[base.len() + 1..].to_string(),
+        _ => "..".to_string(),
     }
 }
 
@@ -160,7 +177,8 @@ fn join_sub(top: &str, sub: &str) -> String {
     if sub.is_empty() || sub == "." || sub.starts_with("..") {
         return top.to_string();
     }
-    let p = Path::new(top).join(sub);
+    let mut p = PathBuf::from(top);
+    p.extend(sub.split('/').filter(|c| !c.is_empty()));
     if p.is_dir() {
         p.to_string_lossy().into_owned()
     } else {
@@ -174,7 +192,7 @@ fn best_repo<'a>(matches: &[&'a GitId], g: &Value) -> Option<&'a GitId> {
     }
     let same_top = |m: &&GitId| m.top == jstr(g, "top");
     let same_branch = |m: &&GitId| m.branch.as_deref() == g.get("branch").and_then(Value::as_str);
-    let same_name = |m: &&GitId| Path::new(&m.top).file_name() == Path::new(jstr(g, "top")).file_name();
+    let same_name = |m: &&GitId| base_name(&m.top) == base_name(jstr(g, "top"));
     for test in [&same_top as &dyn Fn(&&GitId) -> bool, &same_branch, &same_name] {
         let hits: Vec<_> = matches.iter().filter(|m| test(m)).collect();
         if hits.len() == 1 {
@@ -248,10 +266,10 @@ pub fn ask_folder(meta: &Value, st: &mut State) -> Option<String> {
     }
     let git = stored_git(meta);
     let origin = git.map(|(g, _)| jstr(g, "top")).unwrap_or_else(|| jstr(meta, "path"));
-    let name = norm(&Path::new(origin).file_name().unwrap_or_default().to_string_lossy());
+    let name = norm(base_name(origin));
     let likeness = |top: &str| {
         // 0 = same name, 1 = similar, 2 = unrelated
-        let other = norm(&Path::new(top).file_name().unwrap_or_default().to_string_lossy());
+        let other = norm(base_name(top));
         if other == name {
             0
         } else if !name.is_empty() && (name.contains(&other) || other.contains(&name)) {
@@ -260,7 +278,7 @@ pub fn ask_folder(meta: &Value, st: &mut State) -> Option<String> {
             2
         }
     };
-    let cwd = std::fs::canonicalize(cwd())
+    let cwd = crate::paths::canonical(Path::new(&cwd()))
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| cwd());
     let mut options = vec![cwd.clone()];
@@ -308,7 +326,7 @@ pub fn ask_folder(meta: &Value, st: &mut State) -> Option<String> {
     let mut folder = fzf(&rows, &header, false, false).into_iter().next()?;
     if folder == "::other" {
         let typed = crate::store::shellexpand(&ask(&tr!("Path:"), false));
-        folder = std::fs::canonicalize(&typed)
+        folder = crate::paths::canonical(Path::new(&typed))
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or(typed);
         if !Path::new(&folder).is_dir() {

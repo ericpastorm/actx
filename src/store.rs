@@ -139,7 +139,7 @@ pub fn store_root(optional: bool) -> Option<PathBuf> {
 
 pub fn shellexpand(path: &str) -> String {
     match path.strip_prefix("~") {
-        Some(rest) if rest.is_empty() || rest.starts_with('/') => format!("{}{rest}", ctx().home_str()),
+        Some(rest) if rest.is_empty() || rest.starts_with(['/', '\\']) => format!("{}{rest}", ctx().home_str()),
         _ => path.to_string(),
     }
 }
@@ -212,7 +212,7 @@ pub fn stored_sessions(root: &Path) -> Vec<Session> {
 
 /// One conversation, wherever it's stored.
 pub fn find_stored(root: &Path, harness: &str, id: &str) -> Option<Session> {
-    if id.is_empty() || id.contains('/') || id.starts_with('.') {
+    if id.is_empty() || id.contains(['/', '\\']) || id.starts_with('.') {
         return None;
     }
     project_dirs(root)
@@ -295,7 +295,7 @@ pub fn remove_stored(r: &Session) -> Result<()> {
 /// How this copy of actx was installed: a "dev" build, a system "package", or a "user" file.
 pub fn install_kind() -> &'static str {
     let me = &ctx().self_path;
-    let dev = me.to_string_lossy().contains("/target/")
+    let dev = crate::paths::slashed(&me.to_string_lossy()).contains("/target/")
         && me
             .ancestors()
             .any(|d| d.join("Cargo.toml").exists() && d.join(".git").exists());
@@ -332,6 +332,12 @@ pub fn modified(p: &Path) -> f64 {
 /// Stands in for the Python actx of old in the shared folder (src/bridge.py).
 const BRIDGE: &str = include_str!("bridge.py");
 
+/// The script with `\n` line endings: a checkout on Windows may have turned them into `\r\n`,
+/// and `python3\r` is not a program.
+fn bridge_script() -> String {
+    BRIDGE.replace("\r\n", "\n")
+}
+
 /// Leave a copy of actx in the shared folder, to install it on machines without a package.
 pub fn sync_self(root: &Path) {
     let kind = install_kind();
@@ -346,11 +352,11 @@ pub fn sync_self(root: &Path) {
 /// that moves them to this program.
 fn leave_bridge(root: &Path) {
     let bridge = root.join("_bin").join("actx");
-    if !shared_binary(root).exists() || std::fs::read(&bridge).is_ok_and(|b| b == BRIDGE.as_bytes()) {
+    if !shared_binary(root).exists() || std::fs::read(&bridge).is_ok_and(|b| b == bridge_script().as_bytes()) {
         return;
     }
     let tmp = bridge.with_extension("tmp");
-    if std::fs::write(&tmp, BRIDGE).is_ok() {
+    if std::fs::write(&tmp, bridge_script()).is_ok() {
         let _ = std::fs::rename(&tmp, &bridge);
     }
 }

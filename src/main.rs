@@ -95,6 +95,7 @@ fn cli() -> Command {
                         .hide(true),
                 )
                 .arg(Arg::new("busy").long("busy").hide(true))
+                .arg(Arg::new("log").long("log").hide(true))
                 .arg(
                     Arg::new("after")
                         .long("after")
@@ -182,6 +183,9 @@ fn main() {
             project: get(m, "project"),
             ..Default::default()
         }),
+        Some(("sync", m)) if m.get_one::<String>("log").is_some() => {
+            auto::run_logged(m.get_one::<String>("log").map(String::as_str).unwrap_or_default())
+        }
         Some(("sync", m)) => commands::sync(Args {
             project: get(m, "project"),
             all: m.get_flag("all"),

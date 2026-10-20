@@ -1,0 +1,2 @@
+# the bridge script is run by Linux and macOS machines: it needs LF line endings
+src/bridge.py text eol=lf

@@ -5,7 +5,6 @@
 
 use std::fs::File;
 use std::io::Read;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -17,7 +16,7 @@ use crate::paths::short;
 use crate::session::{Session, status};
 use crate::store::{find_stored, reachable_root};
 use crate::tr;
-use crate::ui::{ago, bold, dim, fail, ok, paint, shell_quote, warn};
+use crate::ui::{ago, bold, command_path, dim, fail, ok, paint, warn};
 
 pub const EVERY_MIN: u64 = 10;
 const UNIT: &str = "actx-sync";
@@ -47,12 +46,49 @@ fn spawn_sync(delay: u64, busy: Option<&str>, after: Option<u32>) {
         c.args(["--after", &pid.to_string()]);
     }
     let err = log.try_clone().map(Stdio::from).unwrap_or_else(|_| Stdio::null());
-    let child = c.stdin(Stdio::null()).stdout(log).stderr(err).process_group(0).spawn();
+    c.stdin(Stdio::null()).stdout(log).stderr(err);
+    detach(&mut c);
+    let child = c.spawn();
     if ctx().hook_wait
         && let Ok(mut child) = child
     {
         let _ = child.wait();
     }
+}
+
+/// Let the process outlive the agent that started it (and have no console window on Windows).
+fn detach(c: &mut Command) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        c.process_group(0);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        c.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+    }
+}
+
+/// `actx sync --auto --log <file>`: what Windows' Task Scheduler runs. It has no shell to redirect
+/// the output, so this runs `sync --auto` with its output going to the log, and has no window.
+pub fn run_logged(log: &str) -> ! {
+    let _ = std::fs::create_dir_all(&ctx().state_dir);
+    let Ok(file) = File::options().create(true).append(true).open(log) else {
+        std::process::exit(1)
+    };
+    let err = file.try_clone().map(Stdio::from).unwrap_or_else(|_| Stdio::null());
+    let mut c = Command::new(&ctx().self_path);
+    c.args(["sync", "--auto"]).stdin(Stdio::null()).stdout(file).stderr(err);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let code = c.status().ok().and_then(|s| s.code()).unwrap_or(1);
+    std::process::exit(code)
 }
 
 // ── the hooks themselves ────────────────────────────────────────────────────
@@ -132,7 +168,7 @@ fn codex_hooks() -> PathBuf {
 fn our_command(tool: &str, event: &str) -> String {
     format!(
         "{} hook {tool} {event}",
-        shell_quote(&ctx().self_path.to_string_lossy())
+        command_path(&ctx().self_path.to_string_lossy())
     )
 }
 
@@ -323,6 +359,19 @@ fn launchd_plist() -> PathBuf {
         .join(format!("{LAUNCHD_LABEL}.plist"))
 }
 
+/// Windows: Task Scheduler's task.
+fn task_exists() -> bool {
+    run("schtasks", &["/Query", "/TN", UNIT])
+}
+
+fn timer_installed() -> bool {
+    if cfg!(windows) {
+        task_exists()
+    } else {
+        timer_file().exists()
+    }
+}
+
 fn timer_file() -> PathBuf {
     if cfg!(target_os = "macos") {
         launchd_plist()
@@ -332,7 +381,7 @@ fn timer_file() -> PathBuf {
 }
 
 fn run(program: &str, args: &[&str]) -> bool {
-    Command::new(program)
+    crate::ctx::quiet(program)
         .args(args)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -356,6 +405,25 @@ fn add_timer() -> Result<bool> {
     let me = ctx().self_path.to_string_lossy().into_owned();
     let log = log_file().to_string_lossy().into_owned();
     std::fs::create_dir_all(&ctx().state_dir)?;
+    if cfg!(windows) {
+        // conhost --headless: the task runs with no console window popping up every few minutes
+        let command = format!("conhost.exe --headless \"{me}\" sync --auto --log \"{log}\"");
+        return Ok(run(
+            "schtasks",
+            &[
+                "/Create",
+                "/F",
+                "/TN",
+                UNIT,
+                "/SC",
+                "MINUTE",
+                "/MO",
+                &EVERY_MIN.to_string(),
+                "/TR",
+                &command,
+            ],
+        ));
+    }
     if cfg!(target_os = "macos") {
         let env: String = carried_env()
             .iter()
@@ -399,6 +467,9 @@ fn add_timer() -> Result<bool> {
 }
 
 fn remove_timer() -> bool {
+    if cfg!(windows) {
+        return task_exists() && run("schtasks", &["/Delete", "/F", "/TN", UNIT]);
+    }
     let file = timer_file();
     if !file.exists() {
         return false;
@@ -425,7 +496,9 @@ fn user_id() -> String {
 }
 
 fn timer_name() -> String {
-    if cfg!(target_os = "macos") {
+    if cfg!(windows) {
+        format!("Task Scheduler: {UNIT}")
+    } else if cfg!(target_os = "macos") {
         format!("launchd: {LAUNCHD_LABEL}")
     } else {
         format!("systemd: {UNIT}.timer")
@@ -495,8 +568,8 @@ fn on() {
             name = timer_name(),
             cmd = format!(
                 "*/{EVERY_MIN} * * * * {} sync --auto >> {} 2>&1",
-                shell_quote(&ctx().self_path.to_string_lossy()),
-                shell_quote(&log_file().to_string_lossy())
+                command_path(&ctx().self_path.to_string_lossy()),
+                command_path(&log_file().to_string_lossy())
             )
         )),
         Err(e) => fail(&tr!("The timer: {err}", err = e)),
@@ -542,7 +615,7 @@ pub fn parts() -> Vec<(String, bool)> {
         .into_iter()
         .map(|(tool, label, file)| (tr!("{tool} hooks", tool = label), installed_in(&file, tool)))
         .collect();
-    out.push((tr!("timer ({name})", name = timer_name()), timer_file().exists()));
+    out.push((tr!("timer ({name})", name = timer_name()), timer_installed()));
     out
 }
 

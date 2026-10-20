@@ -51,7 +51,13 @@ fn open_ro(path: &Path) -> Result<Connection> {
 
 /// file:///a%20b → /a b
 fn uri_path(uri: &str) -> String {
-    let raw = uri.strip_prefix("file://").unwrap_or(uri).as_bytes();
+    let raw = uri.strip_prefix("file://").unwrap_or(uri);
+    // file:///C:/Users/me is C:\Users\me
+    let raw = match raw.strip_prefix('/') {
+        Some(rest) if cfg!(windows) && crate::paths::is_windows_path(rest) => rest,
+        _ => raw,
+    }
+    .as_bytes();
     let mut out = Vec::with_capacity(raw.len());
     let mut i = 0;
     while i < raw.len() {
@@ -69,13 +75,15 @@ fn uri_path(uri: &str) -> String {
             }
         }
     }
-    String::from_utf8_lossy(&out).into_owned()
+    crate::paths::native(&String::from_utf8_lossy(&out))
 }
 
 fn path_uri(path: &str) -> String {
-    let mut out = String::from("file://");
-    for b in path.bytes() {
-        if b.is_ascii_alphanumeric() || b"/-_.~".contains(&b) {
+    let windows = crate::paths::is_windows_path(path);
+    let path = crate::paths::slashed(path);
+    let mut out = String::from(if windows { "file:///" } else { "file://" });
+    for (i, b) in path.bytes().enumerate() {
+        if b.is_ascii_alphanumeric() || b"/-_.~".contains(&b) || (windows && i == 1 && b == b':') {
             out.push(b as char);
         } else {
             out.push_str(&format!("%{b:02X}"));
@@ -328,7 +336,7 @@ fn add_to_cache(id: &str, summary: &Msg) -> Result<()> {
     data.extend(Msg::new().msg(1, &Msg::new().text(1, id).msg(2, summary)).done());
     let tmp = cache.with_extension("pb.actx-tmp");
     std::fs::write(&tmp, &data)?;
-    std::fs::set_permissions(&tmp, std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
+    crate::paths::make_private(&tmp)?;
     std::fs::rename(&tmp, &cache)?;
     Ok(())
 }
@@ -477,7 +485,14 @@ mod tests {
     #[test]
     fn paths_and_uris() {
         assert_eq!(path_uri("/home/a b/ñ"), "file:///home/a%20b/%C3%B1");
-        assert_eq!(uri_path("file:///home/a%20b/%C3%B1"), "/home/a b/ñ");
-        assert_eq!(uri_path(&path_uri("/x/100%/y")), "/x/100%/y");
+        assert_eq!(
+            uri_path("file:///home/a%20b/%C3%B1"),
+            crate::paths::native("/home/a b/ñ")
+        );
+        assert_eq!(uri_path(&path_uri("/x/100%/y")), crate::paths::native("/x/100%/y"));
+        assert_eq!(path_uri(r"C:\Users\a b\shop"), "file:///C:/Users/a%20b/shop");
+        if cfg!(windows) {
+            assert_eq!(uri_path("file:///C:/Users/a%20b/shop"), r"C:\Users\a b\shop");
+        }
     }
 }

@@ -47,7 +47,10 @@ pub fn version() -> Option<u8> {
         if !which("opencode") {
             return None;
         }
-        let out = Command::new("opencode").args(["session", "--help"]).output().ok()?;
+        let out = crate::ctx::command("opencode")
+            .args(["session", "--help"])
+            .output()
+            .ok()?;
         let help = [out.stdout, out.stderr].concat();
         Some(if memchr::memmem::find(&help, b"import").is_some() {
             2
@@ -104,7 +107,14 @@ pub fn local() -> Vec<Session> {
     .filter(|row| row.5 > 0)
     .map(|(id, title, dir, updated, n, _)| {
         let title = title.filter(|t| !t.is_empty()).unwrap_or_else(|| tr!("(untitled)"));
-        Session::local("opencode", id, title, dir, updated as f64 / 1000.0, n as u64)
+        Session::local(
+            "opencode",
+            id,
+            title,
+            crate::paths::native(&dir),
+            updated as f64 / 1000.0,
+            n as u64,
+        )
     })
     .collect()
 }
@@ -244,7 +254,7 @@ fn cmd(sub: &[&str], rest: &[&str], cwd: &str) -> Result<Command> {
     if !which("opencode") {
         return Err(Error(tr!("opencode is not installed on this machine")));
     }
-    let mut c = Command::new("opencode");
+    let mut c = crate::ctx::command("opencode");
     c.args(sub).args(&ctx().opencode_args).args(rest);
     c.current_dir(if Path::new(cwd).is_dir() {
         Path::new(cwd)
@@ -318,7 +328,7 @@ pub fn delete(sid: &str, cwd: &str) -> Result<()> {
 fn cli_version() -> &'static str {
     static VERSION: OnceLock<String> = OnceLock::new();
     VERSION.get_or_init(|| {
-        Command::new("opencode")
+        crate::ctx::command("opencode")
             .arg("--version")
             .output()
             .ok()

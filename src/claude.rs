@@ -4,7 +4,6 @@
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom, Write};
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, OnceLock};
 use std::time::{Duration, UNIX_EPOCH};
@@ -196,7 +195,7 @@ fn project_path(dirname: &str, head: &[u8], tail: &[u8]) -> (String, bool) {
         }
     }
     (
-        resolve_encoded(dirname).unwrap_or_else(|| dirname.replace('-', "/")),
+        resolve_encoded(dirname).unwrap_or_else(|| crate::paths::native(&dirname.replace('-', "/"))),
         false,
     )
 }
@@ -285,7 +284,7 @@ fn set_mtime(path: &Path, ts: f64) -> Result<()> {
 }
 
 fn private(path: &Path) -> Result<()> {
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    crate::paths::make_private(path)?;
     Ok(())
 }
 
@@ -470,7 +469,7 @@ pub fn turns<L: AsRef<[u8]>>(raw_lines: impl IntoIterator<Item = L>) -> Vec<Turn
 pub fn version() -> &'static str {
     static VERSION: OnceLock<String> = OnceLock::new();
     VERSION.get_or_init(|| {
-        std::process::Command::new("claude")
+        crate::ctx::command("claude")
             .arg("--version")
             .env_remove("CLAUDECODE")
             .output()

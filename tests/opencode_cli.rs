@@ -25,7 +25,7 @@ fn opencode_sync_and_convert() {
     let (title, dir, n) = opencode_sessions(&b)[OC_SID].clone();
     assert_eq!(
         (title.as_str(), dir.as_str(), n),
-        ("Fix the login form", clone.to_str().unwrap(), 3)
+        ("Fix the login form", slash(&clone).as_str(), 3)
     );
 
     let claude = claude_session(&b, &clone, &[("user", "hi"), ("assistant", "hello")], None); // so "convert to" has a choice
@@ -117,7 +117,7 @@ fn a_conversation_from_the_other_opencode_version_is_converted() {
     let (title, dir, n) = opencode_sessions(&b)[OC_SID].clone();
     assert_eq!(
         (title.as_str(), dir.as_str(), n),
-        ("Fix the login form", clone.to_str().unwrap(), 2)
+        ("Fix the login form", slash(&clone).as_str(), 2)
     ); // question + flattened answer
 }
 
@@ -128,7 +128,7 @@ fn opencode_syncs_automatically() {
     let (a, b, repo, clone, _) = setup(&w).unwrap();
     let out = b.actx(&["sync", "--auto"]);
     assert!(out.contains("↓") && out.contains("Fix the login form"), "{out}");
-    assert_eq!(opencode_sessions(&b)[OC_SID].1, clone.to_string_lossy());
+    assert_eq!(opencode_sessions(&b)[OC_SID].1, slash(&clone));
 
     opencode_continue(&a, &repo, "and on Windows?", "Use the Task Manager (desk)");
     assert!(a.actx(&["sync", "--auto"]).contains("↑"));

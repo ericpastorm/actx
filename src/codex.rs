@@ -176,7 +176,7 @@ pub fn preview(s: &Session) -> Vec<(String, String)> {
 pub fn version() -> &'static str {
     static VERSION: OnceLock<String> = OnceLock::new();
     VERSION.get_or_init(|| {
-        std::process::Command::new("codex")
+        crate::ctx::command("codex")
             .arg("--version")
             .output()
             .ok()
@@ -256,8 +256,7 @@ fn new_path(sid: &str) -> Result<PathBuf> {
 }
 
 fn finished(sid: String, title: &str, folder: &str, path: PathBuf) -> Result<Session> {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+    crate::paths::make_private(&path)?;
     set_title(&sid, title)?;
     let size = path.metadata()?.len();
     let mut s = Session::local("codex", sid, title.to_string(), folder.to_string(), epoch(&path), size);

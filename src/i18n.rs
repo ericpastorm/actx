@@ -176,6 +176,14 @@ pub static ES: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
             "actx necesita fzf (p. ej. sudo pacman -S fzf)",
         ),
         (
+            "{err}. The shared folder keeps its files online only: set it to «Always keep on this device» (or run: attrib +P \"<folder>\" /S /D)",
+            "{err}. La carpeta compartida solo guarda sus ficheros en línea: ponla en «Mantener siempre en este dispositivo» (o ejecuta: attrib +P \"<carpeta>\" /S /D)",
+        ),
+        (
+            "actx needs fzf (e.g. winget install fzf)",
+            "actx necesita fzf (p. ej. winget install fzf)",
+        ),
+        (
             "in {project} · pushed from {host} {ago}",
             "en {project} · subida desde {host} {ago}",
         ),

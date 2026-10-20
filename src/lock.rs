@@ -36,6 +36,14 @@ pub struct SharedLock {
 
 /// Is process `pid` (on this machine) still running?
 pub fn alive(pid: u32) -> bool {
+    if cfg!(windows) {
+        // tasklist prints the process as a CSV row when it exists, and an INFO line when not
+        return crate::ctx::quiet("tasklist")
+            .args(["/NH", "/FO", "CSV", "/FI", &format!("PID eq {pid}")])
+            .stderr(Stdio::null())
+            .output()
+            .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains(&format!("\"{pid}\"")));
+    }
     if Path::new("/proc/self").exists() {
         return Path::new(&format!("/proc/{pid}")).exists();
     }
