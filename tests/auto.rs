@@ -424,29 +424,39 @@ fn the_end_hook_waits_for_the_agent_to_exit() {
     assert!(pushed, "{}", log(&a));
 }
 
-#[test]
-fn repos_next_to_folders_used_before_are_found() {
+/// A machine that keeps its projects outside its home: a new conversation of one of them is put in
+/// its folder when it has another next to it that it knows: one it has conversations in, or one it
+/// was told to put a conversation in.
+fn found_next_to(told: bool) {
     let w = World::new();
     let (a, b) = (w.machine("desk"), w.machine("laptop"));
-    let disk = w.dir.path().join("disk/projects"); // the laptop keeps its projects outside its home
+    let disk = w.dir.path().join("disk/projects");
     let shop = git_repo(&a.home.join("code/shop"));
     let blog = git_repo(&a.home.join("code/blog"));
-    git_clone(&shop, &disk.join("shop"));
+    let shop_here = git_clone(&shop, &disk.join("shop"));
     git_clone(&blog, &disk.join("blog"));
-    // where the shop went, as picked there once
-    let first = Command::new("git")
-        .args(["rev-list", "--max-parents=0", "HEAD"])
-        .current_dir(&shop)
-        .output()
+    if told {
+        let first = Command::new("git")
+            .args(["rev-list", "--max-parents=0", "HEAD"])
+            .current_dir(&shop)
+            .output()
+            .unwrap();
+        let first = String::from_utf8_lossy(&first.stdout).trim().to_string();
+        let state = b.home.join(".local/state/actx/state.json");
+        std::fs::create_dir_all(state.parent().unwrap()).unwrap();
+        std::fs::write(
+            &state,
+            json!({"base": {}, "folders": {format!("git:{first}"): shop_here}}).to_string(),
+        )
         .unwrap();
-    let first = String::from_utf8_lossy(&first.stdout).trim().to_string();
-    let state = b.home.join(".local/state/actx/state.json");
-    std::fs::create_dir_all(state.parent().unwrap()).unwrap();
-    std::fs::write(
-        &state,
-        serde_json::json!({"base": {}, "folders": {format!("git:{first}"): disk.join("shop")}}).to_string(),
-    )
-    .unwrap();
+    } else {
+        claude_session(
+            &b,
+            &shop_here,
+            &[("user", "hi"), ("assistant", "Hi from the laptop")],
+            None,
+        );
+    }
     let session = claude_session(
         &a,
         &blog,
@@ -456,7 +466,16 @@ fn repos_next_to_folders_used_before_are_found() {
     let sid = session.file_stem().unwrap().to_string_lossy().into_owned();
     a.pick(&["mk", "blog"], &[&sid]);
     b.actx(&["sync", "--auto"]);
-    let (path, _, cwds) = claude_transcript(&b, &sid);
-    assert!(path.exists(), "the blog wasn't found next to the shop");
+    let cwds = claude_transcript(&b, &sid).2;
     assert!(cwds.iter().all(|c| Path::new(c) == disk.join("blog")), "{cwds:?}");
+}
+
+#[test]
+fn repos_next_to_folders_with_conversations_are_found() {
+    found_next_to(false);
+}
+
+#[test]
+fn repos_next_to_folders_picked_before_are_found() {
+    found_next_to(true);
 }

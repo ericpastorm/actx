@@ -96,8 +96,8 @@ Cuando una conversación llega por primera vez a un PC, actx busca:
 1. una carpeta que ya elegiste antes para ese repo;
 2. la misma ruta (relativa a tu home);
 3. la carpeta en la que estás, si es el mismo repo;
-4. cualquier clon o worktree del repo dentro de tu home (`ACTX_SCAN`), o junto a carpetas donde ya
-   puso conversaciones (proyectos en otro disco, por ejemplo), identificado por su **primer commit**,
+4. cualquier clon o worktree del repo dentro de tu home (`ACTX_SCAN`), o junto a carpetas con
+   conversaciones (proyectos en otro disco, por ejemplo), identificado por su **primer commit**,
    así que da igual la ruta o el nombre de la carpeta;
 5. si no, te pregunta una vez (con *aquí* como primera opción) y se acuerda.
 

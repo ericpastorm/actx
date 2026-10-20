@@ -1,7 +1,7 @@
 //! Git: identifying a repo (by its first commit) and finding its folder on this machine.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 
@@ -92,8 +92,8 @@ pub fn git_label(g: &Value) -> String {
     label
 }
 
-/// The repos on this machine: in your home (or ACTX_SCAN), and next to the folders conversations
-/// were put in before (projects kept on another disk, say).
+/// The repos on this machine: in your home (or ACTX_SCAN), and next to the folders it has
+/// conversations in or was told to put them in (projects kept on another disk, say).
 pub fn local_repos(st: &State) -> &'static Vec<GitId> {
     static REPOS: OnceLock<Vec<GitId>> = OnceLock::new();
     REPOS.get_or_init(|| {
@@ -122,17 +122,27 @@ pub fn local_repos(st: &State) -> &'static Vec<GitId> {
         for root in &ctx().scan_roots {
             walk(root, SCAN_DEPTH, &mut found);
         }
-        let mut near: Vec<&Path> = st
-            .folders
-            .values()
-            .filter_map(|f| Path::new(f).parent())
-            .filter(|p| !ctx().scan_roots.iter().any(|r| p.starts_with(r)))
+        // where this machine has conversations, and where it was told to put them
+        let mut used: Vec<String> = crate::harness::all_local().into_iter().map(|s| s.path).collect();
+        used.extend(st.folders.values().cloned());
+        used.sort();
+        used.dedup();
+        let mut near: Vec<PathBuf> = used
+            .iter()
+            .filter(|f| !f.is_empty() && !ctx().scan_roots.iter().any(|r| Path::new(f).starts_with(r)))
+            .filter_map(|f| {
+                let top = git_id(f).map_or_else(|| f.clone(), |g| g.top);
+                Path::new(&top).parent().map(Path::to_path_buf)
+            })
+            .filter(|p| p.parent().is_some()) // not /
             .collect();
         near.sort();
         near.dedup();
         for d in near {
-            walk(d, 1, &mut found);
+            walk(&d, 1, &mut found);
         }
+        found.sort_by(|a, b| a.top.cmp(&b.top));
+        found.dedup_by(|a, b| a.top == b.top);
         found
     })
 }
