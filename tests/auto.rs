@@ -285,7 +285,10 @@ fn doctor_and_completions() {
         "{out}"
     );
     assert!(out.contains("All good"), "{out}");
-    let out = Command::new(ACTX).args(["completions", "bash"]).output().unwrap();
+    let out = hidden(&mut Command::new(ACTX))
+        .args(["completions", "bash"])
+        .output()
+        .unwrap();
     assert!(String::from_utf8_lossy(&out.stdout).contains("actx"));
 }
 
@@ -375,7 +378,6 @@ fn opening_a_conversation_doesnt_change_it() {
 
 #[test]
 fn the_end_hook_waits_for_the_agent_to_exit() {
-    use std::os::unix::fs::PermissionsExt;
     let w = World::new();
     let (a, _b, _clone, sid) = setup(&w);
     let path = claude_transcript(&a, &sid).0;
@@ -397,21 +399,43 @@ fn the_end_hook_waits_for_the_agent_to_exit() {
     .unwrap();
     let bin = w.dir.path().join("bin");
     std::fs::create_dir(&bin).unwrap();
-    let agent = bin.join("claude");
-    std::fs::write(
-        &agent,
-        "#!/bin/sh\n\"$ACTX_BIN\" hook claude end < \"$1\"\nsleep 5\ncat \"$2\" >> \"$3\"\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&agent, std::fs::Permissions::from_mode(0o755)).unwrap();
-
-    let ok = a
-        .command(agent.to_str().unwrap())
-        .args([&payload, &late, &path])
-        .env("ACTX_BIN", ACTX)
-        .status()
-        .unwrap()
-        .success();
+    #[cfg(unix)]
+    let ok = {
+        use std::os::unix::fs::PermissionsExt;
+        let agent = bin.join("claude");
+        std::fs::write(
+            &agent,
+            "#!/bin/sh\n\"$ACTX_BIN\" hook claude end < \"$1\"\nsleep 5\ncat \"$2\" >> \"$3\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&agent, std::fs::Permissions::from_mode(0o755)).unwrap();
+        a.command(agent.to_str().unwrap())
+            .args([&payload, &late, &path])
+            .env("ACTX_BIN", ACTX)
+            .status()
+            .unwrap()
+            .success()
+    };
+    // Windows: cmd.exe under the name claude.exe is the agent: the hook runs from it, it goes on
+    // for a few seconds, and then writes the last message
+    #[cfg(windows)]
+    let ok = {
+        use std::os::windows::process::CommandExt;
+        let agent = bin.join("claude.exe");
+        std::fs::copy(r"C:\Windows\System32\cmd.exe", &agent).unwrap();
+        let script = format!(
+            "\"\"{ACTX}\" hook claude end < \"{}\" & ping -n 6 127.0.0.1 > nul & type \"{}\" >> \"{}\"\"",
+            payload.display(),
+            late.display(),
+            path.display()
+        );
+        a.command(agent.to_str().unwrap())
+            .args(["/S", "/C"])
+            .raw_arg(script)
+            .status()
+            .unwrap()
+            .success()
+    };
     assert!(ok);
     let stored = w.store().join("shop/claude").join(&sid).join("session.jsonl.zst");
     let pushed = (0..60).any(|_| {
@@ -436,7 +460,7 @@ fn found_next_to(told: bool) {
     let shop_here = git_clone(&shop, &disk.join("shop"));
     git_clone(&blog, &disk.join("blog"));
     if told {
-        let first = Command::new("git")
+        let first = hidden(&mut Command::new("git"))
             .args(["rev-list", "--max-parents=0", "HEAD"])
             .current_dir(&shop)
             .output()

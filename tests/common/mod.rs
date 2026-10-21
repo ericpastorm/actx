@@ -11,10 +11,65 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
+/// Windows: no console window for programs the tests start.
+pub fn hidden(c: &mut Command) -> &mut Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    c
+}
+
 pub const ACTX: &str = env!("CARGO_BIN_EXE_actx");
 
+/// `program` as a path where it's on the PATH (Windows: finding opencode.cmd and the like).
+pub fn resolve(program: &str) -> PathBuf {
+    let names: Vec<String> = if cfg!(windows) {
+        vec![
+            format!("{program}.exe"),
+            format!("{program}.cmd"),
+            format!("{program}.bat"),
+        ]
+    } else {
+        vec![program.to_string()]
+    };
+    std::env::var_os("PATH")
+        .and_then(|p| std::env::split_paths(&p).find_map(|d| names.iter().map(|n| d.join(n)).find(|f| f.is_file())))
+        .unwrap_or_else(|| PathBuf::from(program))
+}
+
+/// A path the way this machine writes it (Windows: no `/` left over from `join("a/b")`).
+pub fn native(path: &Path) -> PathBuf {
+    if cfg!(windows) {
+        PathBuf::from(path.to_string_lossy().replace('/', "\\"))
+    } else {
+        path.to_path_buf()
+    }
+}
+
 pub fn which(cmd: &str) -> bool {
-    std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(cmd).is_file()))
+    let names: Vec<String> = if cfg!(windows) {
+        vec![
+            cmd.to_string(),
+            format!("{cmd}.exe"),
+            format!("{cmd}.cmd"),
+            format!("{cmd}.bat"),
+        ]
+    } else {
+        vec![cmd.to_string()]
+    };
+    std::env::var_os("PATH")
+        .is_some_and(|p| std::env::split_paths(&p).any(|d| names.iter().any(|n| d.join(n).is_file())))
+}
+
+/// `canonicalize` without the `\\?\` prefix Windows adds.
+pub fn canon(path: &Path) -> PathBuf {
+    let p = path.canonicalize().unwrap();
+    match p.to_string_lossy().strip_prefix(r"\\?\") {
+        Some(rest) => PathBuf::from(rest),
+        None => p,
+    }
 }
 
 /// The installed opencode's major version (1 or 2), or None.
@@ -24,7 +79,10 @@ pub fn opencode_major() -> Option<u8> {
         if !which("opencode") {
             return None;
         }
-        let out = Command::new("opencode").args(["session", "--help"]).output().ok()?;
+        let out = hidden(&mut Command::new(resolve("opencode")))
+            .args(["session", "--help"])
+            .output()
+            .ok()?;
         let help = String::from_utf8_lossy(&[out.stdout, out.stderr].concat()).into_owned();
         Some(if help.contains("import") { 2 } else { 1 })
     })
@@ -48,7 +106,7 @@ pub struct World {
 impl World {
     pub fn new() -> World {
         // canonical (on macOS /var is a link to /private/var): actx compares real paths
-        let dir = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+        let dir = tempfile::tempdir_in(canon(&std::env::temp_dir())).unwrap();
         std::fs::create_dir(dir.path().join("store")).unwrap();
         World { dir }
     }
@@ -105,6 +163,23 @@ impl Machine {
             ("GIT_COMMITTER_EMAIL".into(), "t@t".into()),
             ("NO_COLOR".into(), "1".into()),
         ];
+        if cfg!(windows) {
+            // the home on Windows, and what programs need to start there at all
+            env.push(("USERPROFILE".into(), self.home.to_string_lossy().into_owned()));
+            for v in [
+                "SystemRoot",
+                "SYSTEMDRIVE",
+                "TEMP",
+                "TMP",
+                "PATHEXT",
+                "COMSPEC",
+                "windir",
+            ] {
+                if let Ok(value) = std::env::var(v) {
+                    env.push((v.into(), value));
+                }
+            }
+        }
         if opencode_major() == Some(2) {
             // never talk to a real opencode service (1.x has none)
             env.push(("ACTX_OPENCODE_ARGS".into(), "--standalone".into()));
@@ -113,8 +188,13 @@ impl Machine {
     }
 
     pub fn command(&self, program: &str) -> Command {
-        let mut c = Command::new(program);
-        c.env_clear()
+        let mut c = Command::new(if program == "opencode" {
+            resolve(program)
+        } else {
+            PathBuf::from(program)
+        });
+        hidden(&mut c)
+            .env_clear()
             .envs(self.env())
             .current_dir(&self.home)
             .stdin(Stdio::null());
@@ -168,7 +248,7 @@ impl Machine {
 pub fn git_repo(path: &Path) -> PathBuf {
     std::fs::create_dir_all(path).unwrap();
     let run = |args: &[&str]| {
-        let ok = Command::new("git")
+        let ok = hidden(&mut Command::new("git"))
             .args(args)
             .current_dir(path)
             .envs([
@@ -187,13 +267,13 @@ pub fn git_repo(path: &Path) -> PathBuf {
     // each its own first commit (empty ones made in the same second would be the same)
     let name = path.file_name().unwrap().to_string_lossy();
     run(&["commit", "-q", "--allow-empty", "-m", &format!("init {name}")]);
-    path.to_path_buf()
+    native(path)
 }
 
 pub fn git_clone(src: &Path, dest: &Path) -> PathBuf {
     std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
     assert!(
-        Command::new("git")
+        hidden(&mut Command::new("git"))
             .arg("clone")
             .arg("-q")
             .arg(src)
@@ -203,7 +283,7 @@ pub fn git_clone(src: &Path, dest: &Path) -> PathBuf {
             .status
             .success()
     );
-    dest.to_path_buf()
+    native(dest)
 }
 
 fn line(v: Value) -> String {
@@ -605,4 +685,9 @@ pub fn codex_threads(m: &Machine) -> std::collections::HashMap<String, (String, 
     let _ = child.kill();
     let _ = child.wait();
     out
+}
+
+/// A path with `/` separators, the way opencode keeps folders on Windows.
+pub fn slash(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
 }

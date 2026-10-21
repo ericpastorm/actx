@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -48,7 +48,7 @@ fn local_index() -> HashMap<String, Session> {
 
 fn cwd() -> String {
     std::env::current_dir()
-        .and_then(|p| p.canonicalize())
+        .and_then(|p| crate::paths::canonical(&p))
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default()
 }
@@ -127,7 +127,7 @@ const NET_FS: [&str; 10] = [
     "fuse.rclone",
     "fuse.s3fs",
 ];
-const SYNC_DIRS: [&str; 8] = [
+const SYNC_DIRS: [&str; 9] = [
     "Sync",
     "Dropbox",
     "Nextcloud",
@@ -136,6 +136,7 @@ const SYNC_DIRS: [&str; 8] = [
     "pCloudDrive",
     "MEGA",
     "SeaDrive",
+    "SynologyDrive",
 ];
 
 fn is_store(d: &Path) -> bool {
@@ -151,6 +152,25 @@ fn is_store(d: &Path) -> bool {
 
 /// Network shares mounted on this machine.
 fn network_mounts() -> Vec<String> {
+    if cfg!(windows) {
+        // mapped network drives (Z:\ → \\nas\share), from PowerShell
+        let out = crate::ctx::quiet("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Get-PSDrive -PSProvider FileSystem | Where-Object { $_.DisplayRoot } | ForEach-Object { $_.Root }",
+            ])
+            .stdin(Stdio::null())
+            .output()
+            .map(|o| o.stdout)
+            .unwrap_or_default();
+        return String::from_utf8_lossy(&out)
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect();
+    }
     if let Ok(mounts) = std::fs::read_to_string("/proc/mounts") {
         return mounts
             .lines()
@@ -272,7 +292,7 @@ pub fn init(args: Args) {
     if let Err(e) = made {
         die(&tr!("Can't create {path}: {err}", path = root.display(), err = e));
     }
-    let root = root.canonicalize().unwrap_or(root);
+    let root = crate::paths::canonical(&root).unwrap_or(root);
     let mut config = ctx().config.clone();
     config["root"] = json!(root.to_string_lossy());
     if let Some(lang) = &args.lang {
@@ -1256,19 +1276,30 @@ pub fn update() {
         ok(&tr!("This machine's version is newer than the shared one: uploaded it"));
         return;
     }
-    let tmp = me.with_file_name(".actx.new");
+    // Windows only runs files that end in .exe
+    let tmp = me.with_file_name(if cfg!(windows) { ".actx.new.exe" } else { ".actx.new" });
     let installed = (|| -> std::io::Result<String> {
-        use std::os::unix::fs::PermissionsExt;
         std::fs::write(&tmp, &new)?;
-        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))?;
-        let out = Command::new(&tmp).arg("--version").output()?;
+        crate::paths::make_executable(&tmp)?;
+        let out = crate::ctx::quiet(&tmp).arg("--version").output()?;
         let version = String::from_utf8_lossy(&out.stdout).trim().to_string();
         if !version.starts_with("actx ") {
             return Err(std::io::Error::other(format!("{} {version}", out.status)));
         }
         let when = std::fs::metadata(&shared)?.modified()?;
         std::fs::File::options().write(true).open(&tmp)?.set_modified(when)?; // so it doesn't look "newer" than the shared one
-        std::fs::rename(&tmp, &me)?;
+        if cfg!(windows) {
+            // a running .exe can be renamed but not replaced: move it out of the way first
+            let old = me.with_extension("old.exe");
+            let _ = std::fs::remove_file(&old);
+            std::fs::rename(&me, &old)?;
+            if let Err(e) = std::fs::rename(&tmp, &me) {
+                let _ = std::fs::rename(&old, &me);
+                return Err(e);
+            }
+        } else {
+            std::fs::rename(&tmp, &me)?;
+        }
         Ok(version)
     })();
     if let Err(e) = installed {
@@ -1426,7 +1457,7 @@ pub fn restore() {
 // ── doctor ──────────────────────────────────────────────────────────────────
 
 fn first_line(program: &str, args: &[&str]) -> Option<String> {
-    let out = Command::new(program).args(args).output().ok()?;
+    let out = crate::ctx::quiet(program).args(args).output().ok()?;
     let text = String::from_utf8_lossy(&[out.stdout, out.stderr].concat()).into_owned();
     text.lines()
         .next()

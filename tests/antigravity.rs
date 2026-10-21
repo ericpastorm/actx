@@ -301,7 +301,13 @@ fn claude_converts_to_antigravity_and_back() {
     assert_eq!(title, "Cat and colour (from Claude Code)");
     assert_eq!(
         uris,
-        serde_json::json!([format!("file://{}", repo.display())]).to_string()
+        // file:///C:/Users/me/shop on Windows
+        serde_json::json!([format!(
+            "file://{}{}",
+            if cfg!(windows) { "/" } else { "" },
+            slash(&repo)
+        )])
+        .to_string()
     );
     assert_eq!(texts_at(&raw, &[1]), [title.as_str()]);
     let cache = std::fs::read(home.join("jetbox_summaries_proto.pb")).unwrap();

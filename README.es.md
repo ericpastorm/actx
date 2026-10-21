@@ -31,7 +31,7 @@ portátil$  claude --resume …    # sigues donde lo dejaste
 - **Seguro.** Copias de seguridad antes de sobrescribir (`actx restore`), escrituras atómicas y un
   bloqueo en la carpeta compartida, y avisos de git cuando el código no cuadra (cambios sin commitear,
   otro commit).
-- **Un binario pequeño.** Escrito en Rust; solo necesita git y fzf. Linux y macOS. Interfaz en inglés y
+- **Un binario pequeño.** Escrito en Rust; solo necesita git y fzf. Linux, macOS y Windows. Interfaz en inglés y
   español.
 
 ## Instalación
@@ -48,6 +48,11 @@ cargo install --git https://github.com/ericpastorm/actx
 git clone https://github.com/ericpastorm/actx
 cd actx/packaging/aur && makepkg -si
 ```
+
+**Windows:** vale el mismo `cargo install` (con las
+[Build Tools de Visual Studio](https://visualstudio.microsoft.com/visual-cpp-build-tools/), que Rust pide de
+todos modos). `git` y `fzf` salen de winget: `winget install Git.Git junegunn.fzf`. Las conversaciones viajan
+entre Windows, Linux y macOS: las rutas de dentro se cambian entre `C:\Users\yo\tienda` y `/home/yo/tienda`.
 
 Para funcionar necesita `git` y [`fzf`](https://github.com/junegunn/fzf). En los PCs sin Rust, copia el
 binario desde uno que lo tenga: actx deja una copia en la carpeta compartida (`_bin/`), y `actx update` la
@@ -124,7 +129,8 @@ se guarda una copia en `~/.local/state/actx/backups/`.
   tiene mensajes más nuevos de otro PC, Claude Code o Codex te lo avisan (sal, ejecuta `actx sync` y
   vuelve a abrirla). Al terminar, se sube. Codex te pide revisar los hooks nuevos una vez: acéptalos en
   `/hooks`.
-- **un temporizador** cada 10 minutos (un timer de usuario de systemd en Linux, un LaunchAgent en macOS).
+- **un temporizador** cada 10 minutos (un timer de usuario de systemd en Linux, un LaunchAgent en macOS, una
+  tarea del Programador de tareas en Windows, sin ventana de consola).
   Es lo que mantiene opencode al día, y recoge lo que se les escape a los hooks.
 
 Cada ejecución es `actx sync --auto`: sube lo que ha cambiado y baja lo nuevo, pero como no pregunta,
@@ -204,7 +210,13 @@ no confiarías tu código.
   salvo entre opencode 1.x y 2.x, que pasa por la misma conversión. Para mezclar hace falta la misma
   versión de opencode.
 - opencode se maneja con su CLI: mientras importas una sesión, no la tengas abierta en opencode.
-- Linux y macOS (los dos probados en la CI). Windows no está soportado.
+- Linux y macOS (los dos probados en la CI) y Windows (los tests también pasan allí; aún no están en la CI). En Windows, actx no puede ver en qué carpeta corre
+  otro programa, así que mientras Codex u opencode estén abiertos, no baja encima de sus conversaciones
+  (Claude Code dice exactamente cuál tiene abierta, así que a él no le afecta). Los hooks se ejecutan en el
+  shell que usan allí Claude Code y Codex (Git Bash).
+- Las apps de sincronización de Windows con archivos bajo demanda (Synology Drive, OneDrive…) dejan los
+  ficheros solo en línea, y actx falla con `os error 395`. Pon la carpeta compartida en «Mantener siempre
+  en este dispositivo» (o `attrib +P "<carpeta>" /S /D`).
 
 ## Desarrollo
 

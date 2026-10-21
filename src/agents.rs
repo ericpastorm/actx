@@ -33,6 +33,7 @@ struct Running {
 fn tool_of(program: &str) -> Option<&'static str> {
     let name = Path::new(program).file_name()?.to_string_lossy().to_lowercase();
     let name = name.trim_start_matches('.').trim_end_matches(".js");
+    let name = name.trim_end_matches(".exe").trim_end_matches(".cmd");
     ["claude", "codex", "opencode"]
         .into_iter()
         .find(|t| name == *t || name.starts_with(&format!("{t}-")))
@@ -43,9 +44,11 @@ fn tool_of(program: &str) -> Option<&'static str> {
 /// or a wrapper script: sh <…>/claude.
 fn tool_of_command(args: &[&str]) -> Option<&'static str> {
     let first = *args.first()?;
-    let runtime = Path::new(first)
-        .file_name()
-        .is_some_and(|n| ["node", "bun", "sh", "bash", "dash", "zsh"].iter().any(|r| n == *r));
+    let runtime = Path::new(first).file_name().is_some_and(|n| {
+        let n = n.to_string_lossy().to_lowercase();
+        let n = n.trim_end_matches(".exe");
+        ["node", "bun", "sh", "bash", "dash", "zsh"].contains(&n)
+    });
     if runtime { tool_of(args.get(1)?) } else { tool_of(first) }
 }
 
@@ -77,7 +80,101 @@ fn processes() -> Vec<Proc> {
     out
 }
 
-#[cfg(not(target_os = "linux"))]
+/// Windows: (pid, parent pid, command line) of the processes that might be agents (or hooks'
+/// parents), from one PowerShell query. `only` is a pid to look up, or None for the agents.
+#[cfg(windows)]
+fn win_processes(only: Option<u32>) -> Vec<(u32, u32, String)> {
+    let filter = match only {
+        Some(pid) => format!("-Filter 'ProcessId={pid}'"),
+        None => String::new(),
+    };
+    let script = format!(
+        "Get-CimInstance Win32_Process {filter} | ForEach-Object {{ '{{0}}|{{1}}|{{2}}' -f $_.ProcessId, $_.ParentProcessId, $_.CommandLine }}"
+    );
+    let out = crate::ctx::quiet("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .stdin(std::process::Stdio::null())
+        .output();
+    String::from_utf8_lossy(&out.map(|o| o.stdout).unwrap_or_default())
+        .lines()
+        .filter_map(|l| {
+            let mut parts = l.trim().splitn(3, '|');
+            Some((
+                parts.next()?.parse().ok()?,
+                parts.next()?.parse().ok()?,
+                parts.next().unwrap_or("").to_string(),
+            ))
+        })
+        .collect()
+}
+
+/// The first two words of a Windows command line (`"C:\Program Files\x.exe" arg`).
+#[cfg(windows)]
+fn win_args(command: &str) -> Vec<String> {
+    let (mut args, mut cur, mut quoted) = (Vec::new(), String::new(), false);
+    for c in command.chars() {
+        match c {
+            '"' => quoted = !quoted,
+            c if c.is_whitespace() && !quoted => {
+                if !cur.is_empty() {
+                    args.push(std::mem::take(&mut cur));
+                }
+            }
+            c => cur.push(c),
+        }
+    }
+    if !cur.is_empty() {
+        args.push(cur);
+    }
+    args
+}
+
+/// Subcommands of the agents that aren't a conversation open in a terminal: actx's own
+/// `opencode session export`, the `opencode serve` helper it starts, `codex exec`…
+#[cfg(windows)]
+const NOT_INTERACTIVE: [&str; 14] = [
+    "serve",
+    "session",
+    "export",
+    "import",
+    "run",
+    "exec",
+    "auth",
+    "login",
+    "logout",
+    "models",
+    "stats",
+    "mcp",
+    "--version",
+    "--help",
+];
+
+#[cfg(windows)]
+fn processes() -> Vec<Proc> {
+    // a folder per process isn't available here: such an agent counts as open in any folder
+    win_processes(None)
+        .into_iter()
+        .filter_map(|(pid, _, command)| {
+            let all = win_args(&command);
+            if all
+                .iter()
+                .skip(1)
+                .any(|a| NOT_INTERACTIVE.contains(&a.to_lowercase().as_str()))
+            {
+                return None;
+            }
+            let args: Vec<&str> = all.iter().take(2).map(String::as_str).collect();
+            Some(Proc {
+                tool: tool_of_command(&args)?,
+                pid,
+                cwd: String::new(),
+                files: Vec::new(),
+            })
+        })
+        .collect()
+}
+
+#[cfg(all(not(target_os = "linux"), not(windows)))]
 fn processes() -> Vec<Proc> {
     // macOS and the BSDs: ps for the programs, lsof for their folders
     let ps = std::process::Command::new("ps").args(["-axo", "pid=,args="]).output();
@@ -164,7 +261,10 @@ pub fn in_use(s: &Session) -> bool {
 /// Is `s` open in a running Claude Code, Codex or opencode?
 pub fn in_use_by_agent(s: &Session) -> bool {
     let r = running();
-    let here = |p: &Proc| p.tool == s.harness && p.cwd == s.path;
+    // Windows can't tell which folder an agent runs in: Codex and opencode count as open in any
+    let here = |p: &Proc| {
+        p.tool == s.harness && (p.cwd == s.path || (cfg!(windows) && p.cwd.is_empty() && s.harness != "claude"))
+    };
     match s.harness {
         // its own list says exactly which; older versions without one: any Claude in that folder
         "claude" => {
@@ -181,7 +281,10 @@ pub fn in_use_by_agent(s: &Session) -> bool {
 /// The agent that started this process (a hook's caller): its pid. Hooks run directly or through a
 /// shell, so it looks a couple of parents up, and no further: an agent beyond that isn't the caller.
 pub fn calling_agent() -> Option<u32> {
+    #[cfg(unix)]
     let mut pid = std::os::unix::process::parent_id();
+    #[cfg(windows)]
+    let mut pid = parent_and_args(std::process::id())?.0;
     for _ in 0..3 {
         let (ppid, args) = parent_and_args(pid)?;
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -210,7 +313,13 @@ fn parent_and_args(pid: u32) -> Option<(u32, Vec<String>)> {
     Some((ppid, args))
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(windows)]
+fn parent_and_args(pid: u32) -> Option<(u32, Vec<String>)> {
+    let (_, ppid, command) = win_processes(Some(pid)).into_iter().next()?;
+    Some((ppid, win_args(&command)))
+}
+
+#[cfg(all(not(target_os = "linux"), not(windows)))]
 fn parent_and_args(pid: u32) -> Option<(u32, Vec<String>)> {
     let out = std::process::Command::new("ps")
         .args(["-o", "ppid=,args=", "-p", &pid.to_string()])

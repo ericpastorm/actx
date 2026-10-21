@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::io::{IsTerminal, Read, Write};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use chrono::{Local, TimeZone};
@@ -208,8 +208,26 @@ pub fn render(msgs: &[(String, String)], agent: &str) -> String {
 pub fn shell_quote(s: &str) -> String {
     if !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || "_./~+-".contains(c)) {
         s.to_string()
+    } else if cfg!(windows) {
+        // double quotes work in Git Bash, cmd and PowerShell alike (callers pass `/` paths)
+        format!("\"{}\"", s.replace('"', "\\\""))
     } else {
         format!("'{}'", s.replace('\'', r"'\''"))
+    }
+}
+
+/// A path to put in a command line: on Windows with `/`, which every shell understands
+/// (`C:\Users\me\actx.exe` is mangled by bash).
+pub fn command_path(path: &str) -> String {
+    if !cfg!(windows) {
+        return shell_quote(path);
+    }
+    let path = path.replace('\\', "/");
+    // `C:/Users/me/actx.exe` needs no quotes, and unquoted it also runs from PowerShell
+    if path.chars().all(|c| c.is_ascii_alphanumeric() || "_./~+-:".contains(c)) {
+        path
+    } else {
+        shell_quote(&path)
     }
 }
 
@@ -229,9 +247,13 @@ pub fn fzf(rows: &[Row], header: &str, multi: bool, preview: bool) -> Vec<String
             .collect();
     }
     if !crate::ctx::which("fzf") {
-        die(&tr!("actx needs fzf (e.g. sudo pacman -S fzf)"));
+        die(&if cfg!(windows) {
+            tr!("actx needs fzf (e.g. winget install fzf)")
+        } else {
+            tr!("actx needs fzf (e.g. sudo pacman -S fzf)")
+        });
     }
-    let mut cmd = Command::new("fzf");
+    let mut cmd = crate::ctx::console_command("fzf");
     cmd.args([
         "--ansi",
         "--delimiter=\t",
@@ -251,8 +273,8 @@ pub fn fzf(rows: &[Row], header: &str, multi: bool, preview: bool) -> Vec<String
             let _ = std::fs::write(f.path(), serde_json::to_string(&map).unwrap_or_default());
             let show = format!(
                 "{} _show {} {{1}}",
-                shell_quote(&ctx().self_path.to_string_lossy()),
-                shell_quote(&f.path().to_string_lossy())
+                command_path(&ctx().self_path.to_string_lossy()),
+                command_path(&f.path().to_string_lossy())
             );
             cmd.args([
                 "--preview",
