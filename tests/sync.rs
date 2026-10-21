@@ -18,11 +18,9 @@ fn setup(w: &World) -> (Machine, Machine, std::path::PathBuf, std::path::PathBuf
         Some("Cart fix"),
     );
     let sid = session.file_stem().unwrap().to_string_lossy().into_owned();
-    let out = a.pick(&["mk", "shop"], &[&sid]);
-    assert!(
-        out.contains("Project shop created") && out.contains("Cart fix"),
-        "{out}"
-    );
+    a.actx(&["mk", "shop"]);
+    let out = a.pick(&["add", "shop"], &[&sid]);
+    assert!(out.contains("Cart fix"), "{out}");
     (a, b, repo, clone, sid)
 }
 
@@ -190,7 +188,8 @@ fn sync_one_project_leaves_the_rest_pending() {
         &[("user", "sort notes"), ("assistant", "sorted")],
         Some("Notes"),
     );
-    a.pick(&["mk", "notes"], &[&other.file_stem().unwrap().to_string_lossy()]);
+    a.actx(&["mk", "notes"]);
+    a.pick(&["add", "notes"], &[&other.file_stem().unwrap().to_string_lossy()]);
     let out = b.actx(&["sync", "shop"]);
     assert!(
         out.contains("Cart fix") && !out.contains("Notes") && out.contains("1 pending in projects you didn't pick"),

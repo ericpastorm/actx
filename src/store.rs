@@ -14,6 +14,16 @@ use crate::tr;
 use crate::ui::{bold, die, warn};
 
 pub const COMP: &str = "zst";
+/// Reserved storage scope, hidden from older clients' project enumeration.
+pub const GENERAL: &str = "_general";
+
+pub fn collection_label(name: &str) -> String {
+    if name == GENERAL {
+        tr!("General (no project)")
+    } else {
+        name.to_string()
+    }
+}
 
 /// A stored file, decompressed (zstd, or gzip from actx versions running on Python < 3.14).
 pub fn open_read(path: &Path) -> Result<Box<dyn BufRead>> {
@@ -163,6 +173,14 @@ pub fn project_dirs(root: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+pub fn collection_dirs(root: &Path) -> Vec<PathBuf> {
+    let mut dirs = project_dirs(root);
+    if root.join(GENERAL).is_dir() {
+        dirs.push(root.join(GENERAL));
+    }
+    dirs
+}
+
 pub fn find_project(root: &Path, name: &str) -> Option<PathBuf> {
     project_dirs(root)
         .into_iter()
@@ -199,7 +217,7 @@ fn project_name(dir: &Path) -> String {
 
 pub fn stored_sessions(root: &Path) -> Vec<Session> {
     let mut out = Vec::new();
-    for project in project_dirs(root) {
+    for project in collection_dirs(root) {
         let pname = project_name(&project);
         for tool in names(&project).into_iter().filter(|n| !n.starts_with('.')) {
             for id in names(&project.join(&tool)).into_iter().filter(|n| !n.starts_with('.')) {
@@ -215,7 +233,7 @@ pub fn find_stored(root: &Path, harness: &str, id: &str) -> Option<Session> {
     if id.is_empty() || id.contains(['/', '\\']) || id.starts_with('.') {
         return None;
     }
-    project_dirs(root)
+    collection_dirs(root)
         .into_iter()
         .find_map(|p| stored_session(p.join(harness).join(id), &project_name(&p)))
 }
@@ -262,7 +280,7 @@ pub fn push_one(
             "v": 2, "harness": s.harness, "id": s.id, "title": s.title,
             "path": s.path, "rel": crate::paths::rel_home(&s.path), "home": ctx().home_str(),
             "host": ctx().host, "pushed_at": now(), "updated": pushed.updated, "weight": pushed.weight,
-            "files": pushed.files, "git": git,
+            "files": pushed.files, "git": if project == GENERAL { None } else { git },
         });
         std::fs::write(tmp.join("meta.json"), serde_json::to_string_pretty(&meta)?)?;
         std::fs::write(tmp.join("preview.txt"), &pushed.preview)?;
@@ -275,6 +293,9 @@ pub fn push_one(
     })();
     let _ = std::fs::remove_dir_all(&tmp);
     st.base.insert(s.key(), result?);
+    if project == GENERAL && Path::new(&s.path).is_dir() {
+        st.folders.insert(format!("session:{}", s.key()), s.path.clone());
+    }
     if let Some(prev) = remote.get(&s.key())
         && prev.project.as_deref() != Some(project)
     {

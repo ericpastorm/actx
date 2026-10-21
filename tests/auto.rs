@@ -33,7 +33,8 @@ fn setup(w: &World) -> (Machine, Machine, PathBuf, String) {
         Some("Cart fix"),
     );
     let sid = session.file_stem().unwrap().to_string_lossy().into_owned();
-    a.pick(&["mk", "shop"], &[&sid]);
+    a.actx(&["mk", "shop"]);
+    a.pick(&["add", "shop"], &[&sid]);
     (a, b, clone, sid)
 }
 
@@ -488,7 +489,8 @@ fn found_next_to(told: bool) {
         Some("Post"),
     );
     let sid = session.file_stem().unwrap().to_string_lossy().into_owned();
-    a.pick(&["mk", "blog"], &[&sid]);
+    a.actx(&["mk", "blog"]);
+    a.pick(&["add", "blog"], &[&sid]);
     b.actx(&["sync", "--auto"]);
     let cwds = claude_transcript(&b, &sid).2;
     assert!(cwds.iter().all(|c| Path::new(c) == disk.join("blog")), "{cwds:?}");

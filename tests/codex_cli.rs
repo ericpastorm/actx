@@ -18,7 +18,8 @@ fn setup(w: &World) -> (Machine, Machine, std::path::PathBuf, std::path::PathBuf
         Some("Cart fix"),
     );
     let sid = rollout_id(&rollout);
-    let out = a.pick(&["mk", "shop"], &[&sid]);
+    a.actx(&["mk", "shop"]);
+    let out = a.pick(&["add", "shop"], &[&sid]);
     assert!(out.contains("Cart fix"), "{out}");
     (a, b, repo, clone, sid)
 }
@@ -141,13 +142,15 @@ fn codex_import_keeps_latest_messages_and_is_visible_without_scanning() {
         None,
     );
     let sid = source.file_stem().unwrap().to_string_lossy();
-    let out = m.pick(&["cv"], &[&sid, "codex"]);
+    m.pick(&["add"], &[&sid]);
+    let out = m.pick(&["cv", "--general"], &[&sid, "codex"]);
     let new_id = out
         .split("codex resume ")
         .nth(1)
         .and_then(|s| s.split_whitespace().next())
         .expect(&out);
     let visible = codex_threads_from_state(&m);
+    assert!(w.store().join("_general/codex").join(new_id).join("meta.json").exists());
     assert_eq!(visible.len(), 2, "the original and the import must both be visible");
     assert_eq!(visible[new_id].1, 2, "Codex must reconstruct both imported exchanges");
     assert_eq!(visible[new_id].2, repo.to_string_lossy());

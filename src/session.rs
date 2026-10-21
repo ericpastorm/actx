@@ -59,6 +59,14 @@ impl Session {
         format!("{}:{}", self.harness, self.id)
     }
 
+    pub fn is_general(&self) -> bool {
+        self.project.as_deref() == Some(crate::store::GENERAL)
+    }
+
+    pub fn project_label(&self) -> String {
+        crate::store::collection_label(self.project.as_deref().unwrap_or_default())
+    }
+
     pub fn size_label(&self) -> String {
         if self.harness == "opencode" {
             format!("{} msgs", self.weight)

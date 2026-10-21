@@ -10,14 +10,15 @@ You work on a desktop and a laptop. `git pull` brings the code, but the conversa
 agent (everything it learned about the task) stays behind. actx brings it along:
 
 ```
-desktop$ actx mk shop          # create a project, pick the conversations that belong to it
+desktop$ actx mk shop          # create an empty project
+desktop$ actx add shop         # pick the conversations to save in it
 laptop$  actx sync             # pull them, and push whatever you continued here
 laptop$  claude --resume …     # carry on where you left off
 ```
 
 ## Features
 
-- **Projects you name, conversations you choose.** Only what you put in a project travels.
+- **Projects you name, conversations you choose.** Only conversations you explicitly add travel, in a project or in General.
 - **Path independent.** The repo can live at a different path on each machine (another clone, an
   IDE worktree…): actx finds it by its first commit and rewrites the paths inside the conversation.
 - **Two-way sync with conflict handling.** It remembers the last sync, so it knows what to push,
@@ -77,17 +78,46 @@ Then:
 
 | Command | What it does |
 |---|---|
-| `actx mk <project>` | Create a project (or open one) and pick conversations to save in it. Those that look like they belong (same folder, name in the title) come first. |
-| `actx sync [project]` | Push what you continued here, pull what's new. Pick the projects, or `--all`. |
+| `actx mk <project>` | Create an empty project. |
+| `actx add [project]` | Pick local conversations to save in an existing project. Without a project, save them in General. |
+| `actx delete [project]` | Pick shared copies to delete, across all projects and General or only the named project. Keeps local originals and projects, even when empty. |
+| `actx sync [project]` | Push what you continued here, pull what's new. Pick projects and General, or use `--all`. |
 | `actx` / `actx ls [project]` | Projects and the state of each conversation: `↑ push`, `↓ pull`, `↓ new`, `⚠ conflict`, `✓ synced`. |
 | `actx cv [project]` | Copy a conversation into another tool (Claude Code, opencode, Codex, Antigravity). |
-| `actx rm <project>` | Remove conversations from a project (nothing is deleted on your machines). |
+| `actx rm <project>` | Delete the whole project and its shared copies, after confirmation. Keeps local originals on every machine. |
 | `actx auto [on\|off]` | Automatic sync: hooks in Claude Code and Codex, and a timer. Plain `actx auto` shows how it's doing. |
 | `actx restore` | Put back a conversation from a backup. |
 | `actx doctor` | Check the shared folder, the tools and automatic sync. |
 | `actx update` | Install the newest actx found in the shared folder (for copies installed by hand). |
 
 Pickers: type to filter, <kbd>Tab</kbd> marks several, <kbd>Ctrl</kbd>+<kbd>A</kbd> all, <kbd>Enter</kbd> confirms.
+
+`mk` now only creates projects; use `add <project>` where you previously used `mk` to save
+conversations. Use `delete` to remove individual shared copies; `rm` now deletes a whole project.
+Existing saved projects keep working without migration.
+
+### General conversations
+
+Run `actx add` to save selected conversations without creating an actx project or a Git repository.
+On another machine, `actx sync` asks for a destination folder for each new General conversation.
+Choose an existing folder (including **other folder** to type any path); actx remembers it separately
+for each conversation on that machine, even when several came from the same original folder.
+Cancel to leave it pending. If a remembered folder no longer exists, sync asks again.
+
+Use `--general` with `sync`, `ls`, `cv` or `delete` to select only General. For example:
+
+```sh
+actx add                     # save selected local conversations in General
+actx sync --general          # download General conversations; choose destinations when needed
+actx ls --general            # see their state
+actx delete --general        # select shared copies to remove; keep local originals
+```
+
+Automatic sync skips General conversations that still need a destination, with a message in its
+log. Run an interactive sync once to choose it. Already present conversations stay in their local
+folder. A conversation belongs to one collection: adding it elsewhere moves its shared copy.
+All machines need an actx version with General support to sync these conversations; older clients
+continue seeing the existing projects.
 
 **Tip:** run `actx sync` inside the project (e.g. in your IDE's terminal): that project comes first,
 and new conversations of that repo go straight there.
@@ -171,6 +201,7 @@ an agent turn or making an inference request.
     claude/<session id>/        meta.json · preview.txt · session.jsonl.zst · extra.tar.zst
     opencode/<session id>/      meta.json · preview.txt · session.json.zst · child-*.json.zst
     codex/<session id>/         meta.json · preview.txt · rollout.jsonl.zst
+  _general/<tool>/<session id>/  General conversations, same payload layout
   _bin/actx-<arch>-<os>         a copy of actx, for `actx update` on copies installed by hand
   _bin/actx                     for machines on the old Python version: moves them to the above
 ```

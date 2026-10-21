@@ -11,7 +11,8 @@ fn setup(w: &World) -> Option<(Machine, Machine, std::path::PathBuf, std::path::
     let repo = git_repo(&a.home.join("code/web"));
     let clone = git_clone(&repo, &b.home.join("src/web-laptop"));
     opencode_import(&a, &opencode_fixture(&repo, major), &repo);
-    let out = a.pick(&["mk", "web"], &[OC_SID]);
+    a.actx(&["mk", "web"]);
+    let out = a.pick(&["add", "web"], &[OC_SID]);
     assert!(out.contains("Fix the login form"), "{out}");
     Some((a, b, repo, clone, major))
 }

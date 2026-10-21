@@ -65,7 +65,8 @@ fn conflict(w: &World) -> (Machine, Machine, PathBuf, PathBuf, String) {
         Some("Cart"),
     );
     let sid = path.file_stem().unwrap().to_str().unwrap().to_string();
-    a.pick(&["mk", "shop"], &[&sid]);
+    a.actx(&["mk", "shop"]);
+    a.pick(&["add", "shop"], &[&sid]);
     b.actx(&["sync"]);
     claude_continue(&path, &[("user", "coupons"), ("assistant", "Coupons on desk")], None);
     claude_continue(
@@ -148,7 +149,8 @@ fn an_agent_opened_while_waiting_for_the_lock_prevents_the_merge() {
         Some("Docs"),
     );
     let other_id = other.file_stem().unwrap().to_str().unwrap();
-    a.pick(&["mk", "shop"], &[other_id]);
+    a.actx(&["mk", "shop"]);
+    a.pick(&["add", "shop"], &[other_id]);
     b.actx(&["sync"]);
     claude_continue(
         &claude_transcript(&b, other_id).0,

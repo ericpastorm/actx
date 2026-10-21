@@ -54,7 +54,7 @@ pub fn merge_one(root: &Path, l: &mut Session, r: &Session, st: &mut State) -> R
     let tag = format!(
         "{} {} {} {}",
         paint("35", "⇄"),
-        pad(&project, 14),
+        pad(&crate::store::collection_label(&project), 14),
         harness_tag(r.harness),
         r.title
     );

@@ -17,8 +17,8 @@ use crate::paths::short;
 use crate::session::{Session, badge, status};
 use crate::state::{self, Backup, State};
 use crate::store::{
-    find_project, install_kind, modified, project_dirs, push_one, pushed_at, remove_stored, shared_binary, store_root,
-    stored_sessions, sync_self,
+    GENERAL, collection_dirs, collection_label, find_project, install_kind, modified, project_dirs, push_one,
+    pushed_at, remove_stored, shared_binary, store_root, stored_sessions, sync_self,
 };
 use crate::tr;
 use crate::turns::{COPY_SUFFIX, fit};
@@ -33,6 +33,7 @@ pub struct Args {
     pub folder: Option<String>,
     pub lang: Option<String>,
     pub all: bool,
+    pub general: bool,
     /// sync: an automatic run (no questions, output to a log)
     pub auto: bool,
     /// sync --auto: a process to wait for (the agent that just closed), seconds to wait, and a
@@ -61,7 +62,7 @@ fn session_preview(s: &Session) -> String {
     let body = if let Some(meta) = &s.meta {
         lines.push(dim(&tr!(
             "in {project} · pushed from {host} {ago}",
-            project = s.project.clone().unwrap_or_default(),
+            project = s.project_label(),
             host = jstr(meta, "host"),
             ago = ago(meta.get("pushed_at").and_then(Value::as_f64).unwrap_or(0.0)),
         )));
@@ -356,21 +357,44 @@ pub fn mk(args: Args) {
         let typed = ask(&tr!("Project name [{default}]:", default = default), false);
         if typed.is_empty() { default } else { typed }
     });
-    let valid = name.chars().next().is_some_and(|c| c.is_alphanumeric() || c == '_')
+    let valid = name.chars().next().is_some_and(|c| c.is_alphanumeric())
         && name.chars().all(|c| c.is_alphanumeric() || "_.-".contains(c));
     if !valid {
         die(&tr!("Invalid name: use letters, numbers, '-', '_' or '.'"));
     }
     let root = store_root(false).expect("a shared folder");
-    let name = match find_project(&root, &name) {
-        Some(p) => p.file_name().unwrap_or_default().to_string_lossy().into_owned(),
-        None => {
-            if let Err(e) = std::fs::create_dir(root.join(&name)) {
-                die(&e.to_string());
-            }
-            ok(&tr!("Project {name} created", name = bold(&name)));
-            name
+    let Some(_lock) = lock_store(&root) else { return };
+    if let Some(p) = find_project(&root, &name) {
+        println!(
+            "{}",
+            tr!(
+                "Project {name} already exists",
+                name = p.file_name().unwrap_or_default().to_string_lossy()
+            )
+        );
+    } else {
+        if let Err(e) = std::fs::create_dir(root.join(&name)) {
+            die(&e.to_string());
         }
+        ok(&tr!("Project {name} created", name = bold(&name)));
+    }
+    println!("{}", tr!("Next: {cmd}", cmd = bold(&format!("actx add {name}"))));
+}
+
+/// Add local conversations to an existing project, or to General when no project is named.
+pub fn add(args: Args) {
+    let root = store_root(false).expect("a shared folder");
+    let name = match args.project {
+        Some(wanted) => find_project(&root, &wanted)
+            .map(|p| p.file_name().unwrap_or_default().to_string_lossy().into_owned())
+            .unwrap_or_else(|| {
+                die(&tr!(
+                    "Project {name} doesn't exist. Create it with: {cmd}",
+                    name = wanted,
+                    cmd = format!("actx mk {wanted}")
+                ))
+            }),
+        None => GENERAL.to_string(),
     };
     let remote: HashMap<String, Session> = stored_sessions(&root).into_iter().map(|s| (s.key(), s)).collect();
     let mut st = state::load();
@@ -394,17 +418,11 @@ pub fn mk(args: Args) {
                 }
                 Some(r) => paint(
                     "35",
-                    &clip(
-                        &pad(
-                            &tr!("in {project}", project = r.project.clone().unwrap_or_default()),
-                            12,
-                        ),
-                        12,
-                    ),
+                    &clip(&pad(&tr!("in {project}", project = r.project_label()), 12), 12),
                 ),
                 None => " ".repeat(12),
             };
-            let star = if relevance(&name, s) > 0 {
+            let star = if name != GENERAL && relevance(&name, s) > 0 {
                 paint("33", "★")
             } else {
                 " ".into()
@@ -426,10 +444,17 @@ pub fn mk(args: Args) {
             }
         })
         .collect();
-    let header = tr!(
-        "{name} · ★ = looks like this project · TAB marks several · Enter saves",
-        name = name
-    );
+    let header = if name == GENERAL {
+        tr!(
+            "{name} · TAB marks several · Enter saves",
+            name = collection_label(&name)
+        )
+    } else {
+        tr!(
+            "{name} · ★ = looks like this project · TAB marks several · Enter saves",
+            name = name
+        )
+    };
     let keys: HashSet<String> = fzf(&rows, &header, true, true).into_iter().collect();
     let chosen: Vec<&Session> = ranked.iter().filter(|s| keys.contains(&s.key())).collect();
     if chosen.is_empty() {
@@ -438,7 +463,6 @@ pub fn mk(args: Args) {
     let mut todo = Vec::new();
     for s in chosen {
         if let Some(r) = remote.get(&s.key())
-            && r.project.as_deref() == Some(name.as_str())
             && matches!(
                 status(Some(s), Some(r), st.base.get(&s.key()).copied()),
                 "pull" | "conflict"
@@ -457,6 +481,10 @@ pub fn mk(args: Args) {
     }
     warn_dirty(&todo.iter().map(|s| s.path.clone()).collect());
     let Some(_lock) = lock_store(&root) else { return };
+    if name != GENERAL && find_project(&root, &name).is_none() {
+        warn(&tr!("Project {name} doesn't exist", name = name));
+        return;
+    }
     let now = crate::store::pushed_now(&root);
     for s in todo {
         if moved_on(&now, &s.key(), remote.get(&s.key()).map(pushed_at), &s.title) {
@@ -465,7 +493,12 @@ pub fn mk(args: Args) {
         match push_one(&root, &name, s, git_info(&s.path), &mut st, &remote) {
             Ok(moved) => {
                 let note = moved
-                    .map(|p| dim(&format!("  {}", tr!("(moved from {project})", project = p))))
+                    .map(|p| {
+                        dim(&format!(
+                            "  {}",
+                            tr!("(moved from {project})", project = collection_label(&p))
+                        ))
+                    })
                     .unwrap_or_default();
                 ok(&format!("{} {}{note}", harness_tag(s.harness), s.title));
             }
@@ -483,11 +516,15 @@ type Pending = (&'static str, Option<Session>, Session);
 
 /// Which projects to sync: the one you name, all of them (--all, or no terminal), or the ones you pick.
 fn pick_sync_projects(pending: &BTreeMap<String, Vec<Pending>>, args: &Args) -> Vec<String> {
-    if let Some(wanted) = &args.project {
+    let wanted = args
+        .general
+        .then_some(GENERAL.to_string())
+        .or_else(|| args.project.clone());
+    if let Some(wanted) = &wanted {
         return match pending.keys().find(|p| p.to_lowercase() == wanted.to_lowercase()) {
             Some(p) => vec![p.clone()],
             None => {
-                ok(&tr!("{project}: nothing to sync", project = wanted));
+                ok(&tr!("{project}: nothing to sync", project = collection_label(wanted)));
                 Vec::new()
             }
         };
@@ -508,7 +545,11 @@ fn pick_sync_projects(pending: &BTreeMap<String, Vec<Pending>>, args: &Args) -> 
     let newest = |p: &str| pending[p].iter().map(|(_, _, r)| r.updated).fold(0.0, f64::max);
     let mut order: Vec<&String> = pending.keys().collect();
     order.sort_by(|a, b| is_here(b).cmp(&is_here(a)).then(newest(b).total_cmp(&newest(a))));
-    let width = order.iter().map(|p| p.chars().count()).max().unwrap_or(0);
+    let width = order
+        .iter()
+        .map(|p| collection_label(p).chars().count())
+        .max()
+        .unwrap_or(0);
     let rows: Vec<Row> = order
         .iter()
         .map(|p| {
@@ -530,8 +571,8 @@ fn pick_sync_projects(pending: &BTreeMap<String, Vec<Pending>>, args: &Args) -> 
                 .collect();
             Row {
                 key: (*p).clone(),
-                line: format!("{mark} {}  {}", pad(p, width), counts.join("  ")),
-                preview: format!("{}\n\n{}", bold(p), listing.join("\n")),
+                line: format!("{mark} {}  {}", pad(&collection_label(p), width), counts.join("  ")),
+                preview: format!("{}\n\n{}", bold(&collection_label(p)), listing.join("\n")),
             }
         })
         .collect();
@@ -619,6 +660,27 @@ fn may_replace(l: &Session, args: &Args) -> bool {
     ))
 }
 
+/// General conversations have an explicit destination per conversation on this machine.
+/// Never infer it from the sender's cwd, Git repo, or another conversation's chosen folder.
+fn session_folder(r: &Session, st: &mut State, prompt: bool) -> Option<String> {
+    if !r.is_general() {
+        return resolve_folder(r.meta(), st).or_else(|| prompt.then(|| ask_folder(r.meta(), st)).flatten());
+    }
+    let key = format!("session:{}", r.key());
+    if let Some(folder) = st.folders.get(&key).filter(|p| Path::new(p).is_dir()) {
+        return Some(folder.clone());
+    }
+    if !prompt {
+        return None;
+    }
+    let mut scratch = st.clone();
+    let mut meta = r.meta().clone();
+    meta["git"] = Value::Null;
+    let folder = ask_folder(&meta, &mut scratch)?;
+    st.folders.insert(key, folder.clone());
+    Some(folder)
+}
+
 pub fn sync(args: Args) {
     let auto = args.auto;
     let root = if auto {
@@ -642,7 +704,7 @@ pub fn sync(args: Args) {
                 "{}",
                 tr!(
                     "No conversations in the shared folder yet. Start with: {cmd}",
-                    cmd = bold(&format!("actx mk <{}>", tr!("project")))
+                    cmd = bold("actx add")
                 )
             );
         }
@@ -676,7 +738,17 @@ pub fn sync(args: Args) {
         return;
     }
     let chosen = if auto {
-        pending.keys().cloned().collect()
+        pending
+            .keys()
+            .filter(|p| {
+                (!args.general || p.as_str() == GENERAL)
+                    && args
+                        .project
+                        .as_ref()
+                        .is_none_or(|name| p.to_lowercase() == name.to_lowercase())
+            })
+            .cloned()
+            .collect()
     } else {
         pick_sync_projects(&pending, &args)
     };
@@ -705,7 +777,7 @@ pub fn sync(args: Args) {
         if auto {
             warn(&tr!(
                 "{project} · «{title}» changed here and on {host}: run actx sync to decide",
-                project = r.project.clone().unwrap_or_default(),
+                project = r.project_label(),
                 title = r.title,
                 host = host,
             ));
@@ -713,7 +785,7 @@ pub fn sync(args: Args) {
         }
         warn(&tr!(
             "{project} · «{title}» changed here and on {host} since the last sync.",
-            project = r.project.clone().unwrap_or_default(),
+            project = r.project_label(),
             title = r.title,
             host = host,
         ));
@@ -761,15 +833,18 @@ pub fn sync(args: Args) {
         // if you already have it, it stays where it is; if it's new, find its place
         let folder = match &l {
             Some(l) if Path::new(&l.path).is_dir() => Some(l.path.clone()),
-            _ if auto => resolve_folder(r.meta(), &st), // nobody to ask: `actx sync` will
-            _ => resolve_folder(r.meta(), &st).or_else(|| ask_folder(r.meta(), &mut st)),
+            _ => session_folder(&r, &mut st, !auto),
         };
         match folder {
             Some(folder) => placed.push((l, r, folder)),
             None if !auto => warn(&tr!(
                 "{project} · «{title}»: I don't know which folder it goes in on this machine; skipping",
-                project = r.project.clone().unwrap_or_default(),
+                project = r.project_label(),
                 title = r.title,
+            )),
+            None if r.is_general() => say(&tr!(
+                "«{title}» needs a destination folder: run actx sync --general",
+                title = r.title
             )),
             None => {}
         }
@@ -797,7 +872,7 @@ pub fn sync(args: Args) {
                 Ok(_) => say(&format!(
                     "{} {} {} {}",
                     paint("33", "↑"),
-                    pad(&project, 14),
+                    pad(&collection_label(&project), 14),
                     harness_tag(r.harness),
                     r.title
                 )),
@@ -820,7 +895,7 @@ pub fn sync(args: Args) {
                     say(&format!(
                         "{} {} {} {}  {}",
                         paint("36", "↓"),
-                        pad(&project, 14),
+                        pad(&collection_label(&project), 14),
                         harness_tag(r.harness),
                         r.title,
                         dim(&format!("→ {}", short(folder)))
@@ -872,7 +947,14 @@ pub fn sync(args: Args) {
 
 pub fn ls(args: Args) {
     let root = store_root(false).expect("a shared folder");
-    let mut dirs = project_dirs(&root);
+    let mut dirs = if args.general {
+        collection_dirs(&root)
+            .into_iter()
+            .filter(|d| d.file_name().is_some_and(|n| n == GENERAL))
+            .collect()
+    } else {
+        collection_dirs(&root)
+    };
     if let Some(name) = &args.project {
         match find_project(&root, name) {
             Some(p) => dirs = vec![p],
@@ -884,6 +966,10 @@ pub fn ls(args: Args) {
         }
     }
     if dirs.is_empty() {
+        if args.general {
+            println!("{}", tr!("No General conversations yet. Save some with: actx add"));
+            return;
+        }
         println!(
             "{}",
             tr!(
@@ -919,7 +1005,7 @@ pub fn ls(args: Args) {
         } else {
             tr!("{n} conversation(s)", n = ss.len())
         };
-        println!("{}{}", bold(&name_of(d)), dim(&format!("  {count}")));
+        println!("{}{}", bold(&collection_label(&name_of(d))), dim(&format!("  {count}")));
         for r in &ss {
             let l = local.get(&r.key());
             let state = status(l, Some(r), st.base.get(&r.key()).copied());
@@ -952,6 +1038,7 @@ pub fn ls(args: Args) {
 
 // ── rm ──────────────────────────────────────────────────────────────────────
 
+/// Remove a whole project. Conversation selection belongs to `delete`.
 pub fn rm(args: Args) {
     let root = store_root(false).expect("a shared folder");
     let wanted = args.project.unwrap_or_default();
@@ -959,66 +1046,114 @@ pub fn rm(args: Args) {
         die(&tr!("Project {name} doesn't exist", name = wanted))
     };
     let pname = pdir.file_name().unwrap_or_default().to_string_lossy().into_owned();
-    let mut ss: Vec<Session> = stored_sessions(&root)
-        .into_iter()
-        .filter(|r| r.project.as_deref() == Some(pname.as_str()))
-        .collect();
-    ss.sort_by(|a, b| b.updated.total_cmp(&a.updated));
-    if ss.is_empty() {
-        if confirm(&tr!("{name} is empty. Delete it?", name = pname)) {
-            let _ = std::fs::remove_dir_all(&pdir);
-            ok(&tr!("Project {name} deleted", name = pname));
-        }
+    let snapshot = |sessions: Vec<Session>| -> BTreeMap<String, u64> {
+        sessions
+            .into_iter()
+            .filter(|r| r.project.as_deref() == Some(&pname))
+            .map(|r| (r.key(), pushed_at(&r).to_bits()))
+            .collect()
+    };
+    let before = snapshot(stored_sessions(&root));
+    if !confirm(&tr!(
+        "Delete project {name} and all its saved conversations ({n})? Local originals are kept.",
+        name = pname,
+        n = before.len()
+    )) {
         return;
     }
-    let rows: Vec<Row> = ss
+    let Some(_lock) = lock_store(&root) else { return };
+    if !pdir.is_dir() || snapshot(stored_sessions(&root)) != before {
+        warn(&tr!(
+            "Project {name} changed meanwhile: run actx rm again",
+            name = pname
+        ));
+        return;
+    }
+    if let Err(e) = std::fs::remove_dir_all(&pdir) {
+        fail(&e.to_string());
+        return;
+    }
+    let mut st = state::load();
+    for key in before.keys() {
+        st.base.remove(key);
+        st.folders.remove(&format!("session:{key}"));
+    }
+    save(&mut st);
+    ok(&tr!("Project {name} deleted", name = pname));
+}
+
+/// Remove selected shared copies, leaving both projects and local originals in place.
+pub fn delete(args: Args) {
+    let root = store_root(false).expect("a shared folder");
+    let scope = if args.general {
+        Some(GENERAL.to_string())
+    } else {
+        args.project.map(|name| {
+            find_project(&root, &name)
+                .map(|p| p.file_name().unwrap_or_default().to_string_lossy().into_owned())
+                .unwrap_or_else(|| die(&tr!("Project {name} doesn't exist", name = name)))
+        })
+    };
+    let mut sessions = stored_sessions(&root);
+    sessions.retain(|r| scope.as_ref().is_none_or(|p| r.project.as_ref() == Some(p)));
+    sessions.sort_by(|a, b| b.updated.total_cmp(&a.updated));
+    if sessions.is_empty() {
+        println!("{}", tr!("No saved conversations to delete"));
+        return;
+    }
+    let rows: Vec<Row> = sessions
         .iter()
         .map(|r| Row {
             key: r.key(),
             line: format!(
-                "{} {}  {}",
+                "{} {}  {}  {}",
                 harness_tag(r.harness),
                 local_time(r.updated, "%d %b %H:%M"),
-                r.title
+                r.title,
+                dim(&r.project_label())
             ),
             preview: session_preview(r),
         })
         .collect();
-    let header = tr!(
-        "Remove from {name} (nothing is deleted on your machines) · TAB marks several",
-        name = pname
-    );
-    let keys: HashSet<String> = fzf(&rows, &header, true, true).into_iter().collect();
-    let chosen: Vec<&Session> = ss.iter().filter(|r| keys.contains(&r.key())).collect();
-    if chosen.is_empty() {
-        return;
-    }
-    let everything = chosen.len() == ss.len();
-    let question = if everything {
-        tr!("Delete the whole project {name}?", name = pname)
-    } else {
-        tr!("Remove {n} from {name}?", n = chosen.len(), name = pname)
-    };
-    if !confirm(&question) {
+    let keys: HashSet<String> = fzf(
+        &rows,
+        &tr!("Delete saved conversations · local originals are kept · TAB marks several"),
+        true,
+        true,
+    )
+    .into_iter()
+    .collect();
+    let chosen: Vec<&Session> = sessions.iter().filter(|r| keys.contains(&r.key())).collect();
+    if chosen.is_empty()
+        || !confirm(&tr!(
+            "Delete {n} saved conversation(s)? Local originals and projects are kept.",
+            n = chosen.len()
+        ))
+    {
         return;
     }
     let Some(_lock) = lock_store(&root) else { return };
+    let current: HashMap<String, Session> = stored_sessions(&root).into_iter().map(|r| (r.key(), r)).collect();
+    let now = current.iter().map(|(key, r)| (key.clone(), pushed_at(r))).collect();
     let mut st = state::load();
-    for r in &chosen {
-        if let Err(e) = remove_stored(r) {
-            fail(&format!("{}: {e}", r.title));
+    let mut removed = 0;
+    for r in chosen {
+        if moved_on(&now, &r.key(), Some(pushed_at(r)), &r.title)
+            || current.get(&r.key()).is_none_or(|c| c.project != r.project)
+        {
+            continue;
         }
-        st.base.remove(&r.key());
-    }
-    if everything {
-        let _ = std::fs::remove_dir_all(&pdir);
+        match remove_stored(r) {
+            Ok(()) => {
+                st.base.remove(&r.key());
+                st.folders.remove(&format!("session:{}", r.key()));
+                removed += 1;
+            }
+            Err(e) => fail(&format!("{}: {e}", r.title)),
+        }
     }
     save(&mut st);
-    ok(&if everything {
-        tr!("Project {name} deleted", name = pname)
-    } else {
-        tr!("Removed {n}", n = chosen.len())
-    });
+    ok(&tr!("Removed {n}", n = removed));
 }
 
 // ── cv ──────────────────────────────────────────────────────────────────────
@@ -1058,8 +1193,7 @@ fn convert_one(s: &Session, target: &str, st: &mut State) -> crate::ctx::Result<
     use crate::ctx::Error;
     let source = harness::get(s.harness);
     let (folder, (turns, model)) = if let Some(meta) = &s.meta {
-        let folder = resolve_folder(meta, st)
-            .or_else(|| ask_folder(meta, st))
+        let folder = session_folder(s, st, true)
             .ok_or_else(|| Error(tr!("I don't know which folder it goes in on this machine")))?;
         let fix = fixer_for(meta, &folder);
         let turns = source.stored_turns(s, fix.as_ref())?;
@@ -1101,7 +1235,8 @@ pub fn cv(args: Args) {
             .filter(|(k, _)| !have.contains(*k))
             .map(|(_, r)| r.clone()),
     );
-    if let Some(name) = &args.project {
+    let scope = args.general.then_some(GENERAL.to_string()).or(args.project);
+    if let Some(name) = &scope {
         let name = name.to_lowercase();
         candidates.retain(|s| {
             remote
@@ -1111,7 +1246,7 @@ pub fn cv(args: Args) {
         if candidates.is_empty() {
             die(&tr!(
                 "No conversations in project {name}",
-                name = args.project.clone().unwrap_or_default()
+                name = collection_label(&name)
             ));
         }
     }
@@ -1134,10 +1269,7 @@ pub fn cv(args: Args) {
             };
             let mut details = format!("{place} · {} · {}", s.size_label(), ago(s.updated));
             if let Some(r) = remote.get(&s.key()) {
-                details += &format!(
-                    " · {}",
-                    tr!("in {project}", project = r.project.clone().unwrap_or_default())
-                );
+                details += &format!(" · {}", tr!("in {project}", project = r.project_label()));
             }
             Row {
                 key: s.key(),
@@ -1195,17 +1327,33 @@ pub fn cv(args: Args) {
         {
             // the copy travels with its project
             let project = r.project.clone().unwrap_or_default();
-            let _lock = lock_store(root);
-            note = match push_one(root, &project, &new, git_info(&new.path), &mut st, &HashMap::new()) {
-                Ok(_) => dim(&format!("  {}", tr!("(also saved in {project})", project = project))),
-                Err(e) => paint(
-                    "31",
-                    &format!(
-                        "  {}",
-                        tr!("(couldn't save it in {project}: {err})", project = project, err = e)
-                    ),
-                ),
-            };
+            if let Some(_lock) = lock_store(root) {
+                if crate::store::find_stored(root, r.harness, &r.id).is_some_and(|current| current.project == r.project)
+                {
+                    note = match push_one(root, &project, &new, git_info(&new.path), &mut st, &HashMap::new()) {
+                        Ok(_) => dim(&format!(
+                            "  {}",
+                            tr!("(also saved in {project})", project = collection_label(&project))
+                        )),
+                        Err(e) => paint(
+                            "31",
+                            &format!(
+                                "  {}",
+                                tr!(
+                                    "(couldn't save it in {project}: {err})",
+                                    project = collection_label(&project),
+                                    err = e
+                                )
+                            ),
+                        ),
+                    };
+                } else {
+                    warn(&tr!(
+                        "«{title}» changed in the shared folder meanwhile: run actx sync again",
+                        title = r.title
+                    ));
+                }
+            }
         }
         ok(&format!(
             "{} → {} {}{note}",

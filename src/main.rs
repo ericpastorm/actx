@@ -39,6 +39,13 @@ fn language() -> String {
 
 fn cli() -> Command {
     let project = || Arg::new("project").value_name(tr!("project"));
+    let general = || {
+        Arg::new("general")
+            .long("general")
+            .action(ArgAction::SetTrue)
+            .conflicts_with("project")
+            .help(tr!("only General conversations (no project)"))
+    };
     Command::new("actx")
         .about(i18n::translate(i18n::HELP, &[]))
         .version(VERSION)
@@ -65,22 +72,32 @@ fn cli() -> Command {
                         .help(tr!("interface language")),
                 ),
         )
+        .subcommand(Command::new("mk").about(tr!("create an empty project")).arg(project()))
         .subcommand(
-            Command::new("mk")
-                .about(tr!("create a project / save conversations in it"))
-                .arg(project()),
+            Command::new("add")
+                .about(tr!("save conversations in a project, or in General when omitted"))
+                .arg(project())
+                .arg(general()),
+        )
+        .subcommand(
+            Command::new("delete")
+                .about(tr!("delete selected shared copies; keep local originals and projects"))
+                .arg(project())
+                .arg(general()),
         )
         .subcommand(
             Command::new("sync")
                 .about(tr!("push what you continued here and pull what's new"))
                 .arg(project().help(tr!("only this project (otherwise a picker shows up)")))
+                .arg(general())
                 .arg(
                     Arg::new("all")
                         .short('a')
                         .long("all")
                         .alias("todo")
+                        .conflicts_with("general")
                         .action(ArgAction::SetTrue)
-                        .help(tr!("all projects, no questions")),
+                        .help(tr!("all projects and General, without the project picker")),
                 )
                 .arg(
                     Arg::new("auto")
@@ -106,17 +123,19 @@ fn cli() -> Command {
         .subcommand(
             Command::new("ls")
                 .about(tr!("show projects and their state"))
-                .arg(project()),
+                .arg(project())
+                .arg(general()),
         )
         .subcommand(
             Command::new("rm")
-                .about(tr!("remove conversations from a project"))
+                .about(tr!("delete a project and its shared copies; keep local originals"))
                 .arg(project().required(true)),
         )
         .subcommand(
             Command::new("cv")
                 .about(tr!("copy a conversation into another tool"))
-                .arg(project().help(tr!("only this project's"))),
+                .arg(project().help(tr!("only this project's")))
+                .arg(general()),
         )
         .subcommand(
             Command::new("auto")
@@ -183,12 +202,23 @@ fn main() {
             project: get(m, "project"),
             ..Default::default()
         }),
+        Some(("add", m)) => commands::add(Args {
+            project: get(m, "project"),
+            general: m.get_flag("general"),
+            ..Default::default()
+        }),
+        Some(("delete", m)) => commands::delete(Args {
+            project: get(m, "project"),
+            general: m.get_flag("general"),
+            ..Default::default()
+        }),
         Some(("sync", m)) if m.get_one::<String>("log").is_some() => {
             auto::run_logged(m.get_one::<String>("log").map(String::as_str).unwrap_or_default())
         }
         Some(("sync", m)) => commands::sync(Args {
             project: get(m, "project"),
             all: m.get_flag("all"),
+            general: m.get_flag("general"),
             auto: m.get_flag("auto"),
             delay: m.get_one::<u64>("delay").copied().unwrap_or(0),
             after: m.get_one::<u32>("after").copied(),
@@ -197,6 +227,7 @@ fn main() {
         }),
         Some(("ls", m)) => commands::ls(Args {
             project: get(m, "project"),
+            general: m.get_flag("general"),
             ..Default::default()
         }),
         Some(("rm", m)) => commands::rm(Args {
@@ -205,6 +236,7 @@ fn main() {
         }),
         Some(("cv", m)) => commands::cv(Args {
             project: get(m, "project"),
+            general: m.get_flag("general"),
             ..Default::default()
         }),
         Some(("update", _)) => commands::update(),
@@ -225,7 +257,7 @@ fn main() {
             println!(
                 "{}",
                 ui::dim(&format!(
-                    "actx mk <{p}> · actx sync · actx ls · actx rm <{p}> · actx cv · actx auto · actx -h"
+                    "actx mk <{p}> · actx add · actx delete · actx sync · actx ls · actx rm <{p}> · actx cv · actx auto · actx -h"
                 ))
             );
         }

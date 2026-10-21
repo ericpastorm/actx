@@ -11,14 +11,15 @@ Trabajas en un sobremesa y un portátil. `git pull` te trae el código, pero la 
 agente (todo lo que aprendió sobre la tarea) se queda atrás. actx se la lleva:
 
 ```
-sobremesa$ actx mk tienda       # creas un proyecto y eliges qué conversaciones van en él
+sobremesa$ actx mk tienda       # creas un proyecto vacío
+sobremesa$ actx add tienda      # eliges qué conversaciones guardar en él
 portátil$  actx sync            # las bajas, y subes lo que hayas seguido aquí
 portátil$  claude --resume …    # sigues donde lo dejaste
 ```
 
 ## Qué hace
 
-- **Proyectos con nombre, conversaciones que eliges tú.** Solo viaja lo que metes en un proyecto.
+- **Proyectos con nombre, conversaciones que eliges tú.** Solo viajan las conversaciones que añades, a un proyecto o a General.
 - **No depende de las rutas.** El repo puede estar en otra ruta en cada PC (otro clon, un worktree de
   tu IDE…): actx lo encuentra por su primer commit y cambia las rutas dentro de la conversación.
 - **Sincroniza en los dos sentidos y gestiona conflictos.** Recuerda la última sincronización, así
@@ -78,17 +79,45 @@ Y luego:
 
 | Comando | Qué hace |
 |---|---|
-| `actx mk <proyecto>` | Crea un proyecto (o abre uno) y eliges qué conversaciones guardar. Salen primero las que parecen suyas (misma carpeta, el nombre en el título). |
+| `actx mk <proyecto>` | Crea un proyecto vacío. |
+| `actx add [proyecto]` | Elige conversaciones locales para guardarlas en un proyecto existente. Si lo omites, se guardan en General. |
+| `actx delete [proyecto]` | Elige copias compartidas para borrar, de todos los proyectos y General o solo del proyecto indicado. Conserva originales locales y proyectos, aunque queden vacíos. |
 | `actx sync [proyecto]` | Sube lo que has seguido aquí y baja lo nuevo. Eliges los proyectos, o `--all`. |
 | `actx` / `actx ls [proyecto]` | Proyectos y estado de cada conversación: `↑ subir`, `↓ bajar`, `↓ nueva`, `⚠ conflicto`, `✓ al día`. |
 | `actx cv [proyecto]` | Copia una conversación a otro programa (Claude Code, opencode, Codex, Antigravity). |
-| `actx rm <proyecto>` | Quita conversaciones de un proyecto (en tus PCs no se borra nada). |
+| `actx rm <proyecto>` | Borra el proyecto completo y sus copias compartidas, previa confirmación. Conserva los originales locales en todos los equipos. |
 | `actx auto [on\|off]` | Sincronización automática: hooks en Claude Code y Codex, y un temporizador. `actx auto` a secas dice cómo va. |
 | `actx restore` | Recupera una conversación de una copia de seguridad. |
 | `actx doctor` | Comprueba la carpeta compartida, los programas y la sincronización automática. |
 | `actx update` | Instala la última versión de actx que haya en la carpeta compartida (si lo copiaste a mano). |
 
 Selectores: escribe para filtrar, <kbd>Tab</kbd> marca varias, <kbd>Ctrl</kbd>+<kbd>A</kbd> todas, <kbd>Enter</kbd> confirma.
+
+`mk` ahora solo crea proyectos: para guardar conversaciones, usa `add <proyecto>`.
+`delete` quita conversaciones concretas; `rm` borra el proyecto completo.
+Los proyectos que ya tenías guardados siguen funcionando sin migración.
+
+### Conversaciones generales
+
+`actx add` permite guardar conversaciones sin crear un proyecto de actx ni un repositorio Git.
+Al sincronizar en otro equipo, actx pregunta la carpeta de destino de cada conversación nueva de
+General. Puedes elegir una carpeta existente o **otra carpeta** e introducir cualquier ruta.
+El destino se recuerda por conversación y equipo, aunque varias procedan de la misma carpeta.
+Si cancelas, queda pendiente; si la carpeta recordada desaparece, vuelve a preguntar.
+
+```sh
+actx add                     # guarda conversaciones seleccionadas en General
+actx sync --general          # descarga General y pregunta los destinos que falten
+actx ls --general            # muestra su estado
+actx delete --general        # borra copias compartidas; conserva originales locales
+```
+
+También puedes usar `cv --general` para convertir solo conversaciones guardadas en General.
+La sincronización automática deja pendientes las que necesitan destino y lo indica en el log;
+ejecuta una sincronización interactiva para elegirlo. Las conversaciones que ya están en el equipo
+conservan su carpeta local. Añadir una conversación a otra colección mueve su copia compartida.
+Todos los equipos deben usar una versión con soporte para General para sincronizar esas conversaciones;
+las versiones anteriores siguen viendo los proyectos existentes.
 
 **Truco:** lanza `actx sync` dentro del proyecto (p. ej. en la terminal de tu IDE): ese proyecto sale
 el primero, y las conversaciones nuevas de ese repo van directamente ahí.
