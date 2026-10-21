@@ -286,7 +286,7 @@ pub fn push(s: &Session, tmp: &Path) -> Result<Pushed> {
     let dir = src
         .parent()
         .and_then(|d| d.strip_prefix(ctx().codex_sessions()).ok())
-        .map(|d| d.to_string_lossy().into_owned())
+        .map(|d| crate::paths::slashed(&d.to_string_lossy()))
         .unwrap_or_default();
     let files = json!({"session": session, "name": src.file_name().unwrap_or_default().to_string_lossy(), "dir": dir});
     let updated = epoch(src);
@@ -301,9 +301,17 @@ pub fn push(s: &Session, tmp: &Path) -> Result<Pushed> {
     })
 }
 
+/// ~/.codex/sessions/<dir>, where `dir` (2026/10/16) may have been stored by a machine whose
+/// separator is `\`: it's a path of its own folders, not one name.
+fn sessions_dir(dir: &str) -> PathBuf {
+    let mut p = ctx().codex_sessions();
+    p.extend(dir.split(['/', '\\']).filter(|c| !c.is_empty() && *c != ".."));
+    p
+}
+
 pub fn install(r: &Session, local: Option<&Session>, _folder: &str, fix: Fix) -> Result<u64> {
     let files = &r.meta()["files"];
-    let dir = ctx().codex_sessions().join(jstr(files, "dir"));
+    let dir = sessions_dir(jstr(files, "dir"));
     std::fs::create_dir_all(&dir)?;
     let dest = dir.join(jstr(files, "name"));
     let local_src = local.and_then(|l| l.src.clone());
@@ -468,6 +476,16 @@ pub fn branch_copy(r: &Session, folder: &str, fix: Fix, title: &str) -> Result<S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stored_dir_is_folders_whatever_its_separator() {
+        let base = ctx().codex_sessions();
+        let expected = base.join("2026").join("10").join("16");
+        assert_eq!(sessions_dir("2026/10/16"), expected);
+        assert_eq!(sessions_dir("2026\\10\\16"), expected, "stored by Windows");
+        assert_eq!(sessions_dir(""), base);
+        assert_eq!(sessions_dir("../../x"), base.join("x"), "never outside sessions");
+    }
 
     fn l(kind: &str, payload: Value) -> String {
         json!({"timestamp": "2026-01-01T10:00:00.000Z", "type": kind, "payload": payload}).to_string()
