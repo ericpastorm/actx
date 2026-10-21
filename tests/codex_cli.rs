@@ -27,6 +27,17 @@ fn rollout_of(m: &Machine, sid: &str) -> std::path::PathBuf {
     find(&m.codex_sessions(), &format!("{sid}.jsonl")).expect("the rollout is there")
 }
 
+/// Compare message text after decoding JSON: Windows paths contain escaped backslashes on disk.
+fn message_texts(rollout: &str) -> Vec<String> {
+    rollout
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .filter(|entry| entry["type"] == "response_item" && entry["payload"]["type"] == "message")
+        .flat_map(|entry| entry["payload"]["content"].as_array().cloned().unwrap_or_default())
+        .filter_map(|content| content["text"].as_str().map(String::from))
+        .collect()
+}
+
 #[test]
 fn codex_sync_between_different_paths() {
     needs!("codex");
@@ -37,7 +48,7 @@ fn codex_sync_between_different_paths() {
     let text = std::fs::read_to_string(&path).unwrap();
     let first: serde_json::Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
     assert_eq!(first["payload"]["cwd"], clone.to_string_lossy().as_ref());
-    assert!(text.contains(&format!("Done in {}/cart.ts", clone.display())));
+    assert!(message_texts(&text).contains(&format!("Done in {}/cart.ts", clone.display())));
     assert_eq!(
         codex_threads(&b)[&sid],
         ("fix the cart".into(), 1, clone.to_string_lossy().into_owned())
@@ -59,8 +70,10 @@ fn codex_sync_between_different_paths() {
     assert!(b.actx(&["sync"]).contains('↑'));
     a.actx(&["sync"]);
     let text = std::fs::read_to_string(rollout_of(&a, &sid)).unwrap();
+    let messages = message_texts(&text);
     assert!(
-        text.contains(&format!("Coupons in {}/coupons.ts", repo.display())) && !text.contains(clone.to_str().unwrap())
+        messages.contains(&format!("Coupons in {}/coupons.ts", repo.display()))
+            && !messages.iter().any(|message| message.contains(clone.to_str().unwrap()))
     );
     assert!(!a.actx(&["ls"]).contains("pending") && !b.actx(&["ls"]).contains("pending"));
 }

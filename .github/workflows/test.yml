@@ -42,4 +42,4 @@ jobs:
       - run: codex --version
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets -- -D warnings
-      - run: cargo test --locked
+      - run: cargo test --locked --no-fail-fast
