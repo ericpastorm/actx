@@ -82,6 +82,11 @@ fn query<T>(
 }
 
 pub fn local() -> Vec<Session> {
+    // Without a database there are no local sessions. In particular, don't start an npm shim
+    // just to discover its version every time another tool's conversations are listed or synced.
+    if !ctx().opencode_db.is_file() {
+        return Vec::new();
+    }
     let (sessions, messages, user) = if version() == Some(2) {
         ("session_v2", "session_message", "m.type = 'user'")
     } else {
