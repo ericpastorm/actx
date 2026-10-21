@@ -4,6 +4,8 @@
 mod agents;
 mod antigravity;
 mod auto;
+mod browser;
+mod catalog;
 mod claude;
 mod codex;
 mod commands;
@@ -55,6 +57,23 @@ fn cli() -> Command {
                 .help(tr!("Delete shared copies after inactivity; local originals are kept")),
         )
     };
+    let initialize = |name: &'static str, description: String| {
+        preferences(
+            Command::new(name)
+                .about(description)
+                .arg(
+                    Arg::new("folder")
+                        .value_name(tr!("folder"))
+                        .help(tr!("the shared folder (otherwise a picker shows up)")),
+                )
+                .arg(
+                    Arg::new("lang")
+                        .long("lang")
+                        .value_parser(["en", "es"])
+                        .help(tr!("interface language")),
+                ),
+        )
+    };
     let general = || {
         Arg::new("general")
             .long("general")
@@ -73,24 +92,24 @@ fn cli() -> Command {
                 .action(ArgAction::Version)
                 .help(tr!("show the version")),
         )
-        .subcommand(preferences(
-            Command::new("init")
-                .about(tr!("choose the shared folder"))
-                .arg(
-                    Arg::new("folder")
-                        .value_name(tr!("folder"))
-                        .help(tr!("the shared folder (otherwise a picker shows up)")),
-                )
-                .arg(
-                    Arg::new("lang")
-                        .long("lang")
-                        .value_parser(["en", "es"])
-                        .help(tr!("interface language")),
-                ),
+        .subcommand(initialize("init", tr!("choose the shared folder")))
+        .subcommand(initialize(
+            "setup",
+            tr!("Set up the shared folder and your harness profile"),
         ))
         .subcommand(preferences(
             Command::new("profile")
                 .about(tr!("Show or change harnesses and retention"))
+                .args_conflicts_with_subcommands(true)
+                .subcommand(Command::new("setup").about(tr!(
+                    "Configure harnesses, retention and opening preferences interactively"
+                )))
+                .arg(
+                    Arg::new("json")
+                        .long("json")
+                        .action(ArgAction::SetTrue)
+                        .help(tr!("Show the profile as JSON")),
+                )
                 .arg(
                     Arg::new("conversation")
                         .long("conversation")
@@ -152,6 +171,24 @@ fn cli() -> Command {
                 .about(tr!("show projects and their state"))
                 .arg(project())
                 .arg(general()),
+        )
+        .subcommand(
+            Command::new("browse")
+                .about(tr!("Browse conversations in one compact view"))
+                .arg(project())
+                .arg(general()),
+        )
+        .subcommand(
+            Command::new("resume")
+                .about(tr!("Sync a conversation and open it in a harness"))
+                .arg(project())
+                .arg(general())
+                .arg(
+                    Arg::new("print")
+                        .long("print")
+                        .action(ArgAction::SetTrue)
+                        .help(tr!("Print the resume command without launching the agent")),
+                ),
         )
         .subcommand(
             Command::new("rm")
@@ -220,7 +257,8 @@ fn main() {
     let matches = cli().get_matches();
     let get = |m: &clap::ArgMatches, name: &str| m.try_get_one::<String>(name).ok().flatten().cloned();
     match matches.subcommand() {
-        Some(("init", m)) => commands::init(Args {
+        Some((name @ ("init" | "setup"), m)) => commands::init(Args {
+            wizard: name == "setup",
             folder: get(m, "folder"),
             lang: get(m, "lang"),
             harnesses: get(m, "harnesses"),
@@ -228,6 +266,8 @@ fn main() {
             ..Default::default()
         }),
         Some(("profile", m)) => commands::profile(Args {
+            wizard: m.subcommand_name() == Some("setup"),
+            json: m.get_flag("json"),
             harnesses: get(m, "harnesses"),
             retention: get(m, "retention"),
             conversation: get(m, "conversation"),
@@ -265,6 +305,17 @@ fn main() {
             general: m.get_flag("general"),
             ..Default::default()
         }),
+        Some(("browse", m)) => browser::browse(Args {
+            project: get(m, "project"),
+            general: m.get_flag("general"),
+            ..Default::default()
+        }),
+        Some(("resume", m)) => browser::resume(Args {
+            project: get(m, "project"),
+            general: m.get_flag("general"),
+            print: m.get_flag("print"),
+            ..Default::default()
+        }),
         Some(("rm", m)) => commands::rm(Args {
             project: get(m, "project"),
             ..Default::default()
@@ -286,15 +337,6 @@ fn main() {
             &get(m, "tool").unwrap_or_default(),
             &get(m, "event").unwrap_or_default(),
         ),
-        _ => {
-            commands::ls(Args::default());
-            let p = tr!("project");
-            println!(
-                "{}",
-                ui::dim(&format!(
-                    "actx mk <{p}> · actx add · actx delete · actx sync · actx ls · actx rm <{p}> · actx cv · actx auto · actx -h"
-                ))
-            );
-        }
+        _ => browser::browse(Args::default()),
     }
 }

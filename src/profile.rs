@@ -54,13 +54,16 @@ pub fn configure(
                 preview: String::new(),
             })
             .collect();
-        let picked = ui::fzf(
-            &rows,
-            &tr!("Which harnesses do you use? TAB selects several; Esc keeps current preferences"),
-            true,
-            false,
-        );
-        (!picked.is_empty()).then_some(picked)
+        let selected: Vec<_> = config
+            .get("harnesses")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(String::from)
+            .collect();
+        ui::picker(&rows,&tr!("Which harnesses do you use? TAB toggles · Enter saves · Ctrl-D disables linked copies · Esc keeps preferences"),true,false,&["enter","ctrl-d"],&selected)
+            .map(|pick|if pick.action=="ctrl-d"{Vec::new()}else{pick.keys})
     } else {
         None
     };
@@ -95,14 +98,22 @@ pub fn configure(
                 preview: tr!("Only saved shared copies are deleted; local originals are kept."),
             })
             .collect();
-        ui::fzf(
+        let selected = vec![
+            config
+                .get("retention")
+                .and_then(Value::as_str)
+                .unwrap_or("never")
+                .to_string(),
+        ];
+        ui::picker(
             &rows,
             &tr!("Delete shared copies after how much inactivity? Esc keeps current preferences"),
             false,
             false,
+            &[],
+            &selected,
         )
-        .into_iter()
-        .next()
+        .and_then(|pick| pick.keys.into_iter().next())
     } else {
         None
     };
@@ -112,15 +123,68 @@ pub fn configure(
         }
         config["retention"] = json!(period);
     }
+    if prompt && conversation.is_none() {
+        let mut rows = vec![Row {
+            key: "::ask".into(),
+            line: tr!("Ask which harness to use each time"),
+            preview: String::new(),
+        }];
+        rows.extend(
+            config
+                .get("harnesses")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .filter_map(harness::known)
+                .map(|name| Row {
+                    key: name.into(),
+                    line: harness::get(name).label().into(),
+                    preview: String::new(),
+                }),
+        );
+        if rows.len() > 1 {
+            let selected = vec![
+                config
+                    .get("open_harness")
+                    .and_then(Value::as_str)
+                    .filter(|p| *p != "ask")
+                    .unwrap_or("::ask")
+                    .to_string(),
+            ];
+            if let Some(choice) = ui::picker(
+                &rows,
+                &tr!("When opening a conversation, which harness should be preferred?"),
+                false,
+                false,
+                &[],
+                &selected,
+            )
+            .and_then(|pick| pick.keys.into_iter().next())
+            {
+                config["open_harness"] = json!(if choice == "::ask" { "ask" } else { &choice });
+            }
+        } else {
+            config["open_harness"] = json!("ask");
+        }
+    }
     Ok(())
 }
 
+pub fn current() -> Value {
+    std::fs::read(&ctx().config_file)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .filter(Value::is_object)
+        .unwrap_or_else(|| ctx().config.clone())
+}
+
 pub fn harnesses(key: &str) -> Vec<&'static str> {
-    ctx()
-        .config
+    let config = current();
+    config
         .get("conversation_profiles")
         .and_then(|p| p.get(key))
-        .or_else(|| ctx().config.get("harnesses"))
+        .or_else(|| config.get("harnesses"))
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
@@ -130,7 +194,7 @@ pub fn harnesses(key: &str) -> Vec<&'static str> {
 }
 
 pub fn days() -> Option<u64> {
-    match ctx().config.get("retention").and_then(Value::as_str)? {
+    match current().get("retention").and_then(Value::as_str)? {
         "1m" => Some(30),
         "3m" => Some(90),
         "6m" => Some(180),
@@ -138,4 +202,64 @@ pub fn days() -> Option<u64> {
         "2y" => Some(730),
         _ => None,
     }
+}
+
+/// Human-readable by default; JSON remains an explicit interface for scripts.
+pub fn show(config: &Value, json_output: bool) {
+    let data = json!({
+        "harnesses":config.get("harnesses").cloned().unwrap_or(json!([])),
+        "retention":config.get("retention").cloned().unwrap_or(json!("never")),
+        "open_harness":config.get("open_harness").cloned().unwrap_or(json!("ask")),
+        "conversation_profiles":config.get("conversation_profiles").cloned().unwrap_or(json!({}))
+    });
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&data).unwrap());
+        return;
+    }
+    let tools: Vec<_> = data["harnesses"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter_map(harness::known)
+        .map(|n| harness::get(n).label())
+        .collect();
+    let retention = match data["retention"].as_str().unwrap_or("never") {
+        "1m" => tr!("1 month"),
+        "3m" => tr!("3 months"),
+        "6m" => tr!("6 months"),
+        "1y" => tr!("1 year"),
+        "2y" => tr!("2 years"),
+        _ => tr!("Never delete automatically"),
+    };
+    let open = data["open_harness"]
+        .as_str()
+        .and_then(harness::known)
+        .map(|n| harness::get(n).label().to_string())
+        .unwrap_or_else(|| tr!("Ask each time"));
+    let profiles = data["conversation_profiles"].as_object().map_or(0, |p| p.len());
+    println!("\n{}", ui::bold(&tr!("Your actx profile")));
+    println!(
+        "  {}  {}",
+        ui::pad(&tr!("Harnesses"), 24),
+        if tools.is_empty() {
+            ui::dim(&tr!("No harnesses configured"))
+        } else {
+            tools.join(" · ")
+        }
+    );
+    println!("  {}  {}", ui::pad(&tr!("Keep shared copies"), 24), retention);
+    println!("  {}  {}", ui::pad(&tr!("When opening"), 24), open);
+    println!(
+        "  {}  {}",
+        ui::pad(&tr!("Conversation overrides"), 24),
+        if profiles == 0 {
+            tr!("None")
+        } else {
+            tr!("{n} configured", n = profiles)
+        }
+    );
+    println!("\n  {}", ui::dim(&tr!("Local originals are always kept.")));
+    println!("\n  {} actx profile setup", tr!("Configure profile:"));
+    println!("  {} actx setup\n", tr!("Full setup:"));
 }

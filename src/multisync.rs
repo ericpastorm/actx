@@ -89,7 +89,8 @@ fn append(s: &mut Session, delta: &[Turn]) -> Result<()> {
     Ok(())
 }
 fn scoped(s: &Session, args: &crate::commands::Args) -> bool {
-    (!args.general || s.is_general())
+    args.keys.as_ref().is_none_or(|keys| keys.contains(&s.key()))
+        && (!args.general || s.is_general())
         && args
             .project
             .as_ref()
@@ -97,7 +98,8 @@ fn scoped(s: &Session, args: &crate::commands::Args) -> bool {
 }
 
 pub fn run(root: &Path, args: &crate::commands::Args) {
-    if ctx().config.get("harnesses").is_none() && ctx().config.get("conversation_profiles").is_none() {
+    let config = profile::current();
+    if config.get("harnesses").is_none() && config.get("conversation_profiles").is_none() {
         return;
     }
     if let Err(e) = run_inner(root, args) {
@@ -114,8 +116,27 @@ fn run_inner(root: &Path, args: &crate::commands::Args) -> Result<()> {
     let mut links = read()?;
     let mut sessions = local();
     let mut st = state::load();
-    for r in store::stored_sessions(root).into_iter().filter(|r| scoped(r, args)) {
+    let stored = store::stored_sessions(root);
+    let family_ids: HashMap<_, _> = stored
+        .iter()
+        .map(|r| {
+            (
+                r.key(),
+                r.meta()
+                    .get("conversation_id")
+                    .and_then(serde_json::Value::as_str)
+                    .map(String::from)
+                    .unwrap_or_else(|| crate::catalog::identity(&r.key())),
+            )
+        })
+        .collect();
+    for r in stored.into_iter().filter(|r| scoped(r, args)) {
         let key = r.key();
+        let family = family_ids.get(&key).cloned().unwrap_or_else(|| key.clone());
+        if family != key && family_ids.contains_key(&family) {
+            continue;
+        }
+
         let Some(mut source) = sessions.get(&key).cloned() else {
             continue;
         };
@@ -202,6 +223,48 @@ fn run_inner(root: &Path, args: &crate::commands::Args) -> Result<()> {
                     ui::ok(&format!("{} ↔ {target}", source.title));
                 } else {
                     if !harness::get(target).installed() {
+                        return Ok(());
+                    }
+                    let existing: Vec<_> = sessions
+                        .values()
+                        .filter(|s| {
+                            s.harness == target
+                                && family_ids
+                                    .get(&s.key())
+                                    .cloned()
+                                    .unwrap_or_else(|| crate::catalog::identity(&s.key()))
+                                    == family
+                        })
+                        .cloned()
+                        .collect();
+                    if existing.len() > 1 {
+                        return Err(Error(
+                            "Several existing copies in this harness; choose one before linking".into(),
+                        ));
+                    }
+                    if let Some(copy) = existing.into_iter().next() {
+                        let b_turns = harness::get(target).local_turns(&copy)?.0;
+                        // A conversion note differs by source harness; compare normalized text,
+                        // but retain each exact baseline for detecting subsequent edits.
+                        if hashes(&turns::fit(a_turns.clone(), "actx", None))
+                            != hashes(&turns::fit(b_turns.clone(), "actx", None))
+                        {
+                            return Err(Error(
+                                "Existing harness copy has different history; it was kept without creating a duplicate"
+                                    .into(),
+                            ));
+                        }
+                        links.copies.insert(
+                            id.clone(),
+                            Link {
+                                source: key.clone(),
+                                target: copy.key(),
+                                a,
+                                b: hashes(&b_turns),
+                            },
+                        );
+                        save(&links)?;
+                        ui::ok(&format!("{} ↔ {target} (existing copy linked)", source.title));
                         return Ok(());
                     }
                     let copy = harness::get(target).write(
@@ -299,4 +362,78 @@ pub fn prune(root: &Path, args: &crate::commands::Args) {
     if let Err(e) = state::save(&mut st) {
         ui::warn(&e.to_string());
     }
+}
+
+/// Read-only UI projection. A missing or unreadable copy is never presented as up to date.
+pub struct LinkView {
+    pub source: String,
+    pub target: String,
+    pub state: &'static str,
+}
+pub fn views(local: &HashMap<String, Session>) -> Vec<LinkView> {
+    let links = match read() {
+        Ok(l) => l,
+        Err(e) => {
+            ui::warn(&format!("Multiharness: {e}"));
+            return Vec::new();
+        }
+    };
+    let active = |l: &Link| {
+        l.target
+            .split_once(':')
+            .is_some_and(|(tool, _)| profile::harnesses(&l.source).contains(&tool))
+    };
+    let mut cache = HashMap::new();
+    for key in links
+        .copies
+        .values()
+        .filter(|l| active(l))
+        .flat_map(|l| [&l.source, &l.target])
+    {
+        cache.entry(key.clone()).or_insert_with(|| {
+            local
+                .get(key)
+                .and_then(|s| harness::get(s.harness).local_turns(s).ok())
+                .map(|t| hashes(&t.0))
+        });
+    }
+    links
+        .copies
+        .into_values()
+        .map(|l| {
+            if !active(&l) {
+                return LinkView {
+                    source: l.source,
+                    target: l.target,
+                    state: "unmanaged",
+                };
+            }
+            let state = match (
+                cache.get(&l.source).and_then(Option::as_ref),
+                cache.get(&l.target).and_then(Option::as_ref),
+            ) {
+                (_, None) => "missing",
+                (None, Some(b)) => {
+                    if b == &l.b {
+                        "unknown"
+                    } else {
+                        "push"
+                    }
+                }
+                (Some(a), Some(b)) if !a.starts_with(&l.a) || !b.starts_with(&l.b) => "conflict",
+                (Some(a), Some(b)) => match (a != &l.a, b != &l.b) {
+                    (false, false) => "synced",
+                    (true, false) => "pull",
+                    (false, true) => "push",
+                    (true, true) if a[l.a.len()..] == b[l.b.len()..] => "synced",
+                    _ => "conflict",
+                },
+            };
+            LinkView {
+                source: l.source,
+                target: l.target,
+                state,
+            }
+        })
+        .collect()
 }

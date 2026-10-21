@@ -83,7 +83,11 @@ Y luego:
 | `actx add [proyecto]` | Elige conversaciones locales para guardarlas en un proyecto existente. Si lo omites, se guardan en General. |
 | `actx delete [proyecto]` | Elige copias compartidas para borrar, de todos los proyectos y General o solo del proyecto indicado. Conserva originales locales y proyectos, aunque queden vacíos. |
 | `actx sync [proyecto]` | Sube lo que has seguido aquí y baja lo nuevo. Eliges los proyectos, o `--all`. |
-| `actx` / `actx ls [proyecto]` | Proyectos y estado de cada conversación: `↑ subir`, `↓ bajar`, `↓ nueva`, `⚠ conflicto`, `✓ al día`. |
+| `actx` / `actx browse [proyecto]` | Navegador: una fila por conversación con sus harnesses. Enter abre, Alt-H configura y Supr quita. |
+| `actx ls [proyecto]` | Lista compacta sin interacción, con los estados de las copias. |
+| `actx resume [proyecto]` | Sincroniza la conversación elegida y abre su copia en el harness seleccionado. |
+| `actx setup [carpeta]` | Asistente completo de carpeta compartida, harnesses, retención y preferencia al abrir. |
+| `actx profile` / `actx profile setup` | Resumen del perfil o asistente para modificarlo. `--json` conserva la salida estructurada. |
 | `actx cv [proyecto]` | Copia una conversación a otro programa (Claude Code, opencode, Codex, Antigravity). |
 | `actx rm <proyecto>` | Borra el proyecto completo y sus copias compartidas, previa confirmación. Conserva los originales locales en todos los equipos. |
 | `actx auto [on\|off]` | Sincronización automática: hooks en Claude Code y Codex, y un temporizador. `actx auto` a secas dice cómo va. |
@@ -278,17 +282,39 @@ actx 0.3 es una reescritura en Rust del script en Python de las versiones 0.1–
 leen y escriben la misma carpeta compartida y el mismo estado local, así que puedes mezclarlas mientras
 actualizas tus PCs (la 0.4 añade el bloqueo, que las anteriores ignoran).
 
-## Licencia
+### Navegador de conversaciones
 
-[MIT](LICENSE). actx es un proyecto independiente, sin relación con Anthropic, OpenAI ni el equipo de opencode.
+`actx` abre el navegador cuando se ejecuta en una terminal; sin interacción muestra la lista compacta.
+Las copias se agrupan por vínculos e identificadores guardados, nunca por coincidencia de título.
+Una fila muestra el título, proyecto, harnesses con copia existente y la actividad más reciente. La
+vista previa detalla el estado de cada copia y los harnesses configurados que aún están pendientes.
+Las conversiones nuevas guardan su identidad común, también en la metadata compartida. Las copias
+antiguas sin una identidad o vínculo conocido permanecen separadas.
+
+- **Enter:** elige el harness, sincroniza solo esa conversación y abre su copia local. Ctrl-R en el
+  selector recuerda la elección. Los conflictos o cambios pendientes impiden abrir una copia obsoleta.
+- **Alt-H:** configura los harnesses de las conversaciones marcadas, usa el perfil del equipo o deja
+  de mantener copias. Las copias locales existentes se conservan.
+- **Supr:** permite cambiar el perfil, borrar copias compartidas o elegir un proyecto para borrarlo.
+  Los borrados requieren confirmación y conservan los originales locales.
+- **Tab / Ctrl-A:** marca varias / todas para configurar o quitar. Para abrir, selecciona una sola.
+
+`actx resume --print` sincroniza e imprime el comando sin iniciar el agente. `add`, `cv`, `delete` y
+el selector de perfiles usan la misma agrupación. Si `cv` ya tiene una copia en el destino, la reutiliza.
+Un perfil puede adoptar una conversión existente identificada si los historiales coinciden; si difieren,
+conserva ambos sin crear una tercera copia ni sobrescribir las continuaciones.
 
 ### Perfil de harnesses y retención
 
-`actx init` permite elegir los harnesses que usas en **este equipo** y la retención de las
-copias compartidas. También puedes configurarlo después:
+`actx setup` configura la carpeta compartida y el perfil de **este equipo** en un asistente.
+`actx init` elige solo la carpeta; `actx profile setup` pregunta por los harnesses, la retención y
+el harness preferido al abrir, sin cambiar la carpeta. `actx profile` muestra un resumen legible:
 
 ```bash
+actx setup                                        # configuración completa
+actx profile setup                                # configurar solo el perfil
 actx profile                                      # ver preferencias
+actx profile --json                               # salida para scripts
 actx profile --harnesses claude,codex,opencode
 actx profile --retention 3m
 actx profile --conversation --harnesses claude,codex # seleccionar conversación
@@ -297,7 +323,9 @@ actx profile --harnesses none                     # desactivar copias vinculadas
 actx profile --retention never                    # no borrar automáticamente
 ```
 
-Para configurar sin preguntas: `actx init /ruta/compartida --harnesses claude,codex --retention 3m`.
+Para configurar sin preguntas: `actx setup /ruta/compartida --harnesses claude,codex --retention 3m`.
+Los flags de perfil en `init` se conservan por compatibilidad. Los asistentes muestran la selección
+actual; Ctrl-D desactiva las copias vinculadas en la pregunta de harnesses.
 Los perfiles son locales: cada PC puede usar harnesses distintos. Las preferencias por conversación
 sustituyen la lista del perfil general. Los valores de retención son `never` (por defecto), `1m`, `3m`,
 `6m`, `1y` y `2y`: 30, 90, 180, 365 y 730 días de inactividad, respectivamente.
@@ -323,3 +351,7 @@ Elige `never` para desactivarla. No se instala un temporizador adicional.
 
 Esta entrega tiene comprobaciones básicas; la validación amplia de conflictos, interrupciones y de
 la matriz de harnesses queda para la siguiente sesión de depuración.
+
+## Licencia
+
+[MIT](LICENSE). actx es un proyecto independiente, sin relación con Anthropic, OpenAI ni el equipo de opencode.

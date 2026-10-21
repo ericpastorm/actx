@@ -39,12 +39,184 @@ macro_rules! tr {
     };
 }
 
-pub const HELP: &str = "actx (agent context): keep your Claude Code, opencode and Codex conversations in sync across\nmachines, grouped into projects, through any shared folder (a NAS, Syncthing, ...).\n\n  actx init [folder]   choose the shared folder (once per machine)\n  actx mk <project>    create an empty project\n  actx add [project]   save conversations (General if no project)\n  actx delete [project] delete selected saved conversations; keep local originals\n  actx sync [project]  push what you continued here and pull what's new (pick projects; --all)\n  actx ls [project]    projects and the state of each conversation (also: plain actx)\n  actx rm <project>    delete a project and its saved copies; keep local originals\n  actx cv [project]    copy a conversation into another tool (Claude Code, opencode, Codex, Antigravity)\n  actx auto [on|off]   sync by itself: when a conversation starts or ends, and every 10 min\n  actx restore         put back a conversation from a backup\n  actx doctor          check the shared folder, the tools and automatic sync\n  actx update          install the newest actx found in the shared folder\n\nConversations don't depend on folder paths. When pulling one, actx looks for its repo on this\nmachine by the first commit (other paths, clones and worktrees all work); otherwise it tries\nthe same path; otherwise it asks once and remembers. Run it inside the project and it goes\nthere. Paths inside the conversation are rewritten to this machine's.\n\nGeneral conversations ask for a destination folder on each machine and remember it per conversation.\nUse --general with sync, ls, cv or delete to select only General.\n\nIf you continued a conversation on two machines, sync lets you merge them: you keep this one\nplus a summary of what was done on the other, and the other version is kept separately.\n\nPickers: type to filter, TAB marks several, Ctrl-A all, Enter confirms, Esc quits.\nLanguage: English or Spanish, from your locale; set ACTX_LANG=en|es or `actx init --lang`.\n";
+pub const HELP: &str = "actx (agent context): keep your Claude Code, opencode and Codex conversations in sync across\nmachines, grouped into projects, through any shared folder (a NAS, Syncthing, ...).\n\n  actx setup [folder]  guided setup: shared folder, harnesses and retention\n  actx init [folder]   choose only the shared folder\n  actx profile        show your profile (use profile setup to configure it)\n  actx browse         compact conversation browser (also: plain actx)\n  actx resume         sync a conversation and choose where to open it\n  actx mk <project>    create an empty project\n  actx add [project]   save conversations (General if no project)\n  actx delete [project] delete selected saved conversations; keep local originals\n  actx sync [project]  push what you continued here and pull what's new (pick projects; --all)\n  actx ls [project]    compact conversation list and harness states\n  actx rm <project>    delete a project and its saved copies; keep local originals\n  actx cv [project]    copy a conversation into another tool (Claude Code, opencode, Codex, Antigravity)\n  actx auto [on|off]   sync by itself: when a conversation starts or ends, and every 10 min\n  actx restore         put back a conversation from a backup\n  actx doctor          check the shared folder, the tools and automatic sync\n  actx update          install the newest actx found in the shared folder\n\nConversations don't depend on folder paths. When pulling one, actx looks for its repo on this\nmachine by the first commit (other paths, clones and worktrees all work); otherwise it tries\nthe same path; otherwise it asks once and remembers. Run it inside the project and it goes\nthere. Paths inside the conversation are rewritten to this machine's.\n\nGeneral conversations ask for a destination folder on each machine and remember it per conversation.\nUse --general with sync, ls, cv or delete to select only General.\n\nIf you continued a conversation on two machines, sync lets you merge them: you keep this one\nplus a summary of what was done on the other, and the other version is kept separately.\n\nPickers: type to filter, TAB marks several, Ctrl-A all, Enter confirms, Esc quits.\nLanguage: English or Spanish, from your locale; set ACTX_LANG=en|es or `actx init --lang`.\n";
 
-const HELP_ES: &str = "actx (agent context): mantiene tus conversaciones de Claude Code, opencode y Codex al día\nentre tus PCs, agrupadas en proyectos, a través de cualquier carpeta compartida (un NAS, Syncthing...).\n\n  actx init [carpeta]   elige la carpeta compartida (una vez en cada PC)\n  actx mk <proyecto>    crea un proyecto vacío\n  actx add [proyecto]   guarda conversaciones (en General si omites el proyecto)\n  actx delete [proyecto] borra conversaciones guardadas; conserva originales locales\n  actx sync [proyecto]  sube lo que has seguido aquí y baja lo nuevo (eliges proyectos; --all)\n  actx ls [proyecto]    proyectos y estado de cada conversación (también: actx a secas)\n  actx rm <proyecto>    borra un proyecto y sus copias guardadas; conserva originales locales\n  actx cv [proyecto]    copia una conversación a otro programa (Claude Code, opencode, Codex, Antigravity)\n  actx auto [on|off]    sincroniza solo: al abrir o cerrar una conversación y cada 10 min\n  actx restore          recupera una conversación de una copia de seguridad\n  actx doctor           comprueba la carpeta compartida, los programas y el modo auto\n  actx update           instala la última versión de actx que haya en la carpeta compartida\n\nLas conversaciones no dependen de la carpeta. Al bajar una, actx busca su repo en este PC por\nel primer commit (vale con otras rutas, clones y worktrees); si no, prueba la misma ruta; y si\ntampoco, te pregunta una vez y se acuerda. Si lo lanzas dentro del proyecto, va ahí. Las rutas\ndentro de la conversación se cambian a las de este PC.\n\nLas conversaciones de General preguntan la carpeta de destino en cada PC y la recuerdan por conversación.\nUsa --general con sync, ls, cv o delete para seleccionar solo General.\n\nSi seguiste una conversación en dos PCs, sync te deja mezclarlas: sigues con la de aquí más un\nresumen de lo hecho en el otro, y la otra versión queda aparte.\n\nSelectores: escribe para filtrar, TAB marca varias, Ctrl-A todas, Enter confirma, Esc sale.\nIdioma: inglés o español, según tu sistema; o ACTX_LANG=en|es, o `actx init --lang`.\n";
+const HELP_ES: &str = "actx (agent context): mantiene tus conversaciones de Claude Code, opencode y Codex al día\nentre tus PCs, agrupadas en proyectos, a través de cualquier carpeta compartida (un NAS, Syncthing...).\n\n  actx setup [carpeta]  asistente: carpeta compartida, harnesses y retención\n  actx init [carpeta]   elige solo la carpeta compartida\n  actx profile         muestra tu perfil (profile setup para configurarlo)\n  actx browse          explorador compacto (también: actx a secas)\n  actx resume          sincroniza una conversación y elige dónde abrirla\n  actx mk <proyecto>    crea un proyecto vacío\n  actx add [proyecto]   guarda conversaciones (en General si omites el proyecto)\n  actx delete [proyecto] borra conversaciones guardadas; conserva originales locales\n  actx sync [proyecto]  sube lo que has seguido aquí y baja lo nuevo (eliges proyectos; --all)\n  actx ls [proyecto]    lista compacta de conversaciones y sus harnesses\n  actx rm <proyecto>    borra un proyecto y sus copias guardadas; conserva originales locales\n  actx cv [proyecto]    copia una conversación a otro programa (Claude Code, opencode, Codex, Antigravity)\n  actx auto [on|off]    sincroniza solo: al abrir o cerrar una conversación y cada 10 min\n  actx restore          recupera una conversación de una copia de seguridad\n  actx doctor           comprueba la carpeta compartida, los programas y el modo auto\n  actx update           instala la última versión de actx que haya en la carpeta compartida\n\nLas conversaciones no dependen de la carpeta. Al bajar una, actx busca su repo en este PC por\nel primer commit (vale con otras rutas, clones y worktrees); si no, prueba la misma ruta; y si\ntampoco, te pregunta una vez y se acuerda. Si lo lanzas dentro del proyecto, va ahí. Las rutas\ndentro de la conversación se cambian a las de este PC.\n\nLas conversaciones de General preguntan la carpeta de destino en cada PC y la recuerdan por conversación.\nUsa --general con sync, ls, cv o delete para seleccionar solo General.\n\nSi seguiste una conversación en dos PCs, sync te deja mezclarlas: sigues con la de aquí más un\nresumen de lo hecho en el otro, y la otra versión queda aparte.\n\nSelectores: escribe para filtrar, TAB marca varias, Ctrl-A todas, Enter confirma, Esc sale.\nIdioma: inglés o español, según tu sistema; o ACTX_LANG=en|es, o `actx init --lang`.\n";
 
 pub static ES: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| {
     HashMap::from([
+        ("local copy (not maintained)", "copia local (sin seguimiento)"),
+        (
+            "Using the existing {tool} copy of {title}",
+            "Se usa la copia existente de {title} en {tool}",
+        ),
+        ("Removed {n} shared copy/copies", "Borradas {n} copia(s) compartida(s)"),
+        ("STATE", "ESTADO"),
+        ("CONVERSATION", "CONVERSACIÓN"),
+        ("PROJECT", "PROYECTO"),
+        ("HARNESSES · ACTIVITY", "HARNESSES · ACTIVIDAD"),
+        (" (shared only)", " (solo compartida)"),
+        (
+            "Browse conversations in one compact view",
+            "Explorar conversaciones en una vista compacta",
+        ),
+        (
+            "CONVERSATION                               PROJECT           HARNESSES · ACTIVITY",
+            "CONVERSACIÓN                               PROYECTO          HARNESSES · ACTIVIDAD",
+        ),
+        ("Change harness preferences", "Cambiar los harnesses de la conversación"),
+        ("Choose a conversation to open", "Elige una conversación para abrir"),
+        (
+            "Choose an existing work folder before opening this conversation",
+            "Elige una carpeta de trabajo existente antes de abrir esta conversación",
+        ),
+        (
+            "Choose harnesses for this conversation",
+            "Elegir los harnesses de esta conversación",
+        ),
+        (
+            "Choose the physical copy to open",
+            "Elige la copia concreta que quieres abrir",
+        ),
+        ("Choose the project to delete", "Elige el proyecto que quieres borrar"),
+        (
+            "Conversation no longer available",
+            "La conversación ya no está disponible",
+        ),
+        (
+            "Conversations · TAB select · Enter open · Alt-H harnesses · Delete remove · Esc back",
+            "Conversaciones · TAB marca · Enter abre · Alt-H harnesses · Supr quita · Esc vuelve",
+        ),
+        ("Convert from which harness?", "¿Desde qué harness quieres convertir?"),
+        ("Delete a whole project", "Borrar un proyecto completo"),
+        ("Delete shared copies", "Borrar las copias compartidas"),
+        (
+            "Existing local copies are kept",
+            "Se conservan las copias locales existentes",
+        ),
+        (
+            "Future machine profile changes will also apply to this conversation",
+            "Los cambios futuros en el perfil del equipo también se aplicarán a esta conversación",
+        ),
+        (
+            "Harness preferences saved; new copies will be created during sync",
+            "Preferencias guardadas; las copias que falten se crearán al sincronizar",
+        ),
+        (
+            "Harness preferences · Esc cancels",
+            "Preferencias de harnesses · Esc cancela",
+        ),
+        (
+            "Harnesses · TAB toggles · Enter saves · Esc cancels · existing copies are kept",
+            "Harnesses · TAB marca o desmarca · Enter guarda · Esc cancela · se conservan las copias existentes",
+        ),
+        (
+            "Keep local originals and projects",
+            "Conservar los originales locales y los proyectos",
+        ),
+        ("No conversations in this view", "No hay conversaciones en esta vista"),
+        ("No linked harnesses", "No mantener copias vinculadas"),
+        (
+            "No local copy in this harness yet; finish syncing first",
+            "Aún no hay una copia local en este harness; termina de sincronizar primero",
+        ),
+        (
+            "Open in which harness? Enter opens · Ctrl-R remembers and opens",
+            "¿En qué harness quieres abrirla? Enter abre · Ctrl-R recuerda la elección y abre",
+        ),
+        (
+            "Print the resume command without launching the agent",
+            "Mostrar el comando para retomar sin iniciar el agente",
+        ),
+        (
+            "Removes every saved conversation in the chosen project; local originals are kept",
+            "Borra todas las conversaciones guardadas del proyecto elegido; conserva los originales locales",
+        ),
+        (
+            "Select one conversation to open; multiple selection is available for harnesses and removal",
+            "Selecciona una conversación para abrir; puedes marcar varias para configurar harnesses o quitar copias",
+        ),
+        (
+            "Select the harnesses where you want to maintain a copy; missing copies will be created during sync",
+            "Elige los harnesses donde quieres mantener una copia; las que falten se crearán al sincronizar",
+        ),
+        (
+            "Shared folder unavailable. Open the local copy without syncing?",
+            "La carpeta compartida no está disponible. ¿Abrir la copia local sin sincronizar?",
+        ),
+        (
+            "Stop maintaining a harness copy; keep all existing copies",
+            "Dejar de mantener una copia vinculada; conservar todas las copias existentes",
+        ),
+        (
+            "Sync a conversation and open it in a harness",
+            "Sincronizar una conversación y abrirla en un harness",
+        ),
+        (
+            "The selected harness is not installed",
+            "El harness elegido no está instalado",
+        ),
+        (
+            "This conversation is already open; close its agent first",
+            "Esta conversación ya está abierta; cierra su agente primero",
+        ),
+        (
+            "This conversation still has pending changes or a conflict; sync or resolve it before opening",
+            "Esta conversación aún tiene cambios pendientes o un conflicto; sincronízala o resuélvelo antes de abrir",
+        ),
+        (
+            "This harness copy is shared only: sync it first",
+            "Esta copia solo está en la carpeta compartida: sincronízala primero",
+        ),
+        ("Use the machine profile", "Usar el perfil del equipo"),
+        (
+            "What do you want to remove? Esc cancels",
+            "¿Qué quieres quitar? Esc cancela",
+        ),
+        ("copy missing", "falta la copia"),
+        ("local copy", "copia local"),
+        ("pending creation", "pendiente de crear"),
+        ("⚠ state unknown", "⚠ estado desconocido"),
+        (
+            "Set up the shared folder and your harness profile",
+            "Configurar la carpeta compartida y tu perfil de harnesses",
+        ),
+        (
+            "Configure harnesses, retention and opening preferences interactively",
+            "Configurar harnesses, retención y preferencias al abrir con un asistente",
+        ),
+        ("Show the profile as JSON", "Mostrar el perfil en formato JSON"),
+        (
+            "Use an interactive terminal, or configure the profile with --harnesses and --retention",
+            "Usa una terminal interactiva o configura el perfil con --harnesses y --retention",
+        ),
+        (
+            "Ask which harness to use each time",
+            "Preguntar cada vez qué harness usar",
+        ),
+        (
+            "When opening a conversation, which harness should be preferred?",
+            "Al abrir una conversación, ¿qué harness prefieres usar?",
+        ),
+        (
+            "Which harnesses do you use? TAB toggles · Enter saves · Ctrl-D disables linked copies · Esc keeps preferences",
+            "¿Qué harnesses usas? TAB marca · Enter guarda · Ctrl-D desactiva las copias vinculadas · Esc conserva las preferencias",
+        ),
+        ("Ask each time", "Preguntar cada vez"),
+        ("Your actx profile", "Tu perfil de actx"),
+        ("Harnesses", "Harnesses"),
+        ("No harnesses configured", "Sin harnesses configurados"),
+        ("Keep shared copies", "Conservar copias"),
+        ("When opening", "Al abrir"),
+        ("Conversation overrides", "Por conversación"),
+        ("None", "Ninguna"),
+        ("{n} configured", "{n} configuradas"),
+        (
+            "Local originals are always kept.",
+            "Los originales locales siempre se conservan.",
+        ),
+        ("Configure profile:", "Configurar el perfil:"),
+        ("Full setup:", "Configuración completa:"),
         (
             "Choose a conversation profile",
             "Elige una conversación para configurar su perfil",

@@ -238,13 +238,33 @@ pub struct Row {
 }
 
 /// Show `rows` in fzf and return the chosen keys.
+pub struct Selection {
+    pub action: String,
+    pub keys: Vec<String>,
+}
 pub fn fzf(rows: &[Row], header: &str, multi: bool, preview: bool) -> Vec<String> {
+    picker(rows, header, multi, preview, &[], &[])
+        .map(|s| s.keys)
+        .unwrap_or_default()
+}
+pub fn picker(
+    rows: &[Row],
+    header: &str,
+    multi: bool,
+    preview: bool,
+    actions: &[&str],
+    selected: &[String],
+) -> Option<Selection> {
     if let Some(pick) = &ctx().pick {
-        return rows
+        let keys = rows
             .iter()
             .filter(|r| pick.iter().any(|p| r.key.contains(p.as_str())))
             .map(|r| r.key.clone())
-            .collect();
+            .collect::<Vec<_>>();
+        return (!keys.is_empty()).then_some(Selection {
+            action: "enter".into(),
+            keys,
+        });
     }
     if !crate::ctx::which("fzf") {
         die(&if cfg!(windows) {
@@ -263,8 +283,27 @@ pub fn fzf(rows: &[Row], header: &str, multi: bool, preview: bool) -> Vec<String
         "--border=rounded",
     ])
     .args(["--header", header, "--header-first"]);
+    if !actions.is_empty() {
+        cmd.arg(format!("--expect={}", actions.join(",")));
+    }
     if multi {
         cmd.args(["--multi", "--bind", "ctrl-a:select-all"]);
+    }
+    let mut start = Vec::new();
+    for (i, row) in rows.iter().enumerate() {
+        if selected.contains(&row.key) {
+            start.push(if multi {
+                format!("pos({})+select", i + 1)
+            } else {
+                format!("pos({})", i + 1)
+            });
+        }
+    }
+    if !start.is_empty() {
+        if multi {
+            start.push("first".into());
+        }
+        cmd.args(["--bind", &format!("load:{}", start.join("+"))]);
     }
     let cache = if preview {
         let map: HashMap<&str, &str> = rows.iter().map(|r| (r.key.as_str(), r.preview.as_str())).collect();
@@ -288,7 +327,7 @@ pub fn fzf(rows: &[Row], header: &str, multi: bool, preview: bool) -> Vec<String
         None
     };
     let Ok(mut child) = cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).spawn() else {
-        return Vec::new();
+        return None;
     };
     let input: String = rows.iter().map(|r| format!("{}\t{}\n", r.key, r.line)).collect();
     if let Some(mut stdin) = child.stdin.take() {
@@ -301,12 +340,19 @@ pub fn fzf(rows: &[Row], header: &str, multi: bool, preview: bool) -> Vec<String
     let status = child.wait();
     drop(cache);
     if !status.map(|s| s.success()).unwrap_or(false) {
-        return Vec::new();
+        return None;
     }
-    out.lines()
+    let mut lines = out.lines();
+    let action = if actions.is_empty() {
+        "enter".to_string()
+    } else {
+        lines.next().unwrap_or("enter").to_string()
+    };
+    let keys = lines
         .filter(|l| !l.is_empty())
         .map(|l| l.split('\t').next().unwrap_or("").to_string())
-        .collect()
+        .collect::<Vec<_>>();
+    (!keys.is_empty()).then_some(Selection { action, keys })
 }
 
 /// `actx _show <cache> <key>`: what fzf runs to show a preview.

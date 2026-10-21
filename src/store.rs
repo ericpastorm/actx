@@ -279,7 +279,19 @@ pub fn push_one(
     std::fs::create_dir_all(&tmp)?;
     let result = (|| -> Result<(u64, u64)> {
         let pushed = crate::harness::get(s.harness).push(s, &tmp)?;
+        let identity = crate::catalog::identity(&s.key());
+        let identity = if identity == s.key() {
+            remote
+                .get(&s.key())
+                .and_then(|r| r.meta().get("conversation_id"))
+                .and_then(Value::as_str)
+                .unwrap_or(&identity)
+                .to_string()
+        } else {
+            identity
+        };
         let meta = json!({
+            "conversation_id": identity,
             "v": 2, "harness": s.harness, "id": s.id, "title": s.title,
             "path": s.path, "rel": crate::paths::rel_home(&s.path), "home": ctx().home_str(),
             "host": ctx().host, "pushed_at": now(), "updated": pushed.updated, "weight": pushed.weight,

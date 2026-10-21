@@ -82,7 +82,11 @@ Then:
 | `actx add [project]` | Pick local conversations to save in an existing project. Without a project, save them in General. |
 | `actx delete [project]` | Pick shared copies to delete, across all projects and General or only the named project. Keeps local originals and projects, even when empty. |
 | `actx sync [project]` | Push what you continued here, pull what's new. Pick projects and General, or use `--all`. |
-| `actx` / `actx ls [project]` | Projects and the state of each conversation: `↑ push`, `↓ pull`, `↓ new`, `⚠ conflict`, `✓ synced`. |
+| `actx` / `actx browse [project]` | Compact browser: one conversation per row, with its harnesses. Enter opens, Alt-H configures, Delete removes. |
+| `actx ls [project]` | Print the compact list and copy states without interaction. |
+| `actx resume [project]` | Sync the selected conversation and open its chosen harness copy. |
+| `actx setup [folder]` | Full shared-folder and profile setup wizard. |
+| `actx profile` / `actx profile setup` | Readable preferences or the profile wizard; `--json` provides structured output. |
 | `actx cv [project]` | Copy a conversation into another tool (Claude Code, opencode, Codex, Antigravity). |
 | `actx rm <project>` | Delete the whole project and its shared copies, after confirmation. Keeps local originals on every machine. |
 | `actx auto [on\|off]` | Automatic sync: hooks in Claude Code and Codex, and a timer. Plain `actx auto` shows how it's doing. |
@@ -278,17 +282,37 @@ actx 0.3 is a Rust rewrite of the 0.1–0.2 Python script. All versions read and
 folder and the same local state, so you can mix them while you upgrade your machines (0.4 adds the
 lock, which older versions ignore).
 
-## License
+### Compact conversation browser
 
-[MIT](LICENSE). actx is an independent project, not affiliated with Anthropic, OpenAI or the opencode team.
+Plain `actx` opens an interactive browser (or prints a compact list without a terminal). `actx browse`
+opens the same view; `actx ls` always prints it. Each row represents an explicit conversation identity,
+with its project, existing harness copies and latest activity. Matching titles never merge unrelated
+conversations. Preview shows copy states and configured targets still pending creation. New conversions
+also save their family identity in shared metadata; legacy copies without a known link remain separate.
+
+- **Enter:** choose a harness, sync only this conversation, then open its local copy. Ctrl-R remembers
+  the harness selection. Unresolved conflicts or pending changes prevent opening stale copies.
+- **Alt-H:** select maintained harnesses, follow the machine profile or stop maintaining copies.
+- **Delete:** change harness preferences, remove shared copies or delete a selected project, with
+  confirmation and local originals kept.
+- **Tab / Ctrl-A:** select several/all for preferences and removal; opening requires one conversation.
+
+`actx resume --print` syncs and prints the command without launching an agent. Conversation pickers in
+`add`, `cv`, `delete` and `profile` share the same grouping. Conversion reuses an existing destination
+copy. Profiles adopt identified existing conversions only when normalized histories agree; differing
+histories stay intact without creating another copy or overwriting continuations.
 
 ### Harness profiles and retention
 
-`actx init` asks which harnesses you use on this machine and how long shared copies should be kept.
-Preferences can also be changed later:
+`actx setup` combines shared-folder setup and machine profile preferences. `actx init` selects
+only the shared folder; `actx profile setup` asks about harnesses, retention and opening preferences
+without changing storage. Plain `actx profile` shows a readable summary:
 
 ```bash
+actx setup
+actx profile setup
 actx profile
+actx profile --json
 actx profile --harnesses claude,codex,opencode
 actx profile --retention 3m
 actx profile --conversation --harnesses claude,codex # conversation picker
@@ -297,7 +321,9 @@ actx profile --harnesses none
 actx profile --retention never
 ```
 
-For unattended setup: `actx init /shared/path --harnesses claude,codex --retention 3m`.
+For unattended setup: `actx setup /shared/path --harnesses claude,codex --retention 3m`.
+Profile flags in `init` remain available for compatibility. Wizards show current selections; Ctrl-D
+disables linked copies in the harness question.
 Profiles are per machine; conversation overrides replace the default harness list. Retention choices
 are `never` (default), `1m`, `3m`, `6m`, `1y`, `2y` (30, 90, 180, 365, 730 days of inactivity).
 
@@ -318,3 +344,7 @@ detected activity prevent deletion. No additional timer is installed.
 
 This feature pass has basic checks; broad conflict, interruption and harness matrix validation is
 reserved for the upcoming debugging session.
+
+## License
+
+[MIT](LICENSE). actx is an independent project, not affiliated with Anthropic, OpenAI or the opencode team.

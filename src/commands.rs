@@ -19,8 +19,8 @@ use crate::paths::short;
 use crate::session::{Session, badge, status};
 use crate::state::{self, Backup, State};
 use crate::store::{
-    GENERAL, collection_dirs, collection_label, find_project, install_kind, modified, project_dirs, push_one,
-    pushed_at, remove_stored, shared_binary, store_root, stored_sessions, sync_self,
+    GENERAL, collection_label, find_project, install_kind, modified, project_dirs, push_one, pushed_at, remove_stored,
+    shared_binary, store_root, stored_sessions, sync_self,
 };
 use crate::tr;
 use crate::turns::{COPY_SUFFIX, fit};
@@ -37,6 +37,11 @@ pub struct Args {
     pub harnesses: Option<String>,
     pub retention: Option<String>,
     pub conversation: Option<String>,
+    pub keys: Option<HashSet<String>>,
+    pub print: bool,
+    pub wizard: bool,
+    pub json: bool,
+    pub skip_retention: bool,
     pub all: bool,
     pub general: bool,
     /// sync: an automatic run (no questions, output to a log)
@@ -59,7 +64,7 @@ fn cwd() -> String {
         .unwrap_or_default()
 }
 
-fn session_preview(s: &Session) -> String {
+pub(crate) fn session_preview(s: &Session) -> String {
     let mut lines = vec![
         bold(&s.title),
         dim(&format!("{} · {} · {}", s.harness, s.id, s.size_label())),
@@ -252,7 +257,12 @@ pub fn init(args: Args) {
             if !interactive() {
                 die(&tr!("Usage: {cmd}", cmd = "actx init <folder>"));
             }
-            let (existing, suggested) = store_candidates();
+            let (mut existing, suggested) = store_candidates();
+            if let Some(root) = crate::store::configured_root().filter(|p| p.is_dir()) {
+                let path = root.to_string_lossy().into_owned();
+                existing.retain(|p| p != &path);
+                existing.insert(0, path);
+            }
             let mut rows: Vec<Row> = existing
                 .iter()
                 .map(|p| Row {
@@ -308,7 +318,7 @@ pub fn init(args: Args) {
         &mut config,
         args.harnesses.as_deref(),
         args.retention.as_deref(),
-        interactive(),
+        args.wizard && interactive(),
         None,
     ) {
         die(&e.to_string());
@@ -331,6 +341,9 @@ pub fn init(args: Args) {
         ));
     }
     ok(&tr!("Shared folder: {path}", path = bold(&root.to_string_lossy())));
+    if args.wizard {
+        crate::profile::show(&config, false);
+    }
     let projects = project_dirs(&root);
     if !projects.is_empty() {
         let names: Vec<String> = projects
@@ -460,18 +473,15 @@ pub fn add(args: Args) {
             }
         })
         .collect();
-    let header = if name == GENERAL {
-        tr!(
-            "{name} · TAB marks several · Enter saves",
-            name = collection_label(&name)
-        )
-    } else {
-        tr!(
-            "{name} · ★ = looks like this project · TAB marks several · Enter saves",
-            name = name
-        )
-    };
-    let keys: HashSet<String> = fzf(&rows, &header, true, true).into_iter().collect();
+    let (rows, group_keys) = crate::catalog::Catalog::load().compact(rows);
+    let header = tr!(
+        "{name} · TAB marks several · Enter saves",
+        name = collection_label(&name)
+    );
+    let keys: HashSet<String> = fzf(&rows, &header, true, true)
+        .into_iter()
+        .filter_map(|key| group_keys.get(&key).cloned())
+        .collect();
     let chosen: Vec<&Session> = ranked.iter().filter(|s| keys.contains(&s.key())).collect();
     if chosen.is_empty() {
         return;
@@ -724,6 +734,9 @@ pub fn sync(args: Args) {
         scopes: if explicit { vec![args.clone()] } else { Vec::new() },
     };
     let mut remote = stored_sessions(&root);
+    if let Some(keys) = &args.keys {
+        remote.retain(|r| keys.contains(&r.key()));
+    }
     if remote.is_empty() {
         if !auto {
             println!(
@@ -984,94 +997,7 @@ pub fn sync(args: Args) {
 // ── ls ──────────────────────────────────────────────────────────────────────
 
 pub fn ls(args: Args) {
-    let root = store_root(false).expect("a shared folder");
-    let mut dirs = if args.general {
-        collection_dirs(&root)
-            .into_iter()
-            .filter(|d| d.file_name().is_some_and(|n| n == GENERAL))
-            .collect()
-    } else {
-        collection_dirs(&root)
-    };
-    if let Some(name) = &args.project {
-        match find_project(&root, name) {
-            Some(p) => dirs = vec![p],
-            None => die(&tr!(
-                "Project {name} doesn't exist. Create it with: {cmd}",
-                name = name,
-                cmd = format!("actx mk {name}")
-            )),
-        }
-    }
-    if dirs.is_empty() {
-        if args.general {
-            println!("{}", tr!("No General conversations yet. Save some with: actx add"));
-            return;
-        }
-        println!(
-            "{}",
-            tr!(
-                "No projects yet. Create one with: {cmd}",
-                cmd = bold(&format!("actx mk <{}>", tr!("project")))
-            )
-        );
-        return;
-    }
-    let st = state::load();
-    let local = local_index();
-    let mut by_project: HashMap<String, Vec<Session>> = HashMap::new();
-    for r in stored_sessions(&root) {
-        by_project
-            .entry(r.project.clone().unwrap_or_default())
-            .or_default()
-            .push(r);
-    }
-    let name_of = |d: &PathBuf| d.file_name().unwrap_or_default().to_string_lossy().into_owned();
-    let newest = |d: &PathBuf| {
-        by_project
-            .get(&name_of(d))
-            .map(|v| v.iter().map(|r| r.updated).fold(0.0, f64::max))
-            .unwrap_or(0.0)
-    };
-    dirs.sort_by(|a, b| newest(b).total_cmp(&newest(a)));
-    let mut pending = 0;
-    for d in &dirs {
-        let mut ss = by_project.get(&name_of(d)).cloned().unwrap_or_default();
-        ss.sort_by(|a, b| b.updated.total_cmp(&a.updated));
-        let count = if ss.is_empty() {
-            tr!("(empty)")
-        } else {
-            tr!("{n} conversation(s)", n = ss.len())
-        };
-        println!("{}{}", bold(&collection_label(&name_of(d))), dim(&format!("  {count}")));
-        for r in &ss {
-            let l = local.get(&r.key());
-            let state = status(l, Some(r), st.base.get(&r.key()).copied());
-            if state != "synced" {
-                pending += 1;
-            }
-            let meta = r.meta();
-            let place = match l {
-                Some(l) => short(&l.path),
-                None => tr!(
-                    "{path} on {host}",
-                    path = short(jstr(meta, "path")),
-                    host = jstr(meta, "host")
-                ),
-            };
-            println!(
-                "  {} {} {}  {}",
-                badge(state),
-                harness_tag(r.harness),
-                r.title,
-                dim(&format!("· {place} · {}", ago(r.updated)))
-            );
-        }
-        println!();
-    }
-    if pending > 0 {
-        println!("{}", tr!("There are pending changes: {cmd}", cmd = bold("actx sync")));
-    }
+    crate::browser::list(&args);
 }
 
 // ── rm ──────────────────────────────────────────────────────────────────────
@@ -1092,10 +1018,15 @@ pub fn rm(args: Args) {
             .collect()
     };
     let before = snapshot(stored_sessions(&root));
+    let logical_count = crate::catalog::Catalog::load()
+        .groups
+        .iter()
+        .filter(|g| g.remote().iter().any(|r| r.project.as_deref() == Some(&pname)))
+        .count();
     if !confirm(&tr!(
         "Delete project {name} and all its saved conversations ({n})? Local originals are kept.",
         name = pname,
-        n = before.len()
+        n = logical_count
     )) {
         return;
     }
@@ -1153,6 +1084,8 @@ pub fn delete(args: Args) {
             preview: session_preview(r),
         })
         .collect();
+    let catalog = crate::catalog::Catalog::load();
+    let (rows, _) = catalog.compact(rows);
     let keys: HashSet<String> = fzf(
         &rows,
         &tr!("Delete saved conversations · local originals are kept · TAB marks several"),
@@ -1161,21 +1094,41 @@ pub fn delete(args: Args) {
     )
     .into_iter()
     .collect();
-    let chosen: Vec<&Session> = sessions.iter().filter(|r| keys.contains(&r.key())).collect();
+    let selected: HashSet<_> = keys
+        .iter()
+        .filter_map(|key| catalog.find(key))
+        .flat_map(|g| g.remote().into_iter().map(|s| s.key()))
+        .collect();
+    let chosen: Vec<&Session> = sessions.iter().filter(|r| selected.contains(&r.key())).collect();
+    delete_saved(&root, &chosen);
+}
+
+pub(crate) fn delete_saved(root: &Path, chosen: &[&Session]) {
+    let count = chosen
+        .iter()
+        .map(|r| {
+            r.meta()
+                .get("conversation_id")
+                .and_then(Value::as_str)
+                .map(String::from)
+                .unwrap_or_else(|| crate::catalog::identity(&r.key()))
+        })
+        .collect::<HashSet<_>>()
+        .len();
     if chosen.is_empty()
         || !confirm(&tr!(
             "Delete {n} saved conversation(s)? Local originals and projects are kept.",
-            n = chosen.len()
+            n = count
         ))
     {
         return;
     }
-    let Some(_lock) = lock_store(&root) else { return };
-    let current: HashMap<String, Session> = stored_sessions(&root).into_iter().map(|r| (r.key(), r)).collect();
+    let Some(_lock) = lock_store(root) else { return };
+    let current: HashMap<String, Session> = stored_sessions(root).into_iter().map(|r| (r.key(), r)).collect();
     let now = current.iter().map(|(key, r)| (key.clone(), pushed_at(r))).collect();
     let mut st = state::load();
     let mut removed = 0;
-    for r in chosen {
+    for &r in chosen {
         if moved_on(&now, &r.key(), Some(pushed_at(r)), &r.title)
             || current.get(&r.key()).is_none_or(|c| c.project != r.project)
         {
@@ -1191,7 +1144,7 @@ pub fn delete(args: Args) {
         }
     }
     save(&mut st);
-    ok(&tr!("Removed {n}", n = removed));
+    ok(&tr!("Removed {n} shared copy/copies", n = removed));
 }
 
 // ── cv ──────────────────────────────────────────────────────────────────────
@@ -1297,13 +1250,16 @@ pub fn cv(args: Args) {
             .filter(|(k, _)| !have.contains(*k))
             .map(|(_, r)| r.clone()),
     );
+    let catalog = crate::catalog::Catalog::load();
     let scope = args.general.then_some(GENERAL.to_string()).or(args.project);
     if let Some(name) = &scope {
         let name = name.to_lowercase();
         candidates.retain(|s| {
-            remote
-                .get(&s.key())
-                .is_some_and(|r| r.project.as_deref().map(str::to_lowercase) == Some(name.clone()))
+            catalog.find(&s.key()).is_some_and(|g| {
+                g.remote()
+                    .iter()
+                    .any(|r| r.project.as_deref().map(str::to_lowercase) == Some(name.clone()))
+            })
         });
         if candidates.is_empty() {
             die(&tr!(
@@ -1347,9 +1303,34 @@ pub fn cv(args: Args) {
             }
         })
         .collect();
+    let (rows, _) = catalog.compact(rows);
     let header = tr!("Convert · creates a copy in another tool, the original is left untouched · TAB marks several");
     let keys: HashSet<String> = fzf(&rows, &header, true, true).into_iter().collect();
-    let chosen: Vec<&Session> = candidates.iter().filter(|s| keys.contains(&s.key())).collect();
+    let mut chosen = Vec::new();
+    for key in keys {
+        let Some(group) = catalog.find(&key) else { continue };
+        let sources: Vec<_> = candidates
+            .iter()
+            .filter(|s| group.copies.iter().any(|c| c.session().key() == s.key()))
+            .collect();
+        if sources.len() == 1 {
+            chosen.push(sources[0]);
+        } else {
+            let rows: Vec<Row> = sources
+                .iter()
+                .map(|s| Row {
+                    key: s.id.clone(),
+                    line: format!("{} {}", harness_tag(s.harness), s.title),
+                    preview: session_preview(s),
+                })
+                .collect();
+            if let Some(key) = fzf(&rows, &tr!("Convert from which harness?"), false, true).first()
+                && let Some(s) = sources.into_iter().find(|s| s.id == *key)
+            {
+                chosen.push(s);
+            }
+        }
+    }
     if chosen.is_empty() {
         return;
     }
@@ -1357,6 +1338,22 @@ pub fn cv(args: Args) {
     let mut st = state::load();
     let mut ready = Vec::new();
     for s in chosen {
+        if let Some(group) = catalog.find(&s.key())
+            && let Some(existing) = group.copies.iter().find(|c| c.session().harness == target)
+        {
+            if let Some(local) = &existing.local {
+                ok(&tr!(
+                    "Using the existing {tool} copy of {title}",
+                    tool = harness::get(target).label(),
+                    title = group.title
+                ));
+                ready.push(local.clone());
+            } else {
+                warn(&tr!("This harness copy is shared only: sync it first"));
+            }
+            continue;
+        }
+
         if s.harness == target {
             println!(
                 "{}",
@@ -1385,6 +1382,10 @@ pub fn cv(args: Args) {
                 continue;
             }
         };
+        let identity = catalog.find(&s.key()).map(|g| g.id.clone()).unwrap_or_else(|| s.key());
+        if let Err(e) = crate::catalog::remember(&identity, &new.key()) {
+            warn(&e.to_string());
+        }
         let mut note = String::new();
         if let (Some(root), Some(r)) = (&root, remote.get(&s.key()))
             && harness::syncs(new.harness)
@@ -1889,29 +1890,61 @@ impl Drop for SyncMaintenance<'_> {
     fn drop(&mut self) {
         for args in &self.scopes {
             crate::multisync::run(self.root, args);
-            crate::multisync::prune(self.root, args);
+            if !args.skip_retention {
+                crate::multisync::prune(self.root, args);
+            }
         }
     }
 }
 pub fn profile(mut args: Args) {
+    if args.wizard {
+        if !interactive() && ctx().pick.is_none() {
+            die(&tr!(
+                "Use an interactive terminal, or configure the profile with --harnesses and --retention"
+            ));
+        }
+        let mut config = crate::profile::current();
+        if let Err(e) =
+            crate::profile::configure(&mut config, None, None, true, None).and_then(|_| crate::profile::save(&config))
+        {
+            die(&e.to_string());
+        }
+        crate::profile::show(&config, false);
+        return;
+    }
+
     if args.conversation.as_deref() == Some("::pick") {
-        let root = store_root(false).expect("shared folder");
-        let rows: Vec<Row> = stored_sessions(&root)
+        let catalog = crate::catalog::Catalog::load();
+        let rows: Vec<_> = catalog
+            .groups
             .iter()
-            .map(|s| Row {
-                key: s.key(),
-                line: format!("{} {} · {}", harness_tag(s.harness), s.title, s.project_label()),
-                preview: session_preview(s),
-            })
+            .filter(|g| !g.remote().is_empty())
+            .map(|g| g.row())
             .collect();
-        args.conversation = fzf(&rows, &tr!("Choose a conversation profile"), false, false)
-            .into_iter()
-            .next();
+        args.conversation = fzf(&rows, &tr!("Choose a conversation profile"), false, true)
+            .first()
+            .and_then(|key| catalog.find(key))
+            .map(|g| g.id.clone());
         if args.conversation.is_none() {
             return;
         }
     }
-    let mut config = ctx().config.clone();
+    let family = args
+        .conversation
+        .as_ref()
+        .and_then(|key| crate::catalog::Catalog::load().find(key).cloned());
+    if let Some(group) = &family {
+        args.conversation = Some(group.id.clone());
+    }
+    if args.conversation.is_some() && args.harnesses.is_none() && args.retention.is_none() {
+        if let Some(group) = family
+            && let Err(e) = crate::browser::edit(&[group])
+        {
+            fail(&e.to_string());
+        }
+        return;
+    }
+    let mut config = crate::profile::current();
     let changing = args.harnesses.is_some() || args.retention.is_some();
     if changing
         && let Err(e) = crate::profile::configure(
@@ -1921,17 +1954,21 @@ pub fn profile(mut args: Args) {
             false,
             args.conversation.as_deref(),
         )
-        .and_then(|_| crate::profile::save(&config))
+        .and_then(|_| {
+            if let Some(group) = &family
+                && let Some(names) = config
+                    .get("conversation_profiles")
+                    .and_then(|p| p.get(&group.id))
+                    .cloned()
+            {
+                for copy in group.remote() {
+                    config["conversation_profiles"][&copy.key()] = names.clone();
+                }
+            }
+            crate::profile::save(&config)
+        })
     {
         die(&e.to_string());
     }
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&json!({
-            "harnesses": config.get("harnesses").cloned().unwrap_or(json!([])),
-            "retention": config.get("retention").cloned().unwrap_or(json!("never")),
-            "conversation_profiles": config.get("conversation_profiles").cloned().unwrap_or(json!({}))
-        }))
-        .unwrap()
-    );
+    crate::profile::show(&config, args.json);
 }
