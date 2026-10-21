@@ -478,6 +478,76 @@ pub fn write(turns: &[Turn], folder: &str, title: &str) -> Result<Session> {
     Ok(s)
 }
 
+/// Append completed linked turns without replacing the trajectory or changing its identity.
+pub fn append_turns(s: &mut Session, turns: &[Turn]) -> Result<()> {
+    let path = s.src.as_ref().expect("local Antigravity session");
+    let mut con = Connection::open(path)?;
+    // VACUUM INTO includes WAL content and makes a consistent recovery copy.
+    let backup = tempfile::tempdir()?;
+    let snapshot = backup.path().join("conversation.db");
+    con.execute("VACUUM INTO ?1", params![snapshot.to_string_lossy()])?;
+    crate::state::backup(s, crate::state::Copy::File(&snapshot), "multiharness")?;
+    let trajectory: String = con.query_row("select trajectory_id from trajectory_meta limit 1", [], |r| r.get(0))?;
+    let start: i64 = con.query_row("select coalesce(max(idx), -1) + 1 from steps", [], |r| r.get(0))?;
+    let run = uuid::Uuid::new_v4().to_string();
+    let tx = con.transaction()?;
+    for (n, t) in turns.iter().enumerate() {
+        let i = start + n as i64;
+        let user = t.who == "user";
+        let kind = if user { USER } else { REPLY };
+        let meta = Msg::new()
+            .msg(1, &time(t.ts))
+            .int(3, if user { 4 } else { 2 })
+            .text(12, &run)
+            .msg(20, &Msg::new().text(1, &trajectory).int(2, i as u64).text(4, &s.id));
+        let body = if user {
+            Msg::new().msg(19, &Msg::new().text(2, &t.text).msg(3, &Msg::new().text(1, &t.text)))
+        } else {
+            Msg::new().msg(20, &Msg::new().text(1, &t.text).text(8, &t.text).int(12, 2))
+        };
+        let mut payload = Msg::new().int(1, kind).int(4, DONE).msg(5, &meta).done();
+        payload.extend(body.done());
+        tx.execute(
+            "insert into steps (idx,step_type,status,metadata,step_payload) values (?1,?2,?3,?4,?5)",
+            params![i, kind as i64, DONE as i64, meta.done(), payload],
+        )?;
+    }
+    tx.commit()?;
+    let last = turns.last().map_or_else(now_ms, |t| t.ts);
+    let count = start + turns.len() as i64;
+    let index = Connection::open(home().join("conversation_summaries.db"))?;
+    // Preserve unknown summary fields; only replace the activity/count fields.
+    let raw: Vec<u8> = index.query_row(
+        "select raw_summary from conversation_summaries where conversation_id=?1",
+        params![s.id],
+        |r| r.get::<_, Option<Vec<u8>>>(0).map(Option::unwrap_or_default),
+    )?;
+    let mut summary = Msg::new();
+    for (n, v) in pb::fields(&raw).unwrap_or_default() {
+        if [2, 3, 10, 16].contains(&n) {
+            continue;
+        }
+        summary = match v {
+            pb::Val::Int(v) => summary.int(n, v),
+            pb::Val::Bytes(v) => summary.bytes(n, v),
+        };
+    }
+    let last_user = turns.iter().rposition(|t| t.who == "user").unwrap_or(0);
+    summary = summary
+        .int(2, count as u64)
+        .msg(3, &time(last))
+        .msg(10, &time(turns[last_user].ts))
+        .int(16, start as u64 + last_user as u64);
+    index.execute(
+        "update conversation_summaries set step_count=?1,last_modified_time=?2,raw_summary=?3 where conversation_id=?4",
+        params![count, datetime(last), summary.clone().done(), s.id],
+    )?;
+    add_to_cache(&s.id, &summary)?;
+    s.weight = count as u64;
+    s.updated = last as f64 / 1000.0;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

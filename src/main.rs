@@ -13,9 +13,11 @@ mod harness;
 mod i18n;
 mod lock;
 mod merge;
+mod multisync;
 mod opencode;
 mod paths;
 mod pb;
+mod profile;
 mod session;
 mod state;
 mod store;
@@ -39,6 +41,20 @@ fn language() -> String {
 
 fn cli() -> Command {
     let project = || Arg::new("project").value_name(tr!("project"));
+    let preferences = |c: Command| {
+        c.arg(
+            Arg::new("harnesses")
+                .long("harnesses")
+                .value_name("claude,codex,opencode,antigravity")
+                .help(tr!("Linked harness copies; comma-separated, or none")),
+        )
+        .arg(
+            Arg::new("retention")
+                .long("retention")
+                .value_parser(profile::PERIODS)
+                .help(tr!("Delete shared copies after inactivity; local originals are kept")),
+        )
+    };
     let general = || {
         Arg::new("general")
             .long("general")
@@ -57,7 +73,7 @@ fn cli() -> Command {
                 .action(ArgAction::Version)
                 .help(tr!("show the version")),
         )
-        .subcommand(
+        .subcommand(preferences(
             Command::new("init")
                 .about(tr!("choose the shared folder"))
                 .arg(
@@ -71,7 +87,18 @@ fn cli() -> Command {
                         .value_parser(["en", "es"])
                         .help(tr!("interface language")),
                 ),
-        )
+        ))
+        .subcommand(preferences(
+            Command::new("profile")
+                .about(tr!("Show or change harnesses and retention"))
+                .arg(
+                    Arg::new("conversation")
+                        .long("conversation")
+                        .value_name("harness:id")
+                        .num_args(0..=1)
+                        .default_missing_value("::pick"),
+                ),
+        ))
         .subcommand(Command::new("mk").about(tr!("create an empty project")).arg(project()))
         .subcommand(
             Command::new("add")
@@ -196,6 +223,14 @@ fn main() {
         Some(("init", m)) => commands::init(Args {
             folder: get(m, "folder"),
             lang: get(m, "lang"),
+            harnesses: get(m, "harnesses"),
+            retention: get(m, "retention"),
+            ..Default::default()
+        }),
+        Some(("profile", m)) => commands::profile(Args {
+            harnesses: get(m, "harnesses"),
+            retention: get(m, "retention"),
+            conversation: get(m, "conversation"),
             ..Default::default()
         }),
         Some(("mk", m)) => commands::mk(Args {

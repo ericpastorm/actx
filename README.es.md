@@ -281,3 +281,45 @@ actualizas tus PCs (la 0.4 añade el bloqueo, que las anteriores ignoran).
 ## Licencia
 
 [MIT](LICENSE). actx es un proyecto independiente, sin relación con Anthropic, OpenAI ni el equipo de opencode.
+
+### Perfil de harnesses y retención
+
+`actx init` permite elegir los harnesses que usas en **este equipo** y la retención de las
+copias compartidas. También puedes configurarlo después:
+
+```bash
+actx profile                                      # ver preferencias
+actx profile --harnesses claude,codex,opencode
+actx profile --retention 3m
+actx profile --conversation --harnesses claude,codex # seleccionar conversación
+actx profile --conversation claude:ID --harnesses claude,codex
+actx profile --harnesses none                     # desactivar copias vinculadas
+actx profile --retention never                    # no borrar automáticamente
+```
+
+Para configurar sin preguntas: `actx init /ruta/compartida --harnesses claude,codex --retention 3m`.
+Los perfiles son locales: cada PC puede usar harnesses distintos. Las preferencias por conversación
+sustituyen la lista del perfil general. Los valores de retención son `never` (por defecto), `1m`, `3m`,
+`6m`, `1y` y `2y`: 30, 90, 180, 365 y 730 días de inactividad, respectivamente.
+
+Al añadir o sincronizar una conversación guardada, actx crea las copias del perfil que falten y recuerda
+sus identificadores. Las siguientes sincronizaciones añaden las continuaciones completas a esas
+mismas sesiones. Una continuación de una copia vuelve a la conversación base y viaja a los otros PCs
+mediante el sync normal. Los originales conservan sus herramientas nativas; los intercambios que
+cruzan de harness pasan por el formato de conversión a texto. Las copias vinculadas no se ofrecen de
+nuevo en `add`, para evitar guardarlas como conversaciones independientes.
+
+La base compartida sigue siendo de Claude, Codex u opencode; Antigravity puede ser una copia vinculada
+local de ida y vuelta. Para partir de una conversación de Antigravity, conviértela primero con `cv` y
+usa `add` sobre la copia. Las copias requieren una carpeta existente y el harness de destino instalado;
+opencode necesita un modelo configurado. Se posponen conversaciones abiertas o con actividad reciente.
+Si ambas ramas cambiaron, se editaron mensajes anteriores o se compactó el historial, actx conserva
+ambas y avisa del conflicto; esta primera entrega no resuelve esas diferencias automáticamente.
+
+La retención se aplica en cada `sync`, incluidos los automáticos que tengas activados con `actx auto`.
+Solo elimina copias de la carpeta compartida; conserva proyectos, originales y copias locales.
+Se omiten conversaciones con cambios locales pendientes, conflictos o actividad detectada.
+Elige `never` para desactivarla. No se instala un temporizador adicional.
+
+Esta entrega tiene comprobaciones básicas; la validación amplia de conflictos, interrupciones y de
+la matriz de harnesses queda para la siguiente sesión de depuración.

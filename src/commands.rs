@@ -29,11 +29,14 @@ use crate::ui::{
     paint, render, say, set_auto, warn,
 };
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Args {
     pub project: Option<String>,
     pub folder: Option<String>,
     pub lang: Option<String>,
+    pub harnesses: Option<String>,
+    pub retention: Option<String>,
+    pub conversation: Option<String>,
     pub all: bool,
     pub general: bool,
     /// sync: an automatic run (no questions, output to a log)
@@ -301,6 +304,15 @@ pub fn init(args: Args) {
     if let Some(lang) = &args.lang {
         config["lang"] = json!(lang);
     }
+    if let Err(e) = crate::profile::configure(
+        &mut config,
+        args.harnesses.as_deref(),
+        args.retention.as_deref(),
+        interactive(),
+        None,
+    ) {
+        die(&e.to_string());
+    }
     let written = ctx()
         .config_file
         .parent()
@@ -400,7 +412,9 @@ pub fn add(args: Args) {
     };
     let remote: HashMap<String, Session> = stored_sessions(&root).into_iter().map(|s| (s.key(), s)).collect();
     let mut st = state::load();
+    let linked = crate::multisync::linked_keys();
     let mut ranked = all_local();
+    ranked.retain(|s| !linked.contains(&s.key()));
     if ranked.is_empty() {
         die(&tr!(
             "No Claude Code, opencode or Codex conversations found on this machine"
@@ -508,6 +522,8 @@ pub fn add(args: Args) {
         }
     }
     save(&mut st);
+    drop(_lock);
+    crate::multisync::run(&root, &Args::default());
     println!("\n{}", tr!("On your other machines: {cmd}", cmd = bold("actx sync")));
     sync_self(&root);
 }
@@ -587,7 +603,7 @@ fn pick_sync_projects(pending: &BTreeMap<String, Vec<Pending>>, args: &Args) -> 
 }
 
 /// Take the shared folder's lock before writing to it. None: busy (automatic runs give up quietly).
-fn lock_store(root: &Path) -> Option<SharedLock> {
+pub(crate) fn lock_store(root: &Path) -> Option<SharedLock> {
     let auto = is_auto();
     let wait = Duration::from_secs(ctx().lock_wait.unwrap_or(if auto { 120 } else { 60 }));
     let waiting = |h: &Holder| {
@@ -699,6 +715,14 @@ pub fn sync(args: Args) {
     } else {
         store_root(false).expect("a shared folder")
     };
+    let explicit = auto || args.all || args.general || args.project.is_some();
+    if explicit {
+        crate::multisync::run(&root, &args);
+    }
+    let mut maintenance = SyncMaintenance {
+        root: &root,
+        scopes: if explicit { vec![args.clone()] } else { Vec::new() },
+    };
     let mut remote = stored_sessions(&root);
     if remote.is_empty() {
         if !auto {
@@ -732,6 +756,9 @@ pub fn sync(args: Args) {
         }
     }
     if pending.is_empty() {
+        if maintenance.scopes.is_empty() {
+            maintenance.scopes.push(args.clone());
+        }
         save(&mut st);
         if !auto {
             ok(&tr!("All in sync ({n} conversations)", n = in_sync));
@@ -757,6 +784,15 @@ pub fn sync(args: Args) {
     if chosen.is_empty() {
         save(&mut st);
         return;
+    }
+    if maintenance.scopes.is_empty() {
+        maintenance.scopes = chosen
+            .iter()
+            .map(|name| Args {
+                project: Some(name.clone()),
+                ..args.clone()
+            })
+            .collect();
     }
     let skipped: usize = pending
         .iter()
@@ -1843,4 +1879,59 @@ pub fn doctor() {
     } else {
         warn(&tr!("{n} problem(s) above", n = problems));
     }
+}
+
+struct SyncMaintenance<'a> {
+    root: &'a Path,
+    scopes: Vec<Args>,
+}
+impl Drop for SyncMaintenance<'_> {
+    fn drop(&mut self) {
+        for args in &self.scopes {
+            crate::multisync::run(self.root, args);
+            crate::multisync::prune(self.root, args);
+        }
+    }
+}
+pub fn profile(mut args: Args) {
+    if args.conversation.as_deref() == Some("::pick") {
+        let root = store_root(false).expect("shared folder");
+        let rows: Vec<Row> = stored_sessions(&root)
+            .iter()
+            .map(|s| Row {
+                key: s.key(),
+                line: format!("{} {} · {}", harness_tag(s.harness), s.title, s.project_label()),
+                preview: session_preview(s),
+            })
+            .collect();
+        args.conversation = fzf(&rows, &tr!("Choose a conversation profile"), false, false)
+            .into_iter()
+            .next();
+        if args.conversation.is_none() {
+            return;
+        }
+    }
+    let mut config = ctx().config.clone();
+    let changing = args.harnesses.is_some() || args.retention.is_some();
+    if changing
+        && let Err(e) = crate::profile::configure(
+            &mut config,
+            args.harnesses.as_deref(),
+            args.retention.as_deref(),
+            false,
+            args.conversation.as_deref(),
+        )
+        .and_then(|_| crate::profile::save(&config))
+    {
+        die(&e.to_string());
+    }
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "harnesses": config.get("harnesses").cloned().unwrap_or(json!([])),
+            "retention": config.get("retention").cloned().unwrap_or(json!("never")),
+            "conversation_profiles": config.get("conversation_profiles").cloned().unwrap_or(json!({}))
+        }))
+        .unwrap()
+    );
 }

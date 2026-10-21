@@ -281,3 +281,40 @@ lock, which older versions ignore).
 ## License
 
 [MIT](LICENSE). actx is an independent project, not affiliated with Anthropic, OpenAI or the opencode team.
+
+### Harness profiles and retention
+
+`actx init` asks which harnesses you use on this machine and how long shared copies should be kept.
+Preferences can also be changed later:
+
+```bash
+actx profile
+actx profile --harnesses claude,codex,opencode
+actx profile --retention 3m
+actx profile --conversation --harnesses claude,codex # conversation picker
+actx profile --conversation claude:ID --harnesses claude,codex
+actx profile --harnesses none
+actx profile --retention never
+```
+
+For unattended setup: `actx init /shared/path --harnesses claude,codex --retention 3m`.
+Profiles are per machine; conversation overrides replace the default harness list. Retention choices
+are `never` (default), `1m`, `3m`, `6m`, `1y`, `2y` (30, 90, 180, 365, 730 days of inactivity).
+
+Adding or syncing a saved conversation creates missing linked copies. Subsequent syncs append complete
+continuations to the same session IDs. Continuing a linked copy sends its new exchanges back to the
+shared base and onward to other machines through normal sync. Exchanges crossing harnesses use the
+text conversion format. Linked copies are excluded from `add` to avoid independent duplicate uploads.
+
+The shared base remains a Claude, Codex or opencode conversation. Antigravity supports local linked
+copies in both directions; to start from Antigravity, convert it with `cv` and add that copy first.
+Targets need an existing work folder, an installed harness and, for opencode, a configured model.
+Open or recently active sessions are deferred. Concurrent continuations, edits and compaction leave
+both versions intact and report a conflict; automatic resolution is deferred to the debugging phase.
+
+Retention runs during each sync, including automatic syncs already enabled with `actx auto`. It removes
+only shared copies, keeping projects and all local originals/copies. Pending changes, conflicts and
+detected activity prevent deletion. No additional timer is installed.
+
+This feature pass has basic checks; broad conflict, interruption and harness matrix validation is
+reserved for the upcoming debugging session.

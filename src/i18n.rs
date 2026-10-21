@@ -45,6 +45,40 @@ const HELP_ES: &str = "actx (agent context): mantiene tus conversaciones de Clau
 
 pub static ES: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| {
     HashMap::from([
+        (
+            "Choose a conversation profile",
+            "Elige una conversación para configurar su perfil",
+        ),
+        (
+            "Linked harness copies; comma-separated, or none",
+            "Copias vinculadas por harness, separadas por comas; none para desactivar",
+        ),
+        (
+            "Delete shared copies after inactivity; local originals are kept",
+            "Borrar copias compartidas por inactividad; conservar originales locales",
+        ),
+        (
+            "Show or change harnesses and retention",
+            "Ver o cambiar los harnesses y la retención",
+        ),
+        (
+            "Which harnesses do you use? TAB selects several; Esc keeps current preferences",
+            "¿Qué harnesses usas? TAB marca varios; Esc conserva las preferencias actuales",
+        ),
+        (
+            "Delete shared copies after how much inactivity? Esc keeps current preferences",
+            "¿Tras cuánta inactividad se borran las copias compartidas? Esc conserva las preferencias",
+        ),
+        (
+            "Only saved shared copies are deleted; local originals are kept.",
+            "Solo se borran las copias compartidas guardadas; se conservan los originales locales.",
+        ),
+        ("Never delete automatically", "No borrar nunca automáticamente"),
+        ("1 month", "1 mes"),
+        ("3 months", "3 meses"),
+        ("6 months", "6 meses"),
+        ("1 year", "1 año"),
+        ("2 years", "2 años"),
         (HELP, HELP_ES),
         (
             "{name} · TAB marks several · Enter saves",

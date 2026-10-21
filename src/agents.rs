@@ -34,6 +34,9 @@ fn tool_of(program: &str) -> Option<&'static str> {
     let name = crate::paths::base_name(program).to_lowercase();
     let name = name.trim_start_matches('.').trim_end_matches(".js");
     let name = name.trim_end_matches(".exe").trim_end_matches(".cmd");
+    if name == "agy" || name.starts_with("agy-") {
+        return Some("antigravity");
+    }
     ["claude", "codex", "opencode"]
         .into_iter()
         .find(|t| name == *t || name.starts_with(&format!("{t}-")))

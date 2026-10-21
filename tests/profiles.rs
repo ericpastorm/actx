@@ -1,0 +1,131 @@
+//! Two focused smoke checks for the feature pass; broad matrix/debugging is deferred.
+mod common;
+use common::*;
+use serde_json::Value;
+use std::{
+    path::Path,
+    time::{Duration, SystemTime},
+};
+fn closed(path: &Path, days: u64) {
+    std::fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(SystemTime::now() - Duration::from_secs(days * 86400))
+        .unwrap();
+}
+fn field(n: u8, data: &[u8]) -> Vec<u8> {
+    assert!(data.len() < 128);
+    let key = (u16::from(n) << 3) | 2;
+    let mut v = if key >= 128 {
+        vec![(key as u8 & 127) | 128, (key >> 7) as u8]
+    } else {
+        vec![key as u8]
+    };
+    v.push(data.len() as u8);
+    v.extend(data);
+    v
+}
+#[test]
+fn linked_harnesses_continue_both_ways_without_new_session_ids() {
+    let w = World::new();
+    let m = w.machine("desk");
+    let folder = m.home.join("notes");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::create_dir_all(m.home.join(".gemini/antigravity-cli")).unwrap();
+    let source = claude_session(
+        &m,
+        &folder,
+        &[("user", "hello"), ("assistant", "hi")],
+        Some("Linked notes"),
+    );
+    closed(&source, 1);
+    let sid = source.file_stem().unwrap().to_string_lossy();
+    m.actx(&[
+        "init",
+        m.store.to_str().unwrap(),
+        "--harnesses",
+        "claude,antigravity",
+        "--retention",
+        "never",
+    ]);
+    m.pick(&["add"], &[&sid]);
+    let link_file = m.home.join(".local/state/actx/harness-links.json");
+    let first: Value = serde_json::from_slice(&std::fs::read(&link_file).unwrap()).unwrap();
+    let link = first["copies"].as_object().unwrap().values().next().unwrap();
+    let target = link["target"].as_str().unwrap().split_once(':').unwrap().1;
+    let db = m
+        .home
+        .join(format!(".gemini/antigravity-cli/conversations/{target}.db"));
+    claude_continue(&source, &[("user", "forward"), ("assistant", "forward answer")], None);
+    closed(&source, 1);
+    let out = m.actx(&["sync", "--all"]);
+    assert!(out.contains('↔'), "{out}");
+    let con = rusqlite::Connection::open(&db).unwrap();
+    let n: i64 = con.query_row("select count(*) from steps", [], |r| r.get(0)).unwrap();
+    assert_eq!(n, 4);
+    // Simulate a completed continuation written by Antigravity.
+    let user = field(19, &field(2, b"reverse"));
+    let reply = field(20, &field(1, b"reverse answer"));
+    con.execute(
+        "insert into steps(idx,step_type,status,step_payload) values(4,14,3,?1)",
+        [user],
+    )
+    .unwrap();
+    con.execute(
+        "insert into steps(idx,step_type,status,step_payload) values(5,15,3,?1)",
+        [reply],
+    )
+    .unwrap();
+    drop(con);
+    let out = m.actx(&["sync", "--all"]);
+    assert!(out.contains('↔'), "{out}");
+    let (_, texts, _) = claude_transcript(&m, &sid);
+    assert_eq!(texts.last().unwrap(), "reverse answer");
+    let stored = w.store().join("_general/claude").join(sid.as_ref());
+    let meta: Value = serde_json::from_slice(&std::fs::read(stored.join("meta.json")).unwrap()).unwrap();
+    let saved =
+        zstd::stream::decode_all(std::fs::File::open(stored.join(meta["files"]["session"].as_str().unwrap())).unwrap())
+            .unwrap();
+    assert!(
+        String::from_utf8(saved).unwrap().contains("reverse answer"),
+        "linked continuation must be shared in the same sync"
+    );
+    m.actx(&["sync", "--all"]);
+    let last: Value = serde_json::from_slice(&std::fs::read(&link_file).unwrap()).unwrap();
+    assert_eq!(
+        first["copies"].as_object().unwrap().keys().collect::<Vec<_>>(),
+        last["copies"].as_object().unwrap().keys().collect::<Vec<_>>()
+    );
+    assert_eq!(
+        last["copies"].as_object().unwrap().values().next().unwrap()["target"],
+        link["target"]
+    );
+}
+#[test]
+fn retention_is_opt_in_and_only_removes_shared_copies() {
+    let w = World::new();
+    let m = w.machine("desk");
+    let folder = m.home.join("notes");
+    std::fs::create_dir_all(&folder).unwrap();
+    let source = claude_session(
+        &m,
+        &folder,
+        &[("user", "old"), ("assistant", "answer")],
+        Some("Old notes"),
+    );
+    closed(&source, 100);
+    let id = source.file_stem().unwrap().to_string_lossy();
+    m.pick(&["add"], &[&id]);
+    let stored = w.store().join("_general/claude").join(id.as_ref());
+    m.actx(&["sync", "--all"]);
+    assert!(stored.exists());
+    m.actx(&["profile", "--retention", "1m"]);
+    let original = std::fs::read(&source).unwrap();
+    let out = m.actx(&["sync", "--all"]);
+    assert!(out.contains("Retention:"), "{out}");
+    assert!(!stored.exists());
+    assert_eq!(std::fs::read(&source).unwrap(), original);
+    m.actx(&["sync", "--all"]);
+    assert!(!stored.exists());
+}
