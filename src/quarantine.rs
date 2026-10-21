@@ -102,7 +102,8 @@ fn digest(mut source: impl Read) -> Result<u64> {
 fn compressed(dir: &Path, path: &Path) -> Result<u64> {
     let target = dir.join("payload.zst");
     store::write_compressed(&target, std::fs::File::open(path)?)?;
-    std::fs::File::open(&target)?.sync_all()?;
+    // Windows requires write access to flush a file's buffers.
+    std::fs::File::options().write(true).open(&target)?.sync_all()?;
     digest(store::open_read(&target)?)
 }
 fn snapshot_db(source: &Path, target: &Path) -> Result<()> {
@@ -190,7 +191,7 @@ pub fn apply(selected: &[&Candidate]) -> Result<()> {
             for file in std::fs::read_dir(&dir)? {
                 let file = file?;
                 if file.file_type()?.is_file() {
-                    std::fs::File::open(file.path())?.sync_all()?;
+                    std::fs::File::options().write(true).open(file.path())?.sync_all()?;
                 }
             }
             save(&dir, &entry)?;

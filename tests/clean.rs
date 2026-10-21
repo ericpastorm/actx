@@ -109,7 +109,13 @@ fn read_only_suggestions_explain_tests_repetition_and_native_children() {
     assert!(out.contains("Subagent confirmed"), "{out}");
     assert!(!out.contains("Recent smoke"), "{out}");
     assert!(!out.contains("Shared important short"), "{out}");
-    assert_eq!(snapshot(w.dir.path()), before);
+    let after = snapshot(w.dir.path());
+    assert_eq!(after.keys().collect::<Vec<_>>(), before.keys().collect::<Vec<_>>());
+    for (path, (bytes, modified)) in &after {
+        let (old_bytes, old_modified) = &before[path];
+        assert!(bytes == old_bytes, "preview changed contents: {}", path.display());
+        assert_eq!(modified, old_modified, "preview changed mtime: {}", path.display());
+    }
     let out = m.actx(&["clean", "--dry-run", "--only", "tests"]);
     assert!(!out.contains("Worker 0"), "{out}");
     // An active parent protects its old native children too.
