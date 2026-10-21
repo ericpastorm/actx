@@ -87,7 +87,7 @@ fn general_destinations_are_explicit_independent_and_remembered() {
     assert!(b.actx(&["sync", "--auto"]).contains("needs a destination folder"));
     assert!(find(&b.claude_dir(), &format!("{first}.jsonl")).is_none());
     assert!(b.actx(&["sync", "--general"]).contains("skipping"));
-    let one = b.home.join("personal/first notes");
+    let one = b.home.join("personal").join("first notes");
     let out = place(&b, &one);
     assert!(out.contains('↓'), "{out}");
     assert_eq!(claude_transcript(&b, &first).2, [one.to_string_lossy()]);
@@ -100,7 +100,7 @@ fn general_destinations_are_explicit_independent_and_remembered() {
     a.pick(&["add", "--general"], &[&second]);
     assert!(b.actx(&["sync", "--auto"]).contains("needs a destination folder"));
     assert!(find(&b.claude_dir(), &format!("{second}.jsonl")).is_none());
-    let two = b.home.join("other/second notes");
+    let two = b.home.join("other").join("second notes");
     let out = place(&b, &two);
     assert!(out.contains('↓'), "{out}");
     assert_eq!(claude_transcript(&b, &second).2, [two.to_string_lossy()]);
