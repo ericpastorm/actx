@@ -60,6 +60,10 @@ pub static ES: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
         ("you", "tú"),
         ("(untitled)", "(sin título)"),
         (
+            "Codex couldn't index {sid}: {err}; the conversation file was kept",
+            "Codex no pudo indexar {sid}: {err}; se ha conservado el archivo de la conversación",
+        ),
+        (
             "Can't read the opencode database ({err}); skipping opencode",
             "No puedo leer la base de datos de opencode ({err}); me salto opencode",
         ),

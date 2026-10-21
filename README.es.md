@@ -158,6 +158,10 @@ basta para seguir trabajando. En opencode, la copia usa el último modelo que ha
 Antigravity, el que tengas por defecto. Antigravity no tiene forma de importar: actx escribe la
 conversación en su base de datos (los pasos, el índice y el título), y `agy --conversation <id>` la retoma.
 
+Cuando Codex está instalado, actx también registra las conversaciones convertidas y descargadas
+mediante su app-server local para que aparezcan en el selector de sesiones. Solo lee la conversación
+guardada; no inicia un turno del agente ni solicita una respuesta al modelo.
+
 ### La carpeta compartida
 
 ```

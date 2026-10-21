@@ -157,6 +157,10 @@ keep working. In opencode, the copy uses the last model you used there; in Codex
 default one. Antigravity has no import: actx writes the conversation into its database (the steps, the
 index and the title), and `agy --conversation <id>` resumes it.
 
+When Codex is installed, actx also registers imported and downloaded conversations through its
+local app-server so they appear in the resume picker. This reads the saved thread without starting
+an agent turn or making an inference request.
+
 ### The shared folder
 
 ```

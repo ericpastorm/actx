@@ -1,13 +1,15 @@
 //! Codex. A session is a "rollout" file, ~/.codex/sessions/YYYY/MM/DD/rollout-<time>-<id>.jsonl,
 //! holding what the model saw (response_item) and what Codex shows (event_msg); titles live in
-//! session_index.jsonl. Codex finds rollouts by scanning that folder, so copying the file is enough.
+//! session_index.jsonl. Register imported rollouts through app-server too: the resume picker can
+//! use only Codex's state database, without discovering new files on disk.
 
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::sync::{LazyLock, OnceLock};
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use regex::Regex;
 use serde_json::{Value, json};
@@ -61,6 +63,79 @@ fn set_title(sid: &str, title: &str) -> Result<()> {
     let mut f = File::options().create(true).append(true).open(index)?;
     f.write_all(jsonl(&json!({"id": sid, "thread_name": title, "updated_at": stamp})).as_bytes())?;
     Ok(())
+}
+
+/// Reading a known rollout lets Codex update its own index, without resuming the agent or
+/// requesting inference. Don't write its private SQLite schema, which changes across versions.
+fn register(sid: &str) -> Result<()> {
+    if !crate::ctx::which("codex") {
+        return Ok(()); // a data-only installation can still receive rollouts
+    }
+    let result = (|| -> std::result::Result<(), String> {
+        let mut child = crate::ctx::command("codex")
+            .arg("app-server")
+            .env("CODEX_HOME", &ctx().codex_home)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        let mut stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines().map_while(std::result::Result::ok) {
+                if let Ok(msg) = serde_json::from_str::<Value>(&line)
+                    && tx.send(msg).is_err()
+                {
+                    break;
+                }
+            }
+        });
+        let result = (|| {
+            let deadline = Instant::now() + Duration::from_secs(30);
+            let mut call = |id: u64, method: &str, params: Value| -> std::result::Result<Value, String> {
+                writeln!(stdin, "{}", json!({"id": id, "method": method, "params": params}))
+                    .map_err(|e| e.to_string())?;
+                loop {
+                    let msg = rx
+                        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                        .map_err(|e| e.to_string())?;
+                    if msg.get("id").and_then(Value::as_u64) != Some(id) {
+                        continue;
+                    }
+                    if let Some(err) = msg.get("error") {
+                        return Err(err.to_string());
+                    }
+                    if id == 0 {
+                        writeln!(stdin, "{}", json!({"method": "initialized"})).map_err(|e| e.to_string())?;
+                    }
+                    return msg.get("result").cloned().ok_or_else(|| "missing result".into());
+                }
+            };
+            call(
+                0,
+                "initialize",
+                json!({"clientInfo": {"name": "actx", "version": crate::ctx::VERSION}}),
+            )?;
+            let thread = call(1, "thread/read", json!({"threadId": sid, "includeTurns": false}))?;
+            if thread["thread"]["id"].as_str() != Some(sid) {
+                return Err("unexpected thread id".into());
+            }
+            Ok(())
+        })();
+        drop(stdin);
+        let _ = child.kill();
+        let _ = child.wait();
+        result
+    })();
+    result.map_err(|err| {
+        crate::ctx::Error(tr!(
+            "Codex couldn't index {sid}: {err}; the conversation file was kept",
+            sid = sid,
+            err = err
+        ))
+    })
 }
 
 /// Text of a response_item message from `role`, leaving out injected context like <environment_context>.
@@ -258,6 +333,7 @@ fn new_path(sid: &str) -> Result<PathBuf> {
 fn finished(sid: String, title: &str, folder: &str, path: PathBuf) -> Result<Session> {
     crate::paths::make_private(&path)?;
     set_title(&sid, title)?;
+    register(&sid)?;
     let size = path.metadata()?.len();
     let mut s = Session::local("codex", sid, title.to_string(), folder.to_string(), epoch(&path), size);
     s.src = Some(path);
@@ -323,6 +399,7 @@ pub fn install(r: &Session, local: Option<&Session>, _folder: &str, fix: Fix) ->
         let _ = std::fs::remove_file(src);
     }
     set_title(&r.id, &r.title)?;
+    register(&r.id)?;
     Ok(size)
 }
 

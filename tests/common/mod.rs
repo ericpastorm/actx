@@ -619,6 +619,16 @@ pub fn codex_continue(path: &Path, turns: &[(&str, &str)], tool: Option<(&str, &
 
 /// What Codex itself sees on a machine, through its app-server: {id: (preview, turns, cwd)}.
 pub fn codex_threads(m: &Machine) -> std::collections::HashMap<String, (String, usize, String)> {
+    codex_threads_with(m, false)
+}
+
+/// Like the resume picker: don't discover rollouts on behalf of actx while checking visibility.
+pub fn codex_threads_from_state(m: &Machine) -> std::collections::HashMap<String, (String, usize, String)> {
+    codex_threads_with(m, true)
+}
+
+fn codex_threads_with(m: &Machine, state_only: bool) -> std::collections::HashMap<String, (String, usize, String)> {
+    std::fs::create_dir_all(m.codex_sessions()).unwrap();
     let mut child = m
         .command("codex")
         .arg("app-server")
@@ -657,7 +667,7 @@ pub fn codex_threads(m: &Machine) -> std::collections::HashMap<String, (String, 
         json!({"clientInfo": {"name": "actx-tests", "version": "0"}}),
     );
     call(None, "initialized", Value::Null);
-    let listed = call(Some(1), "thread/list", json!({}));
+    let listed = call(Some(1), "thread/list", json!({"useStateDbOnly": state_only}));
     let mut out = std::collections::HashMap::new();
     for (n, t) in listed["data"]
         .as_array()

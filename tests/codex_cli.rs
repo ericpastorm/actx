@@ -43,6 +43,7 @@ fn codex_sync_between_different_paths() {
     needs!("codex");
     let w = World::new();
     let (a, b, repo, clone, sid) = setup(&w);
+    assert!(codex_threads(&b).is_empty()); // Codex has already completed its initial discovery
     b.actx(&["sync"]);
     let path = rollout_of(&b, &sid);
     let text = std::fs::read_to_string(&path).unwrap();
@@ -50,7 +51,7 @@ fn codex_sync_between_different_paths() {
     assert_eq!(first["payload"]["cwd"], clone.to_string_lossy().as_ref());
     assert!(message_texts(&text).contains(&format!("Done in {}/cart.ts", clone.display())));
     assert_eq!(
-        codex_threads(&b)[&sid],
+        codex_threads_from_state(&b)[&sid],
         ("fix the cart".into(), 1, clone.to_string_lossy().into_owned())
     ); // Codex itself sees it
     assert!(
@@ -84,6 +85,7 @@ fn codex_conversions() {
     let w = World::new();
     let (_a, b, _repo, clone, sid) = setup(&w);
     b.actx(&["sync"]);
+    assert!(codex_threads(&b).contains_key(&sid)); // an existing Codex state DB before importing
     claude_session(&b, &clone, &[("user", "hi"), ("assistant", "hello")], None);
     let out = b.pick(&["cv"], &[&sid, "claude"]); // Codex → Claude Code
     assert!(
@@ -102,10 +104,59 @@ fn codex_conversions() {
         .and_then(|s| s.split_whitespace().next())
         .expect("a resume command")
         .to_string();
-    let (preview, turns, cwd) = codex_threads(&b)[&new_id].clone();
+    let visible = codex_threads_from_state(&b);
+    assert!(
+        visible.contains_key(&new_id),
+        "the imported conversation must appear without a repair scan"
+    );
+    let (preview, turns, cwd) = visible[&new_id].clone();
     assert!(
         preview.contains("Conversation imported from Claude Code") && turns == 1 && cwd == clone.to_string_lossy(),
         "{preview}"
+    );
+}
+
+#[test]
+fn codex_import_keeps_latest_messages_and_is_visible_without_scanning() {
+    needs!("codex");
+    let w = World::new();
+    let m = w.machine("desk");
+    let repo = git_repo(&m.home.join("code/shop"));
+    codex_rollout(
+        &m,
+        &repo,
+        &[("user", "earlier task"), ("assistant", "earlier release ready")],
+        None,
+    );
+    assert_eq!(codex_threads(&m).len(), 1);
+    let source = claude_session(
+        &m,
+        &repo,
+        &[
+            ("user", "prepare release two"),
+            ("assistant", "release two is ready"),
+            ("user", "stop the development server"),
+            ("assistant", "server stopped; release two is pending review"),
+        ],
+        None,
+    );
+    let sid = source.file_stem().unwrap().to_string_lossy();
+    let out = m.pick(&["cv"], &[&sid, "codex"]);
+    let new_id = out
+        .split("codex resume ")
+        .nth(1)
+        .and_then(|s| s.split_whitespace().next())
+        .expect(&out);
+    let visible = codex_threads_from_state(&m);
+    assert_eq!(visible.len(), 2, "the original and the import must both be visible");
+    assert_eq!(visible[new_id].1, 2, "Codex must reconstruct both imported exchanges");
+    assert_eq!(visible[new_id].2, repo.to_string_lossy());
+    let text = std::fs::read_to_string(rollout_of(&m, new_id)).unwrap();
+    let messages = message_texts(&text);
+    assert_eq!(messages[messages.len() - 2], "stop the development server");
+    assert_eq!(
+        messages.last().unwrap(),
+        "server stopped; release two is pending review"
     );
 }
 
