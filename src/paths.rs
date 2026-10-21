@@ -207,7 +207,7 @@ fn rules_for(old: &str, new: &str) -> Vec<Rule> {
     }
 }
 
-/// Copy a path suffix up to a quote, JSON escape, or command delimiter. Spaces and punctuation
+/// Copy a path suffix up to a quote, JSON escape, or reserved path character. Spaces and punctuation
 /// can be part of a name; a separator after whitespace starts another path in the surrounding text.
 fn convert_suffix(rule: &Rule, data: &[u8], mut end: usize, out: &mut Vec<u8>) -> usize {
     if !rule.seps_in.iter().any(|s| data[end..].starts_with(s)) {
@@ -221,7 +221,7 @@ fn convert_suffix(rule: &Rule, data: &[u8], mut end: usize, out: &mut Vec<u8>) -
             }
             out.extend_from_slice(&rule.sep_out);
             end += sep.len();
-        } else if c.is_ascii_control() || b"\\\"<>|?*:;&`".contains(&c) {
+        } else if c.is_ascii_control() || b"\\\"<>|?*:".contains(&c) {
             break;
         } else {
             out.push(c);
@@ -355,6 +355,7 @@ mod tests {
             "my folder/cart.ts",
             "a,b/ñ (copy)/cart.ts",
             "O'Neill/file.txt",
+            "R & D/a;b/with`backtick/cart.ts",
             "src/",
             "",
         ] {
