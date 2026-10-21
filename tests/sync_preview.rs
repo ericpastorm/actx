@@ -32,6 +32,15 @@ fn snapshot(root: &Path) -> BTreeMap<PathBuf, (Vec<u8>, SystemTime)> {
     visit(root, &mut out);
     out
 }
+fn assert_unchanged(root: &Path, before: &BTreeMap<PathBuf, (Vec<u8>, SystemTime)>) {
+    let after = snapshot(root);
+    assert_eq!(after.keys().collect::<Vec<_>>(), before.keys().collect::<Vec<_>>());
+    for (path, (bytes, modified)) in &after {
+        let (old_bytes, old_modified) = &before[path];
+        assert!(bytes == old_bytes, "preview changed contents: {}", path.display());
+        assert_eq!(modified, old_modified, "preview changed mtime: {}", path.display());
+    }
+}
 fn closed(path: &Path, days: u64) {
     std::fs::File::options()
         .write(true)
@@ -69,11 +78,7 @@ fn preview_preserves_legacy_state_and_every_local_and_shared_file() {
     let out = b.actx(&["sync", "--dry-run", "--general", "--auto"]);
     assert!(out.contains("New local conversation"), "{out}");
     assert!(out.contains("Destination folder needs a decision"), "{out}");
-    assert_eq!(
-        snapshot(w.dir.path()),
-        before,
-        "preview must not migrate state, create logs, publish binaries, or write conversations"
-    );
+    assert_unchanged(w.dir.path(), &before);
     assert!(!state.exists());
 }
 
@@ -101,7 +106,7 @@ fn preview_filters_projects_and_classifies_downloads_and_conflicts() {
     let before = snapshot(w.dir.path());
     let out = a.actx(&["sync", "--dry-run", "Work"]);
     assert!(out.contains("Download"), "{out}");
-    assert_eq!(snapshot(w.dir.path()), before);
+    assert_unchanged(w.dir.path(), &before);
     claude_continue(&first, &[("user", "on desk"), ("assistant", "desk reply")], None);
     closed(&first, 1);
     let out = a.actx(&["sync", "--dry-run", "Work"]);
@@ -144,11 +149,7 @@ fn preview_inspects_linked_wal_databases_and_retention_without_writing() {
     let out = a.actx(&["sync", "--dry-run", "--all"]);
     assert!(out.contains("Linked histories match their saved baselines"), "{out}");
     assert!(out.contains("Delete expired shared copy"), "{out}");
-    assert_eq!(
-        snapshot(w.dir.path()),
-        before,
-        "including live WAL and SHM bytes and timestamps"
-    );
+    assert_unchanged(w.dir.path(), &before);
     // A continuation must be shown but not appended to the mirror in dry-run.
     claude_continue(&path, &[("user", "forward"), ("assistant", "new reply")], None);
     closed(&path, 1);
@@ -156,14 +157,14 @@ fn preview_inspects_linked_wal_databases_and_retention_without_writing() {
     let out = a.actx(&["sync", "--dry-run", "--all"]);
     assert!(out.contains("Update linked copy"), "{out}");
     assert!(!out.contains("Delete expired shared copy · Linked old notes"), "{out}");
-    assert_eq!(snapshot(w.dir.path()), before);
+    assert_unchanged(w.dir.path(), &before);
     // Reconfigure a fresh target: show conversion without generating a conversation.
     a.actx(&["profile", "--harnesses", "claude,codex"]);
     std::fs::create_dir_all(a.home.join(".codex")).unwrap();
     let before = snapshot(w.dir.path());
     let out = a.actx(&["sync", "--dry-run", "--all"]);
     assert!(out.contains("Create linked copy"), "{out}");
-    assert_eq!(snapshot(w.dir.path()), before);
+    assert_unchanged(w.dir.path(), &before);
 }
 
 #[test]
@@ -261,6 +262,6 @@ fn preview_reads_both_opencode_schemas_without_starting_the_cli() {
             text.contains("Linked histories match their saved baselines"),
             "schema {version}: {text}"
         );
-        assert_eq!(snapshot(w.dir.path()), before, "schema {version}: preview changed data");
+        assert_unchanged(w.dir.path(), &before);
     }
 }

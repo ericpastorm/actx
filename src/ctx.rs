@@ -230,7 +230,16 @@ pub fn hide_window(c: &mut std::process::Command) -> &mut std::process::Command 
 
 /// A command for a system tool (`powershell.exe`, `tasklist`…), with no window on Windows.
 pub fn quiet(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
-    let mut c = std::process::Command::new(program);
+    let mut c = std::process::Command::new(program.as_ref());
+    #[cfg(windows)]
+    {
+        let name = Path::new(program.as_ref()).file_stem().unwrap_or_default().to_string_lossy();
+        if name.eq_ignore_ascii_case("powershell") || name.eq_ignore_ascii_case("pwsh") {
+            // Even -NoProfile can write ModuleAnalysisCache in the user's profile.
+            // Keep process inspection read-only without changing the user's environment.
+            c.env("PSModuleAnalysisCachePath", "NUL");
+        }
+    }
     hide_window(&mut c);
     c
 }

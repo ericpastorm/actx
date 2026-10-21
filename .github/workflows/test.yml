@@ -13,7 +13,8 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    # Windows runs the native CLI and process-inspection integrations more slowly.
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 35 || 20 }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
