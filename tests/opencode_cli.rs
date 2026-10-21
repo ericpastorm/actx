@@ -189,7 +189,10 @@ fn opencode_converts_without_folder_and_reports_unconfigured_model() {
         },
     );
     assert!(out.contains("Fix the login form (from opencode)"), "{out}");
-    let copy = find(&a.claude_dir(), ".jsonl").expect("converted Claude conversation");
+    let copy = files_under(&a.claude_dir())
+        .into_iter()
+        .find(|p| p != &source && p.extension().is_some_and(|e| e == "jsonl"))
+        .expect("converted Claude conversation");
     let (_, _, cwds) = claude_transcript(&a, &copy.file_stem().unwrap().to_string_lossy());
     assert_eq!(cwds, [dest.to_string_lossy()]);
 }
