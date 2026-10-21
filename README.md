@@ -119,6 +119,9 @@ one (and an acknowledgement from the agent), so the agent knows about both. The 
 also kept, whole, as *«title (branch from laptop)»*. Before anything is overwritten, a backup goes
 to `~/.local/state/actx/backups/`.
 
+Close the conversation in its agent before merging. If actx detects that it is open, the merge
+stays pending until you close it and run `actx sync` again.
+
 ### Automatic sync
 
 `actx auto on` sets up, on this machine:

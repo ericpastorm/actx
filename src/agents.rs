@@ -289,39 +289,41 @@ fn processes() -> Vec<Proc> {
     out
 }
 
+fn scan_running() -> Running {
+    let procs = processes();
+    let live: HashMap<u32, &Proc> = procs.iter().map(|p| (p.pid, p)).collect();
+    let (mut claude_open, mut claude_registered) = (HashSet::new(), HashSet::new());
+    let registry = ctx().claude_projects.parent().map(|d| d.join("sessions"));
+    let claude_lists = registry.as_ref().is_some_and(|d| d.is_dir());
+    for f in registry
+        .and_then(|d| std::fs::read_dir(d).ok())
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok())
+    {
+        let Some(entry) = std::fs::read_to_string(f.path())
+            .ok()
+            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        else {
+            continue;
+        };
+        let pid = entry.get("pid").and_then(Value::as_u64).unwrap_or(0) as u32;
+        if live.get(&pid).is_some_and(|p| p.tool == "claude") {
+            claude_open.insert(jstr(&entry, "sessionId").to_string());
+            claude_registered.insert(pid);
+        }
+    }
+    Running {
+        procs,
+        claude_open,
+        claude_registered,
+        claude_lists,
+    }
+}
+
 fn running() -> &'static Running {
     static RUNNING: OnceLock<Running> = OnceLock::new();
-    RUNNING.get_or_init(|| {
-        let procs = processes();
-        let live: HashMap<u32, &Proc> = procs.iter().map(|p| (p.pid, p)).collect();
-        let (mut claude_open, mut claude_registered) = (HashSet::new(), HashSet::new());
-        let registry = ctx().claude_projects.parent().map(|d| d.join("sessions"));
-        let claude_lists = registry.as_ref().is_some_and(|d| d.is_dir());
-        for f in registry
-            .and_then(|d| std::fs::read_dir(d).ok())
-            .into_iter()
-            .flatten()
-            .filter_map(|e| e.ok())
-        {
-            let Some(entry) = std::fs::read_to_string(f.path())
-                .ok()
-                .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-            else {
-                continue;
-            };
-            let pid = entry.get("pid").and_then(Value::as_u64).unwrap_or(0) as u32;
-            if live.get(&pid).is_some_and(|p| p.tool == "claude") {
-                claude_open.insert(jstr(&entry, "sessionId").to_string());
-                claude_registered.insert(pid);
-            }
-        }
-        Running {
-            procs,
-            claude_open,
-            claude_registered,
-            claude_lists,
-        }
-    })
+    RUNNING.get_or_init(scan_running)
 }
 
 /// Is `s` (a conversation on this machine) open in a running agent, or was it just being written
@@ -334,7 +336,16 @@ pub fn in_use(s: &Session) -> bool {
 
 /// Is `s` open in a running Claude Code, Codex or opencode?
 pub fn in_use_by_agent(s: &Session) -> bool {
-    let r = running();
+    used_by(running(), s)
+}
+
+/// Refresh the process and session lists before modifying a conversation: an agent may have
+/// opened it since the cached snapshot was taken, especially while waiting for the shared lock.
+pub fn in_use_by_agent_now(s: &Session) -> bool {
+    used_by(&scan_running(), s)
+}
+
+fn used_by(r: &Running, s: &Session) -> bool {
     // Windows can't tell which folder an agent runs in: Codex and opencode count as open in any
     let here = |p: &Proc| {
         p.tool == s.harness && (p.cwd == s.path || (cfg!(windows) && p.cwd.is_empty() && s.harness != "claude"))

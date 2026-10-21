@@ -120,6 +120,9 @@ otro (y una respuesta del agente confirmándolo), así el agente sabe lo que pas
 versión también se guarda, entera, como *«título (rama de portátil)»*. Antes de sobrescribir nada,
 se guarda una copia en `~/.local/state/actx/backups/`.
 
+Cierra la conversación en su agente antes de mezclar. Si actx detecta que está abierta, la mezcla
+queda pendiente hasta que la cierres y vuelvas a ejecutar `actx sync`.
+
 ### Sincronización automática
 
 `actx auto on` instala en este PC:

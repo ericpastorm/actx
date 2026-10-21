@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use crate::ctx::{Result, jstr};
+use crate::ctx::{Error, Result, jstr};
 use crate::git::{fixer_for, git_info};
 use crate::harness;
 use crate::session::Session;
@@ -38,6 +38,14 @@ fn branch_summary(turns: &[Turn], host: &str) -> String {
 
 pub fn merge_one(root: &Path, l: &mut Session, r: &Session, st: &mut State) -> Result<()> {
     let h = harness::get(l.harness);
+    // This runs after taking the shared lock. Refresh rather than reuse an earlier process list,
+    // and stop before creating a branch, making a backup, or changing either conversation.
+    if crate::agents::in_use_by_agent_now(l) {
+        return Err(Error(tr!(
+            "it's open in {tool} right now: close it first",
+            tool = h.label()
+        )));
+    }
     let host = jstr(r.meta(), "host").to_string();
     let project = r.project.clone().unwrap_or_default();
     let fix = fixer_for(r.meta(), &l.path);
