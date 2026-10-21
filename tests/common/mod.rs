@@ -188,7 +188,7 @@ impl Machine {
     }
 
     pub fn command(&self, program: &str) -> Command {
-        let mut c = Command::new(if program == "opencode" {
+        let mut c = Command::new(if ["opencode", "codex"].contains(&program) {
             resolve(program)
         } else {
             PathBuf::from(program)

@@ -210,7 +210,7 @@ no confiarías tu código.
   salvo entre opencode 1.x y 2.x, que pasa por la misma conversión. Para mezclar hace falta la misma
   versión de opencode.
 - opencode se maneja con su CLI: mientras importas una sesión, no la tengas abierta en opencode.
-- Linux y macOS (los dos probados en la CI) y Windows (los tests también pasan allí; aún no están en la CI). En Windows, actx no puede ver en qué carpeta corre
+- Linux, macOS y Windows (los tres probados en la CI). En Windows, actx no puede ver en qué carpeta corre
   otro programa, así que mientras Codex u opencode estén abiertos, no baja encima de sus conversaciones
   (Claude Code dice exactamente cuál tiene abierta, así que a él no le afecta). Los hooks se ejecutan en el
   shell que usan allí Claude Code y Codex (Git Bash).

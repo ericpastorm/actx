@@ -2,7 +2,7 @@
 //! version in memory and would go on writing on top of it.
 
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use serde_json::Value;
@@ -31,7 +31,7 @@ struct Running {
 }
 
 fn tool_of(program: &str) -> Option<&'static str> {
-    let name = Path::new(program).file_name()?.to_string_lossy().to_lowercase();
+    let name = crate::paths::base_name(program).to_lowercase();
     let name = name.trim_start_matches('.').trim_end_matches(".js");
     let name = name.trim_end_matches(".exe").trim_end_matches(".cmd");
     ["claude", "codex", "opencode"]
@@ -44,11 +44,9 @@ fn tool_of(program: &str) -> Option<&'static str> {
 /// or a wrapper script: sh <…>/claude.
 fn tool_of_command(args: &[&str]) -> Option<&'static str> {
     let first = *args.first()?;
-    let runtime = Path::new(first).file_name().is_some_and(|n| {
-        let n = n.to_string_lossy().to_lowercase();
-        let n = n.trim_end_matches(".exe");
-        ["node", "bun", "sh", "bash", "dash", "zsh"].contains(&n)
-    });
+    let n = crate::paths::base_name(first).to_lowercase();
+    let n = n.trim_end_matches(".exe");
+    let runtime = ["node", "bun", "sh", "bash", "dash", "zsh"].contains(&n);
     if runtime { tool_of(args.get(1)?) } else { tool_of(first) }
 }
 
@@ -108,8 +106,8 @@ fn win_processes(only: Option<u32>) -> Vec<(u32, u32, String)> {
         .collect()
 }
 
-/// The first two words of a Windows command line (`"C:\Program Files\x.exe" arg`).
-#[cfg(windows)]
+/// The arguments of a Windows command line (`"C:\Program Files\x.exe" arg`).
+#[cfg(any(windows, test))]
 fn win_args(command: &str) -> Vec<String> {
     let (mut args, mut cur, mut quoted) = (Vec::new(), String::new(), false);
     for c in command.chars() {
@@ -129,25 +127,108 @@ fn win_args(command: &str) -> Vec<String> {
     args
 }
 
-/// Subcommands of the agents that aren't a conversation open in a terminal: actx's own
-/// `opencode session export`, the `opencode serve` helper it starts, `codex exec`…
-#[cfg(windows)]
-const NOT_INTERACTIVE: [&str; 14] = [
-    "serve",
-    "session",
-    "export",
-    "import",
-    "run",
-    "exec",
-    "auth",
-    "login",
-    "logout",
-    "models",
-    "stats",
-    "mcp",
-    "--version",
-    "--help",
-];
+/// Ignore known helper subcommands, but never mistake a prompt or option value for one.
+/// Unknown options are treated conservatively: an unrecognized process may still be writing.
+#[cfg(any(windows, test))]
+fn interactive_tool(args: &[&str]) -> Option<&'static str> {
+    let tool = tool_of_command(args)?;
+    let start = if tool_of(args[0]).is_some() { 1 } else { 2 };
+    let values: &[&str] = match tool {
+        "opencode" => &[
+            "--prompt",
+            "--agent",
+            "--model",
+            "-m",
+            "--session",
+            "-s",
+            "--server",
+            "--directory",
+            "--port",
+            "--hostname",
+            "--log-level",
+            "--completions",
+        ],
+        "codex" => &[
+            "--config",
+            "-c",
+            "--model",
+            "-m",
+            "--profile",
+            "-p",
+            "--sandbox",
+            "-s",
+            "--ask-for-approval",
+            "-a",
+            "--cd",
+            "-C",
+            "--image",
+            "-i",
+            "--add-dir",
+            "--enable",
+            "--disable",
+        ],
+        _ => &[
+            "--model",
+            "--agent",
+            "--resume",
+            "-r",
+            "--session-id",
+            "--permission-mode",
+            "--mcp-config",
+            "--system-prompt",
+            "--append-system-prompt",
+            "--output-format",
+            "--input-format",
+            "--settings",
+        ],
+    };
+    let flags: &[&str] = match tool {
+        "opencode" => &["--standalone", "--auto", "--continue", "-c", "--print-logs"],
+        "codex" => &[
+            "--full-auto",
+            "--dangerously-bypass-approvals-and-sandbox",
+            "--search",
+            "--no-alt-screen",
+            "--oss",
+        ],
+        _ => &["--continue", "-c", "--verbose", "--dangerously-skip-permissions"],
+    };
+    let helpers: &[&str] = match tool {
+        "opencode" => &[
+            "serve", "session", "export", "import", "run", "auth", "models", "stats", "mcp", "service", "api",
+        ],
+        "codex" => &[
+            "exec",
+            "e",
+            "auth",
+            "login",
+            "logout",
+            "mcp",
+            "app-server",
+            "completion",
+        ],
+        _ => &["auth", "mcp", "install", "update", "upgrade", "doctor", "setup-token"],
+    };
+    let mut i = start;
+    while let Some(&arg) = args.get(i) {
+        if arg == "--" {
+            return Some(tool);
+        }
+        if ["--help", "-h", "--version", "-V", "-v"].contains(&arg) {
+            return None;
+        }
+        if values.contains(&arg) {
+            i += 2;
+        } else if flags.contains(&arg) || (arg.starts_with("--") && arg.contains('=')) {
+            i += 1;
+        } else if arg.starts_with('-') {
+            return Some(tool);
+        } else {
+            return (!helpers.contains(&arg)).then_some(tool);
+        }
+    }
+    Some(tool)
+}
 
 #[cfg(windows)]
 fn processes() -> Vec<Proc> {
@@ -156,16 +237,9 @@ fn processes() -> Vec<Proc> {
         .into_iter()
         .filter_map(|(pid, _, command)| {
             let all = win_args(&command);
-            if all
-                .iter()
-                .skip(1)
-                .any(|a| NOT_INTERACTIVE.contains(&a.to_lowercase().as_str()))
-            {
-                return None;
-            }
-            let args: Vec<&str> = all.iter().take(2).map(String::as_str).collect();
+            let args: Vec<&str> = all.iter().map(String::as_str).collect();
             Some(Proc {
-                tool: tool_of_command(&args)?,
+                tool: interactive_tool(&args)?,
                 pid,
                 cwd: String::new(),
                 files: Vec::new(),
@@ -364,6 +438,45 @@ mod tests {
         // Claude Code's own grep: the claude executable, started as ugrep
         assert_eq!(tool_of_command(&["ugrep", "-G"]), None);
         assert_eq!(tool_of_command(&["node", "server.js"]), None);
+    }
+
+    #[test]
+    fn windows_agent_prompts_and_option_values_are_not_subcommands() {
+        for args in [
+            vec!["opencode.exe", "--prompt", "run"],
+            vec!["opencode.exe", "--prompt", "models", "C:\\work\\shop"],
+            vec!["opencode.exe", "--model", "session"],
+            vec!["opencode.exe", "--prompt=run"],
+            vec!["opencode.exe", "--", "run"],
+            vec!["opencode.exe", "--unknown-option", "session"],
+            vec!["codex.exe", "--model", "mcp", "resume"],
+            vec!["claude.exe", "run"],
+            vec!["claude.exe", "--resume", "models"],
+            vec![r"C:\Program Files\node.exe", r"C:\npm\opencode.js", "--prompt", "run"],
+        ] {
+            assert_eq!(interactive_tool(&args), tool_of_command(&args), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn windows_agent_helpers_are_ignored_after_options_and_runtime() {
+        for args in [
+            vec!["opencode.exe", "session", "export", "id"],
+            vec!["opencode.exe", "--standalone", "session", "import", "file.json"],
+            vec!["opencode.exe", "--model", "run", "serve"],
+            vec!["codex.exe", "--config", "model=example", "exec", "run"],
+            vec!["codex.exe", "app-server"],
+            vec!["claude.exe", "--model", "models", "mcp", "list"],
+            vec!["node.exe", r"C:\npm\opencode.js", "session", "export", "id"],
+            vec!["opencode.exe", "--version"],
+        ] {
+            assert_eq!(interactive_tool(&args), None, "{args:?}");
+        }
+        let args = win_args(r#""C:\Program Files\opencode.exe" --prompt "run""#);
+        assert_eq!(
+            interactive_tool(&args.iter().map(String::as_str).collect::<Vec<_>>()),
+            Some("opencode")
+        );
     }
 
     #[test]

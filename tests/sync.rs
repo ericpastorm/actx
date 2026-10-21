@@ -65,6 +65,55 @@ fn roundtrip_between_different_paths() {
 }
 
 #[test]
+fn a_windows_conversation_keeps_paths_with_spaces_when_pulled() {
+    let w = World::new();
+    let (_a, b, _repo, clone, sid) = setup(&w);
+    let stored = w.store().join("shop/claude").join(&sid);
+    let meta_path = stored.join("meta.json");
+    let mut meta: serde_json::Value = serde_json::from_slice(&std::fs::read(&meta_path).unwrap()).unwrap();
+    let foreign = r"C:\Users\desk\code\shop";
+    meta["path"] = foreign.into();
+    meta["home"] = r"C:\Users\desk".into();
+    meta["rel"] = "code/shop".into();
+    meta["git"]["top"] = foreign.into();
+
+    let session = stored.join(meta["files"]["session"].as_str().unwrap());
+    let data = zstd::stream::decode_all(std::fs::File::open(&session).unwrap()).unwrap();
+    let mut lines = Vec::new();
+    for line in String::from_utf8(data).unwrap().lines() {
+        let mut entry: serde_json::Value = serde_json::from_str(line).unwrap();
+        entry["cwd"] = foreign.into();
+        if entry["type"] == "assistant" {
+            entry["message"]["content"] = serde_json::json!([{
+                "type": "text",
+                "text": format!("Done in {foreign}\\my folder\\a,b\\cart.ts\nFolder: {foreign}\\src\\"),
+            }]);
+        }
+        lines.extend_from_slice(serde_json::to_string(&entry).unwrap().as_bytes());
+        lines.push(b'\n');
+    }
+    meta["weight"] = (lines.len() as u64).into();
+    std::fs::write(&session, zstd::stream::encode_all(lines.as_slice(), 3).unwrap()).unwrap();
+    std::fs::write(meta_path, serde_json::to_vec(&meta).unwrap()).unwrap();
+
+    assert!(b.actx(&["sync"]).contains('↓'));
+    let (_, texts, cwds) = claude_transcript(&b, &sid);
+    assert_eq!(cwds, [clone.to_string_lossy()]);
+    let file = native(&clone.join("my folder/a,b/cart.ts"));
+    let folder = native(&clone.join("src"));
+    let separator = if cfg!(windows) { '\\' } else { '/' };
+    assert!(
+        texts.contains(&format!(
+            "Done in {}\nFolder: {}{separator}",
+            file.display(),
+            folder.display()
+        )),
+        "{texts:?}"
+    );
+    assert!(b.actx(&["ls"]).contains("✓ synced"));
+}
+
+#[test]
 fn conflict_merge_keeps_both_sides() {
     let w = World::new();
     let (a, b, _repo, _clone, sid) = setup(&w);

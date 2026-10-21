@@ -209,7 +209,7 @@ private, and don't use a public sync service you wouldn't trust with your code.
   opencode 1.x and 2.x, which goes through the same conversion. Merging needs the same opencode version.
 - opencode is driven through its CLI; while you're importing a session, don't have that same session
   open in opencode.
-- Linux and macOS (both tested in CI) and Windows (the test suite passes there too; not in CI yet). On Windows, actx can't see which folder another
+- Linux, macOS and Windows (all three tested in CI). On Windows, actx can't see which folder another
   program is running in, so while Codex or opencode is running at all, it doesn't pull over their
   conversations (Claude Code says exactly which one it has open, so it isn't affected). The hooks run
   in the shell Claude Code and Codex use there (Git Bash).

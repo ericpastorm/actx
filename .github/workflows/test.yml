@@ -11,22 +11,35 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
-      - name: Install fzf, opencode and Codex (their tests are skipped without them)
+      - name: Install fzf, opencode and Codex on Unix
+        if: runner.os != 'Windows'
+        shell: bash
         run: |
           if [ "$RUNNER_OS" = macOS ]; then brew install fzf; else sudo apt-get install -y fzf; fi
-          curl -fsSL https://opencode.ai/install | bash || npm install -g opencode-ai || true
+          curl -fsSL https://opencode.ai/install | bash || npm install -g opencode-ai
           echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
-          npm install -g @openai/codex || true
-      - run: opencode --version || echo "opencode not available"
-      - run: codex --version || echo "codex not available"
+          npm install -g @openai/codex
+      - name: Install fzf, opencode and Codex on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install fzf -y --no-progress
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm install -g opencode-ai @openai/codex
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm prefix -g >> $env:GITHUB_PATH
+      - run: fzf --version
+      - run: opencode --version
+      - run: codex --version
       - run: cargo fmt --check
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked

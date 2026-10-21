@@ -8,15 +8,20 @@ use crate::ctx::ctx;
 
 /// A path as this machine writes it: on Windows, `\` separators and no `\\?\` prefix.
 pub fn native(path: &str) -> String {
-    if !cfg!(windows) {
-        return path.to_string();
+    if cfg!(windows) {
+        windows_native(path)
+    } else {
+        path.to_string()
     }
-    let path = path.strip_prefix(r"\\?\").unwrap_or(path);
-    let mut out = String::with_capacity(path.len());
-    for c in path.chars() {
-        out.push(if c == '/' { '\\' } else { c });
+}
+
+fn windows_native(path: &str) -> String {
+    let path = path.replace('/', "\\");
+    if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else {
+        path.strip_prefix(r"\\?\").unwrap_or(&path).to_string()
     }
-    out
 }
 
 /// `std::fs::canonicalize` without the `\\?\` prefix Windows adds.
@@ -202,8 +207,28 @@ fn rules_for(old: &str, new: &str) -> Vec<Rule> {
     }
 }
 
-fn name_byte(c: u8) -> bool {
-    c.is_ascii_alphanumeric() || c >= 0x80 || b"_.-~@+=%#".contains(&c)
+/// Copy a path suffix up to a quote, JSON escape, or command delimiter. Spaces and punctuation
+/// can be part of a name; a separator after whitespace starts another path in the surrounding text.
+fn convert_suffix(rule: &Rule, data: &[u8], mut end: usize, out: &mut Vec<u8>) -> usize {
+    if !rule.seps_in.iter().any(|s| data[end..].starts_with(s)) {
+        return end;
+    }
+    let start = end;
+    while let Some(&c) = data.get(end) {
+        if let Some(sep) = rule.seps_in.iter().find(|s| data[end..].starts_with(s)) {
+            if end > start && data[end - 1].is_ascii_whitespace() {
+                break;
+            }
+            out.extend_from_slice(&rule.sep_out);
+            end += sep.len();
+        } else if c.is_ascii_control() || b"\\\"<>|?*:;&`".contains(&c) {
+            break;
+        } else {
+            out.push(c);
+            end += 1;
+        }
+    }
+    end
 }
 
 impl PathFixer {
@@ -243,17 +268,7 @@ impl PathFixer {
                 out.extend_from_slice(&data[pos..at]);
                 out.extend_from_slice(&rule.new);
                 if rule.convert {
-                    // /sub/dir after it: same names, this machine's separators
-                    while let Some(sep) = rule.seps_in.iter().find(|s| data[end..].starts_with(s)) {
-                        let name = data[end + sep.len()..].iter().take_while(|c| name_byte(**c)).count();
-                        if name == 0 {
-                            break;
-                        }
-                        let from = end + sep.len();
-                        out.extend_from_slice(&rule.sep_out);
-                        out.extend_from_slice(&data[from..from + name]);
-                        end = from + name;
-                    }
+                    end = convert_suffix(rule, &data, end, &mut out);
                 }
                 pos = end;
             }
@@ -318,6 +333,54 @@ mod tests {
         assert!(!is_windows_path("/home/me"));
         assert_eq!(base_name(r"C:\Users\me\shop"), "shop");
         assert_eq!(base_name("/home/me/shop/"), "shop");
+    }
+
+    #[test]
+    fn windows_native_preserves_network_roots() {
+        for (input, expected) in [
+            (r"\\?\UNC\nas\share\actx", r"\\nas\share\actx"),
+            (r"\\nas\share\actx", r"\\nas\share\actx"),
+            (r"\\?\C:\Users\me\shop", r"C:\Users\me\shop"),
+            ("C:/Users/me/shop", r"C:\Users\me\shop"),
+        ] {
+            assert_eq!(windows_native(input), expected, "{input}");
+        }
+    }
+
+    #[test]
+    fn path_fixer_keeps_complete_names_and_trailing_separators() {
+        let to_unix = PathFixer::new(&[(r"C:\Users\me\shop", "/home/me/shop")]).unwrap();
+        let to_windows = PathFixer::new(&[("/home/me/shop", r"C:\Users\me\shop")]).unwrap();
+        for suffix in [
+            "my folder/cart.ts",
+            "a,b/ñ (copy)/cart.ts",
+            "O'Neill/file.txt",
+            "src/",
+            "",
+        ] {
+            let unix = format!("/home/me/shop/{suffix}");
+            let windows = format!("C:\\Users\\me\\shop\\{}", suffix.replace('/', "\\"));
+            for (fix, input, expected) in [(&to_unix, &windows, &unix), (&to_windows, &unix, &windows)] {
+                let json = serde_json::to_vec(&serde_json::json!({"file": input})).unwrap();
+                let actual: serde_json::Value = serde_json::from_slice(&fix.fix(&json)).unwrap();
+                assert_eq!(actual["file"], expected.as_str(), "{input}");
+            }
+        }
+    }
+
+    #[test]
+    fn path_fixer_preserves_surrounding_text_and_json_escapes() {
+        let fix = PathFixer::new(&[("/home/me/shop", r"C:\Users\me\shop")]).unwrap();
+        let input = serde_json::json!({"text": "Edited /home/me/shop/my folder/file.txt and /other/file.txt\nThen /home/me/shop/src/; see https://example.com/a/b"});
+        let actual: serde_json::Value = serde_json::from_slice(&fix.fix(&serde_json::to_vec(&input).unwrap())).unwrap();
+        assert_eq!(
+            actual["text"],
+            "Edited C:\\Users\\me\\shop\\my folder\\file.txt and /other/file.txt\nThen C:\\Users\\me\\shop\\src\\; see https://example.com/a/b"
+        );
+        let back = PathFixer::new(&[(r"C:\Users\me\shop", "/home/me/shop")]).unwrap();
+        let again: serde_json::Value =
+            serde_json::from_slice(&back.fix(&serde_json::to_vec(&actual).unwrap())).unwrap();
+        assert_eq!(again, input);
     }
 
     #[test]
