@@ -179,7 +179,14 @@ guarda una copia de la actual).
 
 ### Convertir entre programas
 
-`actx cv` crea una copia en el programa que elijas. Se conservan tus mensajes y las respuestas; las
+`actx cv` crea una copia en el programa que elijas. Funciona con cualquier conversación local,
+incluso sin haber ejecutado `actx init`, sin proyecto de actx y fuera de cualquier repositorio Git.
+Si la conversación no tenía carpeta o la carpeta original ya no existe en este PC, actx te deja
+elegir una carpeta de trabajo existente y cambia las rutas de la carpeta antigua a la nueva. La
+conversación original no se toca, y las conversaciones locales que no pertenecen a un proyecto ni a
+General no se suben al convertirlas.
+
+Se conservan tus mensajes y las respuestas; las
 herramientas pasan a texto (qué se ejecutó y qué salió, recortado a 1500 caracteres por salida); el
 razonamiento interno y las imágenes se pierden. Si la conversación se compactó, solo se convierte el
 resumen y lo que vino después (que es lo que el agente tenía en contexto). Es una aproximación, pero

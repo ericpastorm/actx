@@ -148,3 +148,48 @@ fn opencode_syncs_automatically() {
     assert_eq!(opencode_sessions(&b)[OC_SID].2, 3 + 2);
     assert_eq!(b.actx(&["sync", "--auto"]), "");
 }
+
+#[test]
+fn opencode_converts_without_folder_and_reports_unconfigured_model() {
+    needs!("opencode");
+    let w = World::new();
+    let m = w.machine("desk");
+    let work = m.home.join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    let source = claude_session(
+        &m,
+        &work,
+        &[("user", "hello"), ("assistant", "world")],
+        Some("No model yet"),
+    );
+    let sid = source.file_stem().unwrap().to_string_lossy().into_owned();
+    // Target opencode has never been opened (no database / no model configured), and Claude source has no model.
+    let out = m.pick(&["cv"], &[&sid, "opencode"]);
+    assert!(out.contains("open opencode once and try again"), "{out}");
+    assert!(source.exists());
+
+    // Once opencode has a session, even one whose directory is empty in SQLite can be converted to a chosen folder.
+    let Some((a, _b, _repo, _clone, major)) = setup(&w) else {
+        return;
+    };
+    let table = if major == 2 { "session_v2" } else { "session" };
+    let con = rusqlite::Connection::open(a.opencode_db()).unwrap();
+    con.execute(&format!("update {table} set directory = '' where id = ?1"), [OC_SID])
+        .unwrap();
+    drop(con);
+    std::fs::create_dir_all(a.claude_dir()).unwrap();
+    let dest = a.home.join("chosen");
+    std::fs::create_dir_all(&dest).unwrap();
+    let out = a.actx_with(
+        &["cv"],
+        Opts {
+            pick: Some(&[OC_SID, "claude", "::other"]),
+            answer: Some(dest.to_str().unwrap()),
+            ..Default::default()
+        },
+    );
+    assert!(out.contains("Fix the login form (from opencode)"), "{out}");
+    let copy = find(&a.claude_dir(), ".jsonl").expect("converted Claude conversation");
+    let (_, _, cwds) = claude_transcript(&a, &copy.file_stem().unwrap().to_string_lossy());
+    assert_eq!(cwds, [dest.to_string_lossy()]);
+}

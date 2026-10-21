@@ -68,6 +68,9 @@ pub fn slashed(path: &str) -> String {
 }
 
 pub fn short(path: &str) -> String {
+    if path.is_empty() {
+        return crate::tr!("(no folder)");
+    }
     let home = ctx().home_str();
     let home = home.trim_end_matches(['/', '\\']);
     match path.strip_prefix(home) {
@@ -79,6 +82,9 @@ pub fn short(path: &str) -> String {
 
 /// The path relative to $HOME ("." for $HOME itself), if it's inside it. Always with `/`.
 pub fn rel_home(path: &str) -> Option<String> {
+    if path.is_empty() {
+        return None;
+    }
     let rel = Path::new(path).strip_prefix(&ctx().home).ok()?;
     let rel = slashed(&rel.to_string_lossy());
     Some(if rel.is_empty() { ".".to_string() } else { rel })

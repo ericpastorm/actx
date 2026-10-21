@@ -243,6 +243,9 @@ pub fn resolve_folder(meta: &Value, st: &State) -> Option<String> {
             .collect();
         return best_repo(&matches, g).map(|best| join_sub(&best.top, &sub));
     }
+    if jstr(meta, "path").is_empty() {
+        return None;
+    }
     if let Some(remembered) = st
         .folders
         .get(&format!("path:{}", jstr(meta, "path")))
@@ -260,19 +263,17 @@ fn norm(s: &str) -> String {
         .collect()
 }
 
-pub fn ask_folder(meta: &Value, st: &mut State) -> Option<String> {
-    if !interactive() {
+fn pick_folder(origin: &str, git_root: Option<&str>, header: &str, st: &mut State) -> Option<String> {
+    if !interactive() && ctx().pick.is_none() {
         return None;
     }
-    let git = stored_git(meta);
-    let origin = git.map(|(g, _)| jstr(g, "top")).unwrap_or_else(|| jstr(meta, "path"));
     let name = norm(base_name(origin));
     let likeness = |top: &str| {
         // 0 = same name, 1 = similar, 2 = unrelated
         let other = norm(base_name(top));
-        if other == name {
+        if !name.is_empty() && other == name {
             0
-        } else if !name.is_empty() && (name.contains(&other) || other.contains(&name)) {
+        } else if !name.is_empty() && !other.is_empty() && (name.contains(&other) || other.contains(&name)) {
             1
         } else {
             2
@@ -282,7 +283,7 @@ pub fn ask_folder(meta: &Value, st: &mut State) -> Option<String> {
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| cwd());
     let mut options = vec![cwd.clone()];
-    if let Some((_, root)) = git {
+    if let Some(root) = git_root {
         options.extend(
             local_repos(st)
                 .iter()
@@ -295,7 +296,7 @@ pub fn ask_folder(meta: &Value, st: &mut State) -> Option<String> {
     options.extend(others);
     options.push(ctx().home_str());
     let mut seen = std::collections::HashSet::new();
-    options.retain(|o| seen.insert(o.clone()));
+    options.retain(|o| !o.is_empty() && Path::new(o).is_dir() && seen.insert(o.clone()));
     let mut rows: Vec<Row> = options
         .iter()
         .map(|p| Row {
@@ -317,13 +318,7 @@ pub fn ask_folder(meta: &Value, st: &mut State) -> Option<String> {
         line: format!("  {}", tr!("✎ other folder (type the path)")),
         preview: String::new(),
     });
-    let header = tr!(
-        "Where does «{title}» go? On {host} it was in {path}",
-        title = crate::ui::take_chars(jstr(meta, "title"), 60),
-        host = jstr(meta, "host"),
-        path = short(jstr(meta, "path")),
-    );
-    let mut folder = fzf(&rows, &header, false, false).into_iter().next()?;
+    let mut folder = fzf(&rows, header, false, false).into_iter().next()?;
     if folder == "::other" {
         let typed = crate::store::shellexpand(&ask(&tr!("Path:"), false));
         folder = crate::paths::canonical(Path::new(&typed))
@@ -334,17 +329,50 @@ pub fn ask_folder(meta: &Value, st: &mut State) -> Option<String> {
             return None;
         }
     }
+    Some(folder)
+}
+
+pub fn ask_folder(meta: &Value, st: &mut State) -> Option<String> {
+    let git = stored_git(meta);
+    let origin = git.map(|(g, _)| jstr(g, "top")).unwrap_or_else(|| jstr(meta, "path"));
+    let header = tr!(
+        "Where does «{title}» go? On {host} it was in {path}",
+        title = crate::ui::take_chars(jstr(meta, "title"), 60),
+        host = jstr(meta, "host"),
+        path = short(jstr(meta, "path")),
+    );
+    let folder = pick_folder(origin, git.map(|(_, root)| root), &header, st)?;
     let key = match git {
-        Some((_, root)) => format!("git:{root}"),
-        None => format!("path:{}", jstr(meta, "path")),
+        Some((_, root)) => Some(format!("git:{root}")),
+        None if !jstr(meta, "path").is_empty() => Some(format!("path:{}", jstr(meta, "path"))),
+        None => None,
     };
-    st.folders.insert(key, folder.clone());
+    if let Some(key) = key {
+        st.folders.insert(key, folder.clone());
+    }
     if let Some((g, root)) = git
         && let Some(here) = git_id(&folder).filter(|h| h.root.as_deref() == Some(root))
     {
         return Some(join_sub(&here.top, &relpath(jstr(meta, "path"), jstr(g, "top"))));
     }
     Some(folder)
+}
+
+/// Ask where to place a converted local conversation whose original folder is missing or absent.
+pub fn ask_local_folder(title: &str, path: &str, st: &mut State) -> Option<String> {
+    let header = if path.is_empty() {
+        tr!(
+            "Where should «{title}» work? Pick a folder",
+            title = crate::ui::take_chars(title, 60)
+        )
+    } else {
+        tr!(
+            "Where should «{title}» go? ({path} doesn't exist here)",
+            title = crate::ui::take_chars(title, 60),
+            path = short(path)
+        )
+    };
+    pick_folder(if path.is_empty() { title } else { path }, None, &header, st)
 }
 
 /// Swaps the other machine's paths (its repo, or its folder, and its home) for this one's.

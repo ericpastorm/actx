@@ -102,7 +102,7 @@ pub fn local() -> Vec<Session> {
         Ok((
             r.get::<_, String>(0)?,
             r.get::<_, Option<String>>(1)?,
-            r.get::<_, String>(2)?,
+            r.get::<_, Option<String>>(2)?,
             r.get::<_, i64>(3)?,
             r.get::<_, i64>(4)?,
             r.get::<_, i64>(5)?,
@@ -112,14 +112,11 @@ pub fn local() -> Vec<Session> {
     .filter(|row| row.5 > 0)
     .map(|(id, title, dir, updated, n, _)| {
         let title = title.filter(|t| !t.is_empty()).unwrap_or_else(|| tr!("(untitled)"));
-        Session::local(
-            "opencode",
-            id,
-            title,
-            crate::paths::native(&dir),
-            updated as f64 / 1000.0,
-            n as u64,
-        )
+        let dir = dir
+            .filter(|d| !d.is_empty())
+            .map(|d| crate::paths::native(&d))
+            .unwrap_or_default();
+        Session::local("opencode", id, title, dir, updated as f64 / 1000.0, n as u64)
     })
     .collect()
 }

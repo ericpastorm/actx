@@ -313,3 +313,152 @@ fn add_does_not_recreate_a_project_deleted_while_it_waited() {
     assert!(!project.exists());
     assert!(source.exists());
 }
+
+#[test]
+fn cv_converts_without_init_git_or_original_folder_and_rewrites_paths() {
+    let w = World::new();
+    let mut m = w.machine("solo");
+    // No shared folder configured at all (`actx init` was never run).
+    m.store = m.home.join("unconfigured-store");
+
+    let work = m.home.join("work").join("notes");
+    std::fs::create_dir_all(&work).unwrap();
+    let agy_home = m.home.join(".gemini/antigravity-cli");
+    std::fs::create_dir_all(&agy_home).unwrap();
+
+    // 1. A Claude conversation whose original folder is from another OS and doesn't exist here.
+    let foreign = if cfg!(windows) {
+        "/home/alice/old_notes"
+    } else {
+        r"C:\Users\alice\old_notes"
+    };
+    let foreign_sep = if cfg!(windows) { '/' } else { '\\' };
+    let claude_dir = m.claude_dir().join("default");
+    std::fs::create_dir_all(&claude_dir).unwrap();
+    let claude_id = "11111111-1111-1111-1111-111111111111";
+    let claude_file = claude_dir.join(format!("{claude_id}.jsonl"));
+    let u1 = json!({
+        "type": "user", "uuid": "u1", "parentUuid": null, "cwd": foreign,
+        "timestamp": "2026-01-01T10:00:00.000Z",
+        "message": {"role": "user", "content": "where is the draft?"}
+    });
+    let a1 = json!({
+        "type": "assistant", "uuid": "a1", "parentUuid": "u1", "cwd": foreign,
+        "timestamp": "2026-01-01T10:00:05.000Z",
+        "message": {"role": "assistant", "content": [{"type": "text", "text": format!("In {foreign}{foreign_sep}draft.md")}]}
+    });
+    std::fs::write(&claude_file, format!("{u1}\n{a1}\n")).unwrap();
+
+    // Cancelling or picking a non-existent folder fails cleanly and keeps the original.
+    let bad = m.actx_with(
+        &["cv"],
+        Opts {
+            pick: Some(&[claude_id, "antigravity", "::other"]),
+            answer: Some(m.home.join("no-such-folder").to_str().unwrap()),
+            ..Default::default()
+        },
+    );
+    assert!(bad.contains("doesn't exist"), "{bad}");
+    assert!(claude_file.exists());
+
+    // Picking an existing non-git working folder succeeds, rewrites the foreign path, and never creates a store.
+    let out = m.actx_with(
+        &["cv"],
+        Opts {
+            pick: Some(&[claude_id, "antigravity", "::other"]),
+            answer: Some(work.to_str().unwrap()),
+            ..Default::default()
+        },
+    );
+    assert!(out.contains("agy --conversation"), "{out}");
+    assert!(out.contains("Note: tool calls become text"), "{out}");
+    assert!(!m.store.exists(), "cv must not create or touch a shared store");
+    assert!(claude_file.exists(), "original conversation must remain intact");
+
+    // 2. A Codex rollout with an empty cwd (`""`), converted to Claude Code in `work`.
+    let codex_id = "01999999-1111-7111-8111-111111111111";
+    let codex_dir = m.codex_sessions().join("2026/01/01");
+    std::fs::create_dir_all(&codex_dir).unwrap();
+    let rollout = codex_dir.join(format!("rollout-2026-01-01T10-00-00-{codex_id}.jsonl"));
+    let meta = json!({"timestamp": "2026-01-01T10:00:00.000Z", "type": "session_meta", "payload": {"id": codex_id, "cwd": ""}});
+    let user = json!({"timestamp": "2026-01-01T10:00:01.000Z", "type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "folderless codex"}]}});
+    let reply = json!({"timestamp": "2026-01-01T10:00:02.000Z", "type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "codex answer"}]}});
+    std::fs::write(&rollout, format!("{meta}\n{user}\n{reply}\n")).unwrap();
+
+    let out = m.actx_with(
+        &["cv"],
+        Opts {
+            pick: Some(&[codex_id, "claude", "::other"]),
+            answer: Some(work.to_str().unwrap()),
+            ..Default::default()
+        },
+    );
+    assert!(out.contains("folderless codex (from Codex)"), "{out}");
+    let converted = files_under(&m.claude_dir())
+        .into_iter()
+        .find(|p| p != &claude_file && p.extension().is_some_and(|e| e == "jsonl"))
+        .expect("converted Claude session");
+    let stem = converted.file_stem().unwrap().to_string_lossy();
+    let (_, texts, cwds) = claude_transcript(&m, &stem);
+    assert_eq!(cwds, [work.to_string_lossy()]);
+    assert_eq!(texts.last().unwrap(), "codex answer");
+
+    // And the Antigravity copy created in step 1 has the rewritten path when converted back to Claude.
+    let agy_id = std::fs::read_dir(agy_home.join("conversations"))
+        .unwrap()
+        .find_map(|e| {
+            let p = e.unwrap().path();
+            (p.extension().and_then(|x| x.to_str()) == Some("db"))
+                .then(|| p.file_stem().unwrap().to_string_lossy().into_owned())
+        })
+        .unwrap();
+    let out = m.pick(&["cv"], &[&agy_id, "claude"]);
+    assert!(out.contains("(from Antigravity)"), "{out}");
+    let expected_draft = native(&work.join("draft.md"));
+    let all_claude: Vec<String> = files_under(&m.claude_dir())
+        .into_iter()
+        .filter(|p| p.extension().is_some_and(|e| e == "jsonl"))
+        .map(|p| std::fs::read_to_string(p).unwrap())
+        .collect();
+    assert!(
+        all_claude
+            .iter()
+            .any(|c| c.contains(&expected_draft.to_string_lossy().replace('\\', "\\\\"))),
+        "{all_claude:?}"
+    );
+}
+
+#[test]
+fn folderless_claude_converts_without_configuration_and_cancel_keeps_original() {
+    let w = World::new();
+    let mut m = w.machine("solo");
+    m.store = PathBuf::new(); // ACTX_ROOT is empty, with no config file or init.
+    let dir = m.claude_dir().join("default");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::create_dir_all(m.home.join(".gemini/antigravity-cli")).unwrap();
+    let id = "22222222-2222-4222-8222-222222222222";
+    let file = dir.join(format!("{id}.jsonl"));
+    let original = format!(
+        "{}\n{}\n",
+        json!({"type":"user", "uuid":"question", "parentUuid":null,
+        "message":{"role":"user", "content":"No working directory"}}),
+        json!({"type":"assistant", "uuid":"answer", "parentUuid":"question",
+        "message":{"role":"assistant", "content":[{"type":"text", "text":"Hello"}]}})
+    );
+    std::fs::write(&file, &original).unwrap();
+    let out = m.pick(&["cv"], &[id, "antigravity"]);
+    assert!(out.contains("I don't know which folder"), "{out}");
+    assert!(!m.home.join(".gemini/antigravity-cli/conversations").exists());
+    let out = m.actx_with(
+        &["cv"],
+        Opts {
+            pick: Some(&[id, "antigravity", "::other"]),
+            answer: Some(m.home.to_str().unwrap()),
+            ..Default::default()
+        },
+    );
+    assert!(out.contains("agy --conversation"), "{out}");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), original);
+    assert!(!m.home.join(".config/actx/config.json").exists());
+    assert!(std::fs::read_dir(w.store()).unwrap().next().is_none());
+}

@@ -346,3 +346,42 @@ fn claude_converts_to_antigravity_and_back() {
         ["Noted: Pimiento", "and my colour is turquoise", "Turquoise it is"]
     );
 }
+
+#[test]
+fn folderless_antigravity_asks_for_a_working_folder_without_init() {
+    let w = World::new();
+    let mut m = w.machine("solo");
+    m.store = PathBuf::new();
+    let id = agy_conversation(
+        &m,
+        &m.home,
+        "No workspace",
+        &[Step::User("hello"), Step::Reply("answer")],
+    );
+    let home = agy_home(&m);
+    let db = home.join(format!("conversations/{id}.db"));
+    Connection::open(&db)
+        .unwrap()
+        .execute("delete from trajectory_metadata_blob", [])
+        .unwrap();
+    Connection::open(home.join("conversation_summaries.db"))
+        .unwrap()
+        .execute("update conversation_summaries set workspace_uris = '[]'", [])
+        .unwrap();
+    std::fs::create_dir_all(m.claude_dir()).unwrap();
+    let original = std::fs::read(&db).unwrap();
+    let out = m.actx_with(
+        &["cv"],
+        Opts {
+            pick: Some(&[&id, "claude", "::other"]),
+            answer: Some(m.home.to_str().unwrap()),
+            ..Default::default()
+        },
+    );
+    assert!(out.contains("No workspace (from Antigravity)"), "{out}");
+    assert_eq!(std::fs::read(&db).unwrap(), original);
+    let copy = find(&m.claude_dir(), ".jsonl").unwrap();
+    let (_, texts, cwds) = claude_transcript(&m, &copy.file_stem().unwrap().to_string_lossy());
+    assert_eq!(cwds, [m.home.to_string_lossy()]);
+    assert_eq!(texts.last().unwrap(), "answer");
+}

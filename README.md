@@ -179,7 +179,13 @@ version is backed up first).
 
 ### Converting between tools
 
-`actx cv` writes a copy in the tool you pick. Your messages and the replies are kept; tool calls
+`actx cv` writes a copy in the tool you pick. It works on any local conversation — even without
+`actx init`, without an actx project, and outside any Git repository. If the conversation had no
+folder or its original folder no longer exists on this machine, actx lets you pick an existing
+working folder and rewrites any paths from the old folder to the new one. The original is left
+untouched, and local conversations that aren't in a project or General are never uploaded by `cv`.
+
+Your messages and the replies are kept; tool calls
 become text (what was run and what came out, outputs trimmed to 1500 characters); internal
 reasoning and images are dropped. If the conversation was compacted, only the summary and what
 followed are converted (that's what the agent had in context). It's an approximation, but enough to

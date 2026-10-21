@@ -124,6 +124,9 @@ pub fn store_root(optional: bool) -> Option<PathBuf> {
             cmd = bold("actx init")
         ));
     };
+    if optional {
+        return root.is_dir().then_some(root);
+    }
     if let Err(e) = std::fs::create_dir(&root)
         && e.kind() != io::ErrorKind::AlreadyExists
     {

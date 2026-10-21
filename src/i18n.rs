@@ -54,6 +54,20 @@ pub static ES: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
             "No General conversations yet. Save some with: actx add",
             "Aún no hay conversaciones en General. Guárdalas con: actx add",
         ),
+        (
+            "Note: tool calls become text, and reasoning, images, and messages before a compaction are left out.",
+            "Nota: las herramientas pasan a texto, y el razonamiento, las imágenes y lo anterior a una compactación no se incluyen.",
+        ),
+        ("(no folder)", "(sin carpeta)"),
+        ("no project", "sin proyecto"),
+        (
+            "Where should «{title}» work? Pick a folder",
+            "¿En qué carpeta quieres continuar «{title}»? Elige una carpeta",
+        ),
+        (
+            "Where should «{title}» go? ({path} doesn't exist here)",
+            "¿Dónde va «{title}»? ({path} no existe aquí)",
+        ),
         ("General (no project)", "General (sin proyecto)"),
         ("Project {name} already exists", "El proyecto {name} ya existe"),
         (

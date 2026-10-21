@@ -9,7 +9,9 @@ use serde_json::{Value, json};
 
 use crate::agents::{ACTIVE_SECS, in_use, in_use_by_agent};
 use crate::ctx::{ctx, jstr};
-use crate::git::{ask_folder, check_git, fixer_for, git_id, git_info, git_label, resolve_folder, warn_dirty};
+use crate::git::{
+    ask_folder, ask_local_folder, check_git, fixer_for, git_id, git_info, git_label, resolve_folder, warn_dirty,
+};
 use crate::harness::{self, all_local};
 use crate::i18n;
 use crate::lock::{Holder, LockError, SharedLock};
@@ -1199,7 +1201,31 @@ fn convert_one(s: &Session, target: &str, st: &mut State) -> crate::ctx::Result<
         let turns = source.stored_turns(s, fix.as_ref())?;
         (folder, turns)
     } else {
-        (s.path.clone(), source.local_turns(s)?)
+        let (mut turns, model) = source.local_turns(s)?;
+        if turns.is_empty() {
+            return Err(Error(tr!("it has no text messages to convert")));
+        }
+        let folder = if !s.path.is_empty() && Path::new(&s.path).is_dir() {
+            s.path.clone()
+        } else {
+            ask_local_folder(&s.title, &s.path, st).ok_or_else(|| {
+                if s.path.is_empty() {
+                    Error(tr!("I don't know which folder it goes in on this machine"))
+                } else {
+                    Error(tr!("{path} doesn't exist on this machine", path = short(&s.path)))
+                }
+            })?
+        };
+        if !s.path.is_empty()
+            && s.path != folder
+            && let Some(fix) = crate::paths::PathFixer::new(&[(&s.path, &folder)])
+        {
+            for t in &mut turns {
+                let json = serde_json::to_vec(&t.text)?;
+                t.text = serde_json::from_slice(&fix.fix(&json))?;
+            }
+        }
+        (folder, (turns, model))
     };
     if turns.is_empty() {
         return Err(Error(tr!("it has no text messages to convert")));
@@ -1268,8 +1294,10 @@ pub fn cv(args: Args) {
                 None => short(&s.path),
             };
             let mut details = format!("{place} · {} · {}", s.size_label(), ago(s.updated));
-            if let Some(r) = remote.get(&s.key()) {
-                details += &format!(" · {}", tr!("in {project}", project = r.project_label()));
+            match remote.get(&s.key()) {
+                Some(r) => details += &format!(" · {}", tr!("in {project}", project = r.project_label())),
+                None if root.is_some() => details += &format!(" · {}", tr!("no project")),
+                None => {}
             }
             Row {
                 key: s.key(),
@@ -1365,6 +1393,12 @@ pub fn cv(args: Args) {
     }
     save(&mut st);
     if !ready.is_empty() {
+        println!(
+            "{}",
+            dim(&tr!(
+                "Note: tool calls become text, and reasoning, images, and messages before a compaction are left out."
+            ))
+        );
         println!("\n{}", tr!("To continue:"));
         for new in &ready {
             println!("  {}", resume_cmd(new, &new.path));

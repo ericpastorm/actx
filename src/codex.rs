@@ -215,11 +215,14 @@ pub fn local() -> Vec<Session> {
             continue;
         };
         let meta = session_meta(&f);
-        let thread_source = meta.get("thread_source").and_then(Value::as_str);
-        let cwd = jstr(&meta, "cwd").to_string();
-        if cwd.is_empty() || !matches!(thread_source, None | Some("user")) {
-            continue; // unreadable, or a subagent's thread
+        if !meta.is_object() {
+            continue;
         }
+        let thread_source = meta.get("thread_source").and_then(Value::as_str);
+        if !matches!(thread_source, None | Some("user")) {
+            continue; // a subagent's thread
+        }
+        let cwd = jstr(&meta, "cwd").to_string();
         let Ok((head, tail)) = chunks(&f) else { continue };
         let said: Vec<String> = messages(&head)
             .into_iter()

@@ -184,20 +184,35 @@ fn title(head: &[u8], tail: &[u8]) -> String {
 
 /// The project's real path. True if it comes from a cwd that matches the folder name.
 fn project_path(dirname: &str, head: &[u8], tail: &[u8]) -> (String, bool) {
+    let mut any_cwd = None;
     for buf in [tail, head] {
         for cap in CWD_RE.captures_iter(buf) {
             let quoted = [b"\"".as_slice(), &cap[1], b"\""].concat();
             if let Ok(cwd) = serde_json::from_slice::<String>(&quoted)
-                && encode_claude(&cwd) == dirname
+                && !cwd.is_empty()
             {
-                return (cwd, true);
+                if encode_claude(&cwd) == dirname {
+                    return (cwd, true);
+                }
+                if any_cwd.is_none() {
+                    any_cwd = Some(cwd);
+                }
             }
         }
     }
-    (
-        resolve_encoded(dirname).unwrap_or_else(|| crate::paths::native(&dirname.replace('-', "/"))),
-        false,
-    )
+    if let Some(resolved) = resolve_encoded(dirname).or(any_cwd) {
+        return (resolved, false);
+    }
+    let fallback = if dirname.starts_with('-') {
+        crate::paths::native(&dirname.replace('-', "/"))
+    } else if let [drive, b'-', b'-', ..] = dirname.as_bytes()
+        && drive.is_ascii_alphabetic()
+    {
+        crate::paths::native(&format!("{}:/{}", *drive as char, dirname[3..].replace('-', "/")))
+    } else {
+        String::new()
+    };
+    (fallback, false)
 }
 
 fn epoch(t: std::time::SystemTime) -> f64 {
