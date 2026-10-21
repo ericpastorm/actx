@@ -62,7 +62,7 @@ pub fn configure(
             .filter_map(Value::as_str)
             .map(String::from)
             .collect();
-        ui::picker(&rows,&tr!("Which harnesses do you use? TAB toggles · Enter saves · Ctrl-D disables linked copies · Esc keeps preferences"),true,false,&["enter","ctrl-d"],&selected)
+        ui::checkbox_picker(&rows,&tr!("Which harnesses do you use? Enter toggles · Next continues · Ctrl-D disables linked copies · Esc keeps preferences"),&["enter","ctrl-d"],&selected)
             .map(|pick|if pick.action=="ctrl-d"{Vec::new()}else{pick.keys})
     } else {
         None
@@ -181,6 +181,10 @@ pub fn current() -> Value {
 
 pub fn harnesses(key: &str) -> Vec<&'static str> {
     let config = current();
+    harnesses_in(&config, key)
+}
+
+pub fn harnesses_in(config: &Value, key: &str) -> Vec<&'static str> {
     config
         .get("conversation_profiles")
         .and_then(|p| p.get(key))

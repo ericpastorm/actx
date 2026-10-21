@@ -25,6 +25,9 @@ fn db() -> Option<Connection> {
     if !path.exists() {
         return None;
     }
+    if crate::inspection::enabled() {
+        return crate::inspection::database(path).ok();
+    }
     Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX).ok()
 }
 
@@ -44,7 +47,7 @@ pub fn version() -> Option<u8> {
                 return Some(1);
             }
         }
-        if !which("opencode") {
+        if crate::inspection::enabled() || !which("opencode") {
             return None;
         }
         let out = crate::ctx::command("opencode")
@@ -71,6 +74,9 @@ fn query<T>(
         .prepare(sql)
         .and_then(|mut st| st.query_map(params, map)?.collect::<rusqlite::Result<Vec<T>>>());
     rows.unwrap_or_else(|e| {
+        if crate::inspection::enabled() {
+            crate::inspection::record_error(e.to_string());
+        }
         if !WARNED.swap(true, Ordering::Relaxed) {
             warn(&tr!(
                 "Can't read the opencode database ({err}); skipping opencode",
@@ -82,6 +88,12 @@ fn query<T>(
 }
 
 pub fn local() -> Vec<Session> {
+    local_impl(false)
+}
+pub fn clean_local() -> Vec<Session> {
+    local_impl(true)
+}
+fn local_impl(include_children: bool) -> Vec<Session> {
     // Without a database there are no local sessions. In particular, don't start an npm shim
     // just to discover its version every time another tool's conversations are listed or synced.
     if !ctx().opencode_db.is_file() {
@@ -96,7 +108,12 @@ pub fn local() -> Vec<Session> {
         "select s.id, s.title, s.directory, s.time_updated,
                 (select count(*) from {messages} m where m.session_id = s.id),
                 (select count(*) from {messages} m where m.session_id = s.id and {user})
-         from {sessions} s where s.parent_id is null and s.time_archived is null"
+         from {sessions} s where {parent_filter} s.time_archived is null",
+        parent_filter = if include_children {
+            ""
+        } else {
+            "s.parent_id is null and "
+        }
     );
     query(&sql, [], |r| {
         Ok((
@@ -119,6 +136,62 @@ pub fn local() -> Vec<Session> {
         Session::local("opencode", id, title, dir, updated as f64 / 1000.0, n as u64)
     })
     .collect()
+}
+
+/// Hash only this session's native records, so deleting a sibling does not invalidate it.
+pub(crate) fn clean_fingerprint(sid: &str) -> Result<u64> {
+    let con = if crate::inspection::enabled() {
+        crate::inspection::database(&ctx().opencode_db)?
+    } else {
+        db().ok_or_else(|| Error("Missing opencode database".into()))?
+    };
+    let statements = if version() == Some(2) {
+        vec![
+            "select * from session_v2 where id=?1",
+            "select * from session_message where session_id=?1 order by seq",
+        ]
+    } else {
+        vec![
+            "select * from session where id=?1",
+            "select * from message where session_id=?1 order by time_created,id",
+            "select p.* from part p join message m on m.id=p.message_id where m.session_id=?1 order by p.id",
+        ]
+    };
+    let mut hash = 0xcbf29ce484222325u64;
+    for sql in statements {
+        let mut q = con.prepare(sql)?;
+        let columns = q.column_count();
+        let mut rows = q.query([sid])?;
+        while let Some(row) = rows.next()? {
+            for i in 0..columns {
+                let value: rusqlite::types::Value = row.get(i)?;
+                for b in format!("{value:?}\0").bytes() {
+                    hash = (hash ^ u64::from(b)).wrapping_mul(0x100000001b3);
+                }
+            }
+        }
+    }
+    Ok(hash)
+}
+
+pub(crate) fn clean_parent(sid: &str) -> Option<String> {
+    let table = if version() == Some(2) { "session_v2" } else { "session" };
+    query(&format!("select parent_id from {table} where id=?1"), [sid], |r| {
+        r.get::<_, Option<String>>(0)
+    })
+    .into_iter()
+    .flatten()
+    .next()
+}
+pub(crate) fn clean_has_children(sid: &str) -> bool {
+    let table = if version() == Some(2) { "session_v2" } else { "session" };
+    query(
+        &format!("select count(*) from {table} where parent_id=?1"),
+        [sid],
+        |r| r.get::<_, i64>(0),
+    )
+    .first()
+    .is_some_and(|n| *n > 0)
 }
 
 fn children(sid: &str) -> Vec<String> {
@@ -714,7 +787,47 @@ pub fn turns(exp: &Value) -> Vec<Turn> {
     turns
 }
 
+// Reconstruct the native export shape from a private database snapshot; never start the CLI.
+fn inspection_turns(s: &Session) -> Result<(Vec<Turn>, Option<String>)> {
+    let con = crate::inspection::database(&ctx().opencode_db)?;
+    let mut messages = Vec::new();
+    if version() == Some(2) {
+        let mut query = con.prepare("select id, type, data from session_message where session_id = ?1 order by seq")?;
+        let rows = query.query_map([&s.id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+        })?;
+        for row in rows {
+            let (id, kind, data) = row?;
+            let mut value: Value = serde_json::from_str(&data)?;
+            if !value.is_object() {
+                return Err(Error("Invalid opencode message data".into()));
+            }
+            value["id"] = json!(id);
+            value["type"] = json!(kind);
+            messages.push(value);
+        }
+    } else {
+        let mut query = con.prepare("select id, data from message where session_id = ?1 order by time_created, id")?;
+        let rows = query.query_map([&s.id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        for row in rows {
+            let (id, data) = row?;
+            let info: Value = serde_json::from_str(&data)?;
+            let mut query = con.prepare("select data from part where message_id = ?1 order by time_created, id")?;
+            let parts = query
+                .query_map([&id], |r| r.get::<_, String>(0))?
+                .map(|row| -> Result<Value> { Ok(serde_json::from_str(&row?)?) })
+                .collect::<Result<Vec<_>>>()?;
+            messages.push(json!({"info": info, "parts": parts}));
+        }
+    }
+    let exp = json!({"messages": messages});
+    Ok((turns(&exp), export_model(&exp).map(|m| m.model)))
+}
+
 pub fn local_turns(s: &Session) -> Result<(Vec<Turn>, Option<String>)> {
+    if crate::inspection::enabled() {
+        return inspection_turns(s);
+    }
     let exp: Value = serde_json::from_slice(&export(&s.id, &s.path)?)?;
     Ok((turns(&exp), export_model(&exp).map(|m| m.model)))
 }

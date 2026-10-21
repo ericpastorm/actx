@@ -24,8 +24,8 @@ fn init_saves_the_shared_folder() {
     assert!(target.join(".actx").exists());
     // later runs use it, in Spanish
     let mut c = m.command(ACTX);
-    c.env_remove("ACTX_ROOT").env_remove("ACTX_LANG");
-    assert!(String::from_utf8_lossy(&c.output().unwrap().stdout).contains("Aún no hay proyectos"));
+    c.env_remove("ACTX_ROOT").env_remove("ACTX_LANG").arg("profile");
+    assert!(String::from_utf8_lossy(&c.output().unwrap().stdout).contains("Tu perfil de actx"));
 }
 
 /// A copy of actx installed as a plain file, as `curl` would leave it.

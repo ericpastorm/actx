@@ -69,9 +69,17 @@ fn set_title(sid: &str, title: &str) -> Result<()> {
 /// requesting inference. Don't write its private SQLite schema, which changes across versions.
 fn register(sid: &str) -> Result<()> {
     if !crate::ctx::which("codex") {
-        return Ok(()); // a data-only installation can still receive rollouts
+        return Ok(());
     }
-    let result = (|| -> std::result::Result<(), String> {
+    clean_request(sid, "thread/read").map(|_| ())
+}
+pub(crate) fn clean_request(sid: &str, method: &str) -> Result<Value> {
+    if !crate::ctx::which("codex") {
+        return Err(crate::ctx::Error(
+            "Codex CLI is required to archive or recover a conversation".into(),
+        ));
+    }
+    let result = (|| -> std::result::Result<Value, String> {
         let mut child = crate::ctx::command("codex")
             .arg("app-server")
             .env("CODEX_HOME", &ctx().codex_home)
@@ -122,7 +130,11 @@ fn register(sid: &str) -> Result<()> {
             if thread["thread"]["id"].as_str() != Some(sid) {
                 return Err("unexpected thread id".into());
             }
-            Ok(())
+            if method == "thread/read" {
+                Ok(thread)
+            } else {
+                call(2, method, json!({"threadId": sid}))
+            }
         })();
         drop(stdin);
         let _ = child.kill();
@@ -175,7 +187,7 @@ pub fn messages(buf: &[u8]) -> Vec<(String, String)> {
     msgs
 }
 
-fn session_meta(f: &Path) -> Value {
+pub(crate) fn session_meta(f: &Path) -> Value {
     let mut first = String::new();
     let _ = File::open(f)
         .map(BufReader::new)
@@ -207,6 +219,12 @@ fn rollouts() -> Vec<PathBuf> {
 }
 
 pub fn local() -> Vec<Session> {
+    local_impl(false)
+}
+pub fn clean_local() -> Vec<Session> {
+    local_impl(true)
+}
+fn local_impl(include_subagents: bool) -> Vec<Session> {
     let titles = titles();
     let mut out = Vec::new();
     for f in rollouts() {
@@ -219,7 +237,7 @@ pub fn local() -> Vec<Session> {
             continue;
         }
         let thread_source = meta.get("thread_source").and_then(Value::as_str);
-        if !matches!(thread_source, None | Some("user")) {
+        if !include_subagents && !matches!(thread_source, None | Some("user")) {
             continue; // a subagent's thread
         }
         let cwd = jstr(&meta, "cwd").to_string();

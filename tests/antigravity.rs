@@ -331,7 +331,9 @@ fn claude_converts_to_antigravity_and_back() {
     assert_eq!(texts_at(&steps[3].1, &[20, 1]), ["Turquoise it is"]);
     assert_eq!(texts_at(&steps[1].1, &[5, 20, 4]), [id.as_str()]);
 
-    // and back, through actx's own reading
+    // and back, through actx's own reading. The original is linked to the new Antigravity
+    // copy, so remove it first: this checks a real conversion instead of reusing that copy.
+    std::fs::remove_file(&session).unwrap();
     let out = m.pick(&["cv"], &[&id, "claude"]);
     assert!(out.contains("Cat and colour (from Antigravity)"), "{out}");
     let back = std::fs::read_dir(m.claude_dir().join(encode_claude(&repo)))

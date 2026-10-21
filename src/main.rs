@@ -7,12 +7,14 @@ mod auto;
 mod browser;
 mod catalog;
 mod claude;
+mod clean;
 mod codex;
 mod commands;
 mod ctx;
 mod git;
 mod harness;
 mod i18n;
+mod inspection;
 mod lock;
 mod merge;
 mod multisync;
@@ -20,9 +22,11 @@ mod opencode;
 mod paths;
 mod pb;
 mod profile;
+mod quarantine;
 mod session;
 mod state;
 mod store;
+mod sync_plan;
 mod turns;
 mod ui;
 
@@ -118,6 +122,7 @@ fn cli() -> Command {
                         .default_missing_value("::pick"),
                 ),
         ))
+        .subcommand(clean::command())
         .subcommand(Command::new("mk").about(tr!("create an empty project")).arg(project()))
         .subcommand(
             Command::new("add")
@@ -134,6 +139,13 @@ fn cli() -> Command {
         .subcommand(
             Command::new("sync")
                 .about(tr!("push what you continued here and pull what's new"))
+                .arg(
+                    Arg::new("dry-run")
+                        .long("dry-run")
+                        .action(ArgAction::SetTrue)
+                        .conflicts_with_all(["log", "after", "delay"])
+                        .help(tr!("Preview synchronization without changing any data")),
+                )
                 .arg(project().help(tr!("only this project (otherwise a picker shows up)")))
                 .arg(general())
                 .arg(
@@ -291,6 +303,7 @@ fn main() {
             auto::run_logged(m.get_one::<String>("log").map(String::as_str).unwrap_or_default())
         }
         Some(("sync", m)) => commands::sync(Args {
+            dry_run: m.get_flag("dry-run"),
             project: get(m, "project"),
             all: m.get_flag("all"),
             general: m.get_flag("general"),
@@ -325,6 +338,7 @@ fn main() {
             general: m.get_flag("general"),
             ..Default::default()
         }),
+        Some(("clean", m)) => clean::dispatch(m),
         Some(("update", _)) => commands::update(),
         Some(("auto", m)) => auto::auto(get(m, "action").as_deref()),
         Some(("restore", _)) => commands::restore(),

@@ -43,6 +43,9 @@ fn annotation(id: &str) -> PathBuf {
 /// For reading only. Not opened read-only: in WAL mode that leaves -wal and -shm files behind,
 /// which a connection that can write removes when it's the last one to close.
 fn open_ro(path: &Path) -> Result<Connection> {
+    if crate::inspection::enabled() {
+        return crate::inspection::database(path);
+    }
     Ok(Connection::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,

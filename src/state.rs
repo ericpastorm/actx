@@ -59,6 +59,9 @@ pub fn load() -> State {
     if !file.exists() {
         let legacy = ctx().state_dir.parent().map(|p| p.join("ctx").join("state.json")); // before the rename (ctx → actx)
         if let Some(legacy) = legacy.filter(|p| p.exists()) {
+            if crate::inspection::enabled() {
+                return read_file(&legacy);
+            }
             let _ = std::fs::create_dir_all(&ctx().state_dir);
             let _ = std::fs::copy(legacy, &file);
         }

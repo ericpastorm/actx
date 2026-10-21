@@ -39,12 +39,185 @@ macro_rules! tr {
     };
 }
 
-pub const HELP: &str = "actx (agent context): keep your Claude Code, opencode and Codex conversations in sync across\nmachines, grouped into projects, through any shared folder (a NAS, Syncthing, ...).\n\n  actx setup [folder]  guided setup: shared folder, harnesses and retention\n  actx init [folder]   choose only the shared folder\n  actx profile        show your profile (use profile setup to configure it)\n  actx browse         compact conversation browser (also: plain actx)\n  actx resume         sync a conversation and choose where to open it\n  actx mk <project>    create an empty project\n  actx add [project]   save conversations (General if no project)\n  actx delete [project] delete selected saved conversations; keep local originals\n  actx sync [project]  push what you continued here and pull what's new (pick projects; --all)\n  actx ls [project]    compact conversation list and harness states\n  actx rm <project>    delete a project and its saved copies; keep local originals\n  actx cv [project]    copy a conversation into another tool (Claude Code, opencode, Codex, Antigravity)\n  actx auto [on|off]   sync by itself: when a conversation starts or ends, and every 10 min\n  actx restore         put back a conversation from a backup\n  actx doctor          check the shared folder, the tools and automatic sync\n  actx update          install the newest actx found in the shared folder\n\nConversations don't depend on folder paths. When pulling one, actx looks for its repo on this\nmachine by the first commit (other paths, clones and worktrees all work); otherwise it tries\nthe same path; otherwise it asks once and remembers. Run it inside the project and it goes\nthere. Paths inside the conversation are rewritten to this machine's.\n\nGeneral conversations ask for a destination folder on each machine and remember it per conversation.\nUse --general with sync, ls, cv or delete to select only General.\n\nIf you continued a conversation on two machines, sync lets you merge them: you keep this one\nplus a summary of what was done on the other, and the other version is kept separately.\n\nPickers: type to filter, TAB marks several, Ctrl-A all, Enter confirms, Esc quits.\nLanguage: English or Spanish, from your locale; set ACTX_LANG=en|es or `actx init --lang`.\n";
+pub const HELP: &str = "actx (agent context): keep your Claude Code, opencode and Codex conversations in sync across\nmachines, grouped into projects, through any shared folder (a NAS, Syncthing, ...).\n\n  actx setup [folder]  guided setup: shared folder, harnesses and retention\n  actx init [folder]   choose only the shared folder\n  actx profile        show your profile (use profile setup to configure it)\n  actx browse         compact conversation browser (also: plain actx)\n  actx resume         sync a conversation and choose where to open it\n  actx mk <project>    create an empty project\n  actx add [project]   save conversations (General if no project)\n  actx delete [project] delete selected saved conversations; keep local originals\n  actx sync [project]  push what you continued here and pull what's new (pick projects; --all)\n  actx sync --dry-run  preview operations without changing data\n  actx ls [project]    compact conversation list and harness states\n  actx rm <project>    delete a project and its saved copies; keep local originals\n  actx cv [project]    copy a conversation into another tool (Claude Code, opencode, Codex, Antigravity)\n  actx auto [on|off]   sync by itself: when a conversation starts or ends, and every 10 min\n  actx restore         put back a conversation from a backup\n  actx doctor          check the shared folder, the tools and automatic sync\n  actx update          install the newest actx found in the shared folder\n\nConversations don't depend on folder paths. When pulling one, actx looks for its repo on this\nmachine by the first commit (other paths, clones and worktrees all work); otherwise it tries\nthe same path; otherwise it asks once and remembers. Run it inside the project and it goes\nthere. Paths inside the conversation are rewritten to this machine's.\n\nGeneral conversations ask for a destination folder on each machine and remember it per conversation.\nUse --general with sync, ls, cv or delete to select only General.\n\nIf you continued a conversation on two machines, sync lets you merge them: you keep this one\nplus a summary of what was done on the other, and the other version is kept separately.\n\nPickers: type to filter, TAB marks several, Ctrl-A all, Enter confirms, Esc quits.\nLanguage: English or Spanish, from your locale; set ACTX_LANG=en|es or `actx init --lang`.\n";
 
-const HELP_ES: &str = "actx (agent context): mantiene tus conversaciones de Claude Code, opencode y Codex al día\nentre tus PCs, agrupadas en proyectos, a través de cualquier carpeta compartida (un NAS, Syncthing...).\n\n  actx setup [carpeta]  asistente: carpeta compartida, harnesses y retención\n  actx init [carpeta]   elige solo la carpeta compartida\n  actx profile         muestra tu perfil (profile setup para configurarlo)\n  actx browse          explorador compacto (también: actx a secas)\n  actx resume          sincroniza una conversación y elige dónde abrirla\n  actx mk <proyecto>    crea un proyecto vacío\n  actx add [proyecto]   guarda conversaciones (en General si omites el proyecto)\n  actx delete [proyecto] borra conversaciones guardadas; conserva originales locales\n  actx sync [proyecto]  sube lo que has seguido aquí y baja lo nuevo (eliges proyectos; --all)\n  actx ls [proyecto]    lista compacta de conversaciones y sus harnesses\n  actx rm <proyecto>    borra un proyecto y sus copias guardadas; conserva originales locales\n  actx cv [proyecto]    copia una conversación a otro programa (Claude Code, opencode, Codex, Antigravity)\n  actx auto [on|off]    sincroniza solo: al abrir o cerrar una conversación y cada 10 min\n  actx restore          recupera una conversación de una copia de seguridad\n  actx doctor           comprueba la carpeta compartida, los programas y el modo auto\n  actx update           instala la última versión de actx que haya en la carpeta compartida\n\nLas conversaciones no dependen de la carpeta. Al bajar una, actx busca su repo en este PC por\nel primer commit (vale con otras rutas, clones y worktrees); si no, prueba la misma ruta; y si\ntampoco, te pregunta una vez y se acuerda. Si lo lanzas dentro del proyecto, va ahí. Las rutas\ndentro de la conversación se cambian a las de este PC.\n\nLas conversaciones de General preguntan la carpeta de destino en cada PC y la recuerdan por conversación.\nUsa --general con sync, ls, cv o delete para seleccionar solo General.\n\nSi seguiste una conversación en dos PCs, sync te deja mezclarlas: sigues con la de aquí más un\nresumen de lo hecho en el otro, y la otra versión queda aparte.\n\nSelectores: escribe para filtrar, TAB marca varias, Ctrl-A todas, Enter confirma, Esc sale.\nIdioma: inglés o español, según tu sistema; o ACTX_LANG=en|es, o `actx init --lang`.\n";
+const HELP_ES: &str = "actx (agent context): mantiene tus conversaciones de Claude Code, opencode y Codex al día\nentre tus PCs, agrupadas en proyectos, a través de cualquier carpeta compartida (un NAS, Syncthing...).\n\n  actx setup [carpeta]  asistente: carpeta compartida, harnesses y retención\n  actx init [carpeta]   elige solo la carpeta compartida\n  actx profile         muestra tu perfil (profile setup para configurarlo)\n  actx browse          explorador compacto (también: actx a secas)\n  actx resume          sincroniza una conversación y elige dónde abrirla\n  actx mk <proyecto>    crea un proyecto vacío\n  actx add [proyecto]   guarda conversaciones (en General si omites el proyecto)\n  actx delete [proyecto] borra conversaciones guardadas; conserva originales locales\n  actx sync [proyecto]  sube lo que has seguido aquí y baja lo nuevo (eliges proyectos; --all)\n  actx sync --dry-run   previsualiza las operaciones sin modificar datos\n  actx ls [proyecto]    lista compacta de conversaciones y sus harnesses\n  actx rm <proyecto>    borra un proyecto y sus copias guardadas; conserva originales locales\n  actx cv [proyecto]    copia una conversación a otro programa (Claude Code, opencode, Codex, Antigravity)\n  actx auto [on|off]    sincroniza solo: al abrir o cerrar una conversación y cada 10 min\n  actx restore          recupera una conversación de una copia de seguridad\n  actx doctor           comprueba la carpeta compartida, los programas y el modo auto\n  actx update           instala la última versión de actx que haya en la carpeta compartida\n\nLas conversaciones no dependen de la carpeta. Al bajar una, actx busca su repo en este PC por\nel primer commit (vale con otras rutas, clones y worktrees); si no, prueba la misma ruta; y si\ntampoco, te pregunta una vez y se acuerda. Si lo lanzas dentro del proyecto, va ahí. Las rutas\ndentro de la conversación se cambian a las de este PC.\n\nLas conversaciones de General preguntan la carpeta de destino en cada PC y la recuerdan por conversación.\nUsa --general con sync, ls, cv o delete para seleccionar solo General.\n\nSi seguiste una conversación en dos PCs, sync te deja mezclarlas: sigues con la de aquí más un\nresumen de lo hecho en el otro, y la otra versión queda aparte.\n\nSelectores: escribe para filtrar, TAB marca varias, Ctrl-A todas, Enter confirma, Esc sale.\nIdioma: inglés o español, según tu sistema; o ACTX_LANG=en|es, o `actx init --lang`.\n";
 
 pub static ES: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| {
     HashMap::from([
+        (
+            "A linked continuation changes the source; recheck propagation and conflicts between harnesses during sync",
+            "Una continuación vinculada cambia el origen; volver a comprobar la propagación y los conflictos entre harnesses al sincronizar",
+        ),
+        (
+            "Preview synchronization without changing any data",
+            "Previsualizar la sincronización sin modificar datos",
+        ),
+        (
+            "A reachable shared folder is required for a preview; no folder was created",
+            "La vista previa necesita una carpeta compartida accesible; no se ha creado ninguna carpeta",
+        ),
+        (
+            "Synchronization preview — no changes",
+            "Vista previa de sincronización — sin cambios",
+        ),
+        (
+            "Preview which projects? TAB marks several · Enter confirms · Esc cancels",
+            "¿Qué proyectos quieres previsualizar? TAB marca varios · Enter confirma · Esc cancela",
+        ),
+        (
+            "No shared conversations in the selected scope",
+            "No hay conversaciones compartidas en la selección",
+        ),
+        ("Upload", "Subir"),
+        ("Download", "Descargar"),
+        ("New local conversation", "Nueva conversación local"),
+        ("Conflict", "Conflicto"),
+        ("Deferred", "Aplazado"),
+        ("Up to date", "Al día"),
+        ("Create linked copy", "Crear copia vinculada"),
+        (
+            "Import linked continuation and upload",
+            "Importar continuación vinculada y subirla",
+        ),
+        ("Update linked copy", "Actualizar copia vinculada"),
+        ("Link existing copy", "Vincular copia existente"),
+        ("Delete expired shared copy", "Borrar copia compartida caducada"),
+        ("Recheck after synchronization", "Volver a comprobar tras sincronizar"),
+        (
+            "Local changes since the last sync",
+            "Cambios locales desde la última sincronización",
+        ),
+        (
+            "Shared changes since the last sync",
+            "Cambios compartidos desde la última sincronización",
+        ),
+        (
+            "The shared conversation is not on this machine",
+            "La conversación compartida no está en este equipo",
+        ),
+        (
+            "Both copies changed; choose merge, local, remote or defer during sync",
+            "Ambas copias han cambiado; al sincronizar podrás mezclar, elegir local o remota, o aplazar",
+        ),
+        (
+            "Local and shared copies match",
+            "Las copias local y compartida coinciden",
+        ),
+        (
+            "Conversation open or active; automatic sync defers it, manual sync requires confirmation",
+            "Conversación abierta o activa; el modo automático la aplaza y el manual pide confirmación",
+        ),
+        (
+            "Destination folder needs a decision; automatic sync defers it",
+            "Falta elegir la carpeta de destino; el modo automático lo aplaza",
+        ),
+        (
+            "opencode CLI is required to import this conversation",
+            "Se necesita la CLI de opencode para importar esta conversación",
+        ),
+        ("Destination", "Destino"),
+        (
+            "Data changed while preparing the preview; discard this plan and run it again",
+            "Los datos han cambiado al preparar la vista previa; descarta este plan y vuelve a ejecutarla",
+        ),
+        ("Incomplete preview: {error}", "Vista previa incompleta: {error}"),
+        (
+            "Snapshot only: sync recalculates and rechecks the plan before writing. No data or actx binaries were changed.",
+            "Esta vista refleja el estado actual: sync recalcula y vuelve a comprobar antes de escribir. No se han modificado datos ni binarios de actx.",
+        ),
+        (
+            "Cannot read linked state: {error}",
+            "No se puede leer el estado de las copias vinculadas: {error}",
+        ),
+        (
+            "Create or update linked copies after downloading the source and choosing its folder",
+            "Crear o actualizar las copias vinculadas después de descargar el origen y elegir su carpeta",
+        ),
+        (
+            "Recheck linked copies after downloading or resolving the shared conflict",
+            "Volver a comprobar las copias vinculadas después de descargar o resolver el conflicto compartido",
+        ),
+        (
+            "Source open or active in the last 2 minutes; linked copies are deferred",
+            "Origen abierto o activo en los últimos 2 minutos; se aplazan las copias vinculadas",
+        ),
+        (
+            "An existing work folder is required for linked copies",
+            "Las copias vinculadas necesitan una carpeta de trabajo existente",
+        ),
+        (
+            "No conversation turns to convert",
+            "No hay mensajes de conversación que convertir",
+        ),
+        (
+            "Linked copy missing; restore it or change the conversation profile",
+            "Falta la copia vinculada; restáurala o cambia el perfil de la conversación",
+        ),
+        (
+            "Linked histories match their saved baselines",
+            "Los historiales vinculados coinciden con su estado guardado",
+        ),
+        (
+            "Linked history edited or compacted; both copies are kept",
+            "Historial vinculado editado o compactado; se conservan ambas copias",
+        ),
+        (
+            "Both harnesses continued independently; both copies are kept",
+            "Ambos harnesses han continuado por separado; se conservan ambas copias",
+        ),
+        (
+            "Same continuation in both harnesses; update linked baselines",
+            "Misma continuación en ambos harnesses; actualizar el estado de los vínculos",
+        ),
+        (
+            "Incomplete continuation; finish the agent turn before syncing",
+            "Continuación incompleta; termina el turno del agente antes de sincronizar",
+        ),
+        (
+            "Destination conversation open or recently active; update deferred",
+            "Conversación de destino abierta o activa recientemente; actualización aplazada",
+        ),
+        (
+            "Append complete new turns; preserve conversation identifiers and existing history",
+            "Añadir los turnos nuevos completos conservando los identificadores y el historial existente",
+        ),
+        (
+            "Target harness is not installed",
+            "El harness de destino no está instalado",
+        ),
+        (
+            "Several identified copies exist in this harness; choose one before linking",
+            "Hay varias copias identificadas en este harness; elige una antes de vincular",
+        ),
+        (
+            "Existing harness copy has different history; no duplicate will be created",
+            "La copia existente tiene otro historial; no se creará un duplicado",
+        ),
+        (
+            "Adopt the existing matching harness copy without creating a duplicate",
+            "Vincular la copia existente que coincide, sin crear un duplicado",
+        ),
+        (
+            "Convert the source into a new linked conversation",
+            "Convertir el origen en una nueva conversación vinculada",
+        ),
+        (
+            "Cannot inspect linked history: {error}",
+            "No se puede consultar el historial vinculado: {error}",
+        ),
+        (
+            "Older than {days} days; delete only the shared copy, keeping local originals",
+            "Más de {days} días de inactividad; borrar solo la copia compartida y conservar los originales locales",
+        ),
+        (
+            "Retention deferred until pending changes and linked copies are resolved",
+            "Retención pendiente de resolver los cambios y las copias vinculadas",
+        ),
+        (
+            "Retention deferred: a linked copy is active, changed or unreadable",
+            "Retención aplazada: una copia vinculada está activa, ha cambiado o no se puede leer",
+        ),
         ("local copy (not maintained)", "copia local (sin seguimiento)"),
         (
             "Using the existing {tool} copy of {title}",
@@ -199,8 +372,13 @@ pub static ES: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
             "Al abrir una conversación, ¿qué harness prefieres usar?",
         ),
         (
-            "Which harnesses do you use? TAB toggles · Enter saves · Ctrl-D disables linked copies · Esc keeps preferences",
-            "¿Qué harnesses usas? TAB marca · Enter guarda · Ctrl-D desactiva las copias vinculadas · Esc conserva las preferencias",
+            "Which harnesses do you use? Enter toggles · Next continues · Ctrl-D disables linked copies · Esc keeps preferences",
+            "¿Qué harnesses usas? Enter marca o desmarca · Siguiente continúa · Ctrl-D desactiva las copias vinculadas · Esc conserva las preferencias",
+        ),
+        ("Next →", "Siguiente →"),
+        (
+            "{title}: linked copies deferred; close the source agent and retry (recent activity may take up to 2 minutes)",
+            "{title}: copias entre harnesses aplazadas; cierra el agente de origen y reintenta (la actividad reciente puede tardar hasta 2 minutos)",
         ),
         ("Ask each time", "Preguntar cada vez"),
         ("Your actx profile", "Tu perfil de actx"),
@@ -845,6 +1023,224 @@ pub static ES: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
             "shell completions (e.g. actx completions bash > ~/.local/share/bash-completion/completions/actx)",
             "autocompletado para tu shell (p. ej. actx completions bash > ~/.local/share/bash-completion/completions/actx)",
         ),
+        (
+            "Conversation changed while being inspected",
+            "La conversación cambió mientras se inspeccionaba",
+        ),
+        (
+            "Subagent confirmed by native metadata",
+            "Subagente confirmado por los metadatos nativos",
+        ),
+        (
+            "Possible subagent: its opening prompt assigns an agent role",
+            "Posible subagente: su mensaje inicial le asigna un rol de agente",
+        ),
+        (
+            "Short connection test or reply-only prompt",
+            "Prueba de conexión corta o petición de responder solo algo",
+        ),
+        (
+            "Short conversation: {n} messages, {chars} characters",
+            "Conversación corta: {n} mensajes, {chars} caracteres",
+        ),
+        (
+            "Similar opening in {n} inactive conversations in the same folder; not necessarily duplicates",
+            "Apertura similar en {n} conversaciones inactivas de la misma carpeta; no necesariamente duplicadas",
+        ),
+        (
+            "Older than the selected inactivity threshold",
+            "Más antigua que el umbral de inactividad elegido",
+        ),
+        (
+            "Protected or recent conversations skipped: {n}",
+            "Conversaciones protegidas o recientes omitidas: {n}",
+        ),
+        (
+            "Subagents and agent-role prompts",
+            "Subagentes y prompts que asignan un rol de agente",
+        ),
+        ("Repeated opening prompts", "Prompts iniciales repetidos"),
+        (
+            "Connection tests and reply-only prompts",
+            "Pruebas de conexión y peticiones de responder solo algo",
+        ),
+        ("Very short conversations", "Conversaciones muy cortas"),
+        (
+            "Any conversation older than the threshold",
+            "Cualquier conversación más antigua que el umbral",
+        ),
+        (
+            "1. Which kinds of conversations should clean suggest? Enter toggles · Next continues",
+            "1. ¿Qué tipos de conversación debe sugerir clean? Enter marca · Siguiente continúa",
+        ),
+        ("{n} days of inactivity", "{n} días de inactividad"),
+        (
+            "2. Minimum inactivity? Open and recently active conversations are always protected",
+            "2. ¿Inactividad mínima? Las conversaciones abiertas o activas hace poco siempre están protegidas",
+        ),
+        (
+            "3. Which harnesses? Enter toggles · Next continues",
+            "3. ¿Qué harnesses? Enter marca · Siguiente continúa",
+        ),
+        ("At most {n} messages", "Como máximo {n} mensajes"),
+        (
+            "4. How short should the conversation be?",
+            "4. ¿Cómo de corta debe ser la conversación?",
+        ),
+        ("At most {n} characters", "Como máximo {n} caracteres"),
+        (
+            "5. Maximum conversation text length?",
+            "5. ¿Longitud máxima del texto de la conversación?",
+        ),
+        (
+            "At least {n} similar conversations",
+            "Al menos {n} conversaciones similares",
+        ),
+        (
+            "6. How many similar openings should form a group?",
+            "6. ¿Cuántas aperturas similares deben formar un grupo?",
+        ),
+        (
+            "Optional text to match in the title or opening prompt (Enter keeps the current filter):",
+            "Texto opcional que debe aparecer en el título o el mensaje inicial (Enter conserva el filtro actual):",
+        ),
+        (
+            "Advanced clean needs an interactive terminal; use clean flags for a scripted preview",
+            "clean advanced necesita una terminal interactiva; usa las opciones de clean para una vista previa desde un script",
+        ),
+        (
+            "Inactivity threshold is too large",
+            "El umbral de inactividad es demasiado grande",
+        ),
+        (
+            "Clean suggests local conversations only; shared, linked and open conversations are protected.",
+            "clean solo sugiere conversaciones locales; las compartidas, vinculadas y abiertas están protegidas.",
+        ),
+        (
+            "No cleanup candidates match these criteria",
+            "Ninguna conversación coincide con estos criterios de limpieza",
+        ),
+        (
+            "Found {n} candidates; nothing has been removed",
+            "Encontradas {n} candidatas; no se ha borrado nada",
+        ),
+        (
+            "Review cleanup candidates · TAB marks · Enter confirms selection · Esc cancels",
+            "Revisa las candidatas · TAB marca · Enter confirma la selección · Esc cancela",
+        ),
+        (
+            "Move {n} selected local conversations to compressed quarantine? Shared copies are kept.",
+            "¿Mover {n} conversaciones locales seleccionadas a la cuarentena comprimida? Las copias compartidas se conservan.",
+        ),
+        (
+            "Show cleanup candidates without moving anything",
+            "Mostrar candidatas sin mover nada",
+        ),
+        (
+            "Minimum inactivity in days (default: 7)",
+            "Inactividad mínima en días (por defecto: 7)",
+        ),
+        (
+            "Suggestion categories; old enables age as the only reason",
+            "Categorías de sugerencia; old permite usar la antigüedad como único motivo",
+        ),
+        (
+            "Literal text required in the title or opening prompt",
+            "Texto literal obligatorio en el título o el mensaje inicial",
+        ),
+        (
+            "Review unused local conversations and move selected ones to quarantine",
+            "Revisar conversaciones locales sin usar y mover las elegidas a cuarentena",
+        ),
+        (
+            "Answer questions to refine cleanup suggestions",
+            "Responder preguntas para afinar las sugerencias de limpieza",
+        ),
+        (
+            "List recoverable quarantined conversations",
+            "Listar conversaciones recuperables en cuarentena",
+        ),
+        (
+            "Recover a quarantined conversation without overwriting anything",
+            "Recuperar una conversación en cuarentena sin sobrescribir nada",
+        ),
+        (
+            "Use at least 2 similar conversations and positive message and character limits",
+            "Usa al menos 2 conversaciones similares y límites positivos de mensajes y caracteres",
+        ),
+        (
+            "Maximum messages in a short conversation",
+            "Máximo de mensajes en una conversación corta",
+        ),
+        (
+            "Maximum characters in a short conversation",
+            "Máximo de caracteres en una conversación corta",
+        ),
+        (
+            "Minimum similar openings to form a group",
+            "Mínimo de aperturas similares para formar un grupo",
+        ),
+        ("Only these harnesses", "Solo estos harnesses"),
+        (
+            "Only conversations whose work folder is inside this path",
+            "Solo conversaciones cuya carpeta de trabajo esté dentro de esta ruta",
+        ),
+        (
+            "Conversation is open or recently active; cleanup deferred",
+            "La conversación está abierta o activa hace poco; limpieza aplazada",
+        ),
+        (
+            "Conversation changed since selection; cleanup deferred",
+            "La conversación cambió desde la selección; limpieza aplazada",
+        ),
+        (
+            "Conversation became shared, linked or owned by an active parent; cleanup deferred",
+            "La conversación pasó a estar compartida, vinculada o bajo un padre activo; limpieza aplazada",
+        ),
+        (
+            "Conversation has child sessions; clean the children individually",
+            "La conversación tiene sesiones hijas; limpia las hijas por separado",
+        ),
+        (
+            "Archived conversation changed; its native archive was kept",
+            "La conversación archivada cambió; se conservó su archivo nativo",
+        ),
+        (
+            "Codex CLI is required to update its conversation index; the original was kept",
+            "Se necesita la CLI de Codex para actualizar su índice de conversaciones; se conservó el original",
+        ),
+        ("Quarantined: {title}", "En cuarentena: {title}"),
+        (
+            "{n} local conversations quarantined. Recover with actx clean restore. Shared copies were kept.",
+            "{n} conversaciones locales en cuarentena. Recupéralas con actx clean restore. Las copias compartidas se conservaron.",
+        ),
+        ("Quarantine is empty", "La cuarentena está vacía"),
+        (
+            "Destination already exists; nothing was overwritten",
+            "El destino ya existe; no se sobrescribió nada",
+        ),
+        (
+            "Choose a quarantined conversation to recover",
+            "Elige una conversación en cuarentena para recuperar",
+        ),
+        ("Quarantine entry not found", "No se encontró la entrada de cuarentena"),
+        (
+            "Recover {title} to its original harness? Existing conversations will not be overwritten.",
+            "¿Recuperar {title} en su harness original? No se sobrescribirán conversaciones existentes.",
+        ),
+        (
+            "Conversation was already recovered",
+            "La conversación ya se había recuperado",
+        ),
+        (
+            "Quarantine payload failed its integrity check",
+            "Los datos en cuarentena no superaron la comprobación de integridad",
+        ),
+        (
+            "The original work folder is missing; restore it before recovering this conversation",
+            "Falta la carpeta de trabajo original; restáurala antes de recuperar esta conversación",
+        ),
+        ("Recovered: {title}", "Recuperada: {title}"),
     ])
 });
 

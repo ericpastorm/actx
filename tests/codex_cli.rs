@@ -98,6 +98,11 @@ fn codex_conversions() {
         .into_iter()
         .find(|p| std::fs::read_to_string(p).unwrap_or_default().contains("from Codex"))
         .unwrap();
+    // The Claude copy is linked to the original Codex conversation; remove both the local
+    // original and its shared copy so this exercises the reverse conversion instead of
+    // reusing an already linked copy.
+    std::fs::remove_file(rollout_of(&b, &sid)).unwrap();
+    std::fs::remove_dir_all(w.store().join("shop")).unwrap();
     let out = b.pick(&["cv"], &[&copy.file_stem().unwrap().to_string_lossy(), "codex"]); // Claude Code → Codex
     let new_id = out
         .split("codex resume ")

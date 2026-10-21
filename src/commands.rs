@@ -31,6 +31,7 @@ use crate::ui::{
 
 #[derive(Default, Clone)]
 pub struct Args {
+    pub dry_run: bool,
     pub project: Option<String>,
     pub folder: Option<String>,
     pub lang: Option<String>,
@@ -690,7 +691,7 @@ fn may_replace(l: &Session, args: &Args) -> bool {
 
 /// General conversations have an explicit destination per conversation on this machine.
 /// Never infer it from the sender's cwd, Git repo, or another conversation's chosen folder.
-fn session_folder(r: &Session, st: &mut State, prompt: bool) -> Option<String> {
+pub(crate) fn session_folder(r: &Session, st: &mut State, prompt: bool) -> Option<String> {
     if !r.is_general() {
         return resolve_folder(r.meta(), st).or_else(|| prompt.then(|| ask_folder(r.meta(), st)).flatten());
     }
@@ -710,6 +711,10 @@ fn session_folder(r: &Session, st: &mut State, prompt: bool) -> Option<String> {
 }
 
 pub fn sync(args: Args) {
+    if args.dry_run {
+        crate::sync_plan::preview(&args);
+        return;
+    }
     let auto = args.auto;
     let root = if auto {
         set_auto();
@@ -754,9 +759,8 @@ pub fn sync(args: Args) {
     remote.sort_by(|a, b| a.project.cmp(&b.project).then(b.updated.total_cmp(&a.updated)));
     let mut pending: BTreeMap<String, Vec<Pending>> = BTreeMap::new();
     let mut in_sync = 0;
-    for r in remote {
+    for (state, r) in crate::sync_plan::native(&local, remote, &st) {
         let l = local.get(&r.key());
-        let state = status(l, Some(&r), st.base.get(&r.key()).copied());
         if state == "synced" {
             in_sync += 1;
             let l = l.expect("synced means it's here");

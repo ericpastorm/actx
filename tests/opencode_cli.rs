@@ -55,12 +55,18 @@ fn opencode_sync_and_convert() {
     );
 
     let stem = copy.file_stem().unwrap().to_string_lossy().into_owned();
+    // The Claude copy is linked to the original opencode conversation; drop that copy from the
+    // shared project so this exercises the reverse conversion while opencode keeps its model.
+    std::fs::remove_file(b.home.join(".local/state/actx/conversation-groups.json")).unwrap();
+    std::fs::remove_dir_all(w.store().join("web/claude")).unwrap();
     let out = b.pick(&["cv"], &[&stem, "opencode"]); // and back: Claude Code → opencode
     assert!(out.contains("opencode ") && out.contains(" -s ses_"), "{out}");
     assert!(
         opencode_sessions(&b)
             .values()
-            .any(|(t, _, _)| t == "Fix the login form (from Claude Code)")
+            .any(|(t, _, _)| t == "Fix the login form (from Claude Code)"),
+        "out={out}; sessions={:?}",
+        opencode_sessions(&b)
     );
     let listing = b.actx(&["ls"]);
     assert!(listing.contains("web") && !listing.contains("pending"), "{listing}"); // the copies travel with the project

@@ -81,6 +81,8 @@ Then:
 | `actx mk <project>` | Create an empty project. |
 | `actx add [project]` | Pick local conversations to save in an existing project. Without a project, save them in General. |
 | `actx delete [project]` | Pick shared copies to delete, across all projects and General or only the named project. Keeps local originals and projects, even when empty. |
+| `actx sync --dry-run [project]` | Preview operations and pending decisions without modifying data; supports `--all` and `--general`. |
+| `actx clean [advanced]` | Suggest unused local conversations (subagents, tests, repeated openings, very short ones) and move the ones you pick to recoverable quarantine. |
 | `actx sync [project]` | Push what you continued here, pull what's new. Pick projects and General, or use `--all`. |
 | `actx` / `actx browse [project]` | Compact browser: one conversation per row, with its harnesses. Enter opens, Alt-H configures, Delete removes. |
 | `actx ls [project]` | Print the compact list and copy states without interaction. |
@@ -155,6 +157,50 @@ to `~/.local/state/actx/backups/`.
 
 Close the conversation in its agent before merging. If actx detects that it is open, the merge
 stays pending until you close it and run `actx sync` again.
+
+### Preview before syncing
+
+```sh
+actx sync --dry-run            # choose projects; all when there is no terminal
+actx sync --dry-run --all      # all projects and General
+actx sync --dry-run myproject  # one project
+actx sync --dry-run --general  # only General
+actx sync --dry-run --auto     # inspect automatic sync without starting it
+```
+
+Shows uploads, downloads, new local sessions, conflicts, linked harness copies and retention,
+including known destinations and decisions still needed. No conversations, state, backups,
+logs, shared locks or actx binaries are written. SQLite is inspected through temporary private
+snapshots; the opencode CLI is not started. When an operation depends on a download or a
+conflict decision, the plan explicitly says it must be checked afterwards.
+
+This is a snapshot, not a saved execution plan. If inputs change while it is being prepared,
+actx asks you to run the preview again. A real `sync` recalculates the operations and applies
+its existing locks and safety checks.
+
+### Cleaning up old conversations
+
+`actx clean` reviews local conversations and suggests ones that are probably no longer useful:
+subagents (threads spawned by another agent), connection tests and "reply only OK" prompts,
+repeated opening prompts and very short conversations. Nothing is selected by default, and
+nothing is removed while you review.
+
+```sh
+actx clean                  # general suggestions, 7 days of inactivity
+actx clean --dry-run        # list candidates without opening the review
+actx clean advanced         # questions: categories, age, harnesses, length and text filter
+actx clean quarantine       # list recoverable conversations
+actx clean restore          # recover one, without overwriting an existing conversation
+```
+
+Shared and linked copies, conversations open or recently active, and the parents of open
+subagents are protected. Selected conversations move to compressed quarantine in
+`~/.local/state/actx/quarantine/`; they are not deleted permanently. Nothing is removed
+automatically by age.
+
+Filters: `--only agents,repeated,tests,short,old`, `--older-than DAYS`, `--max-messages N`,
+`--max-chars N`, `--min-similar N`, `--harnesses claude,codex,opencode,antigravity`,
+`--folder PATH` and `--contains TEXT`.
 
 ### Automatic sync
 

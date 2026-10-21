@@ -81,7 +81,8 @@ fn general_destinations_are_explicit_independent_and_remembered() {
     )
     .unwrap();
     assert!(meta["git"].is_null());
-    assert!(a.actx(&["ls", "--general"]).contains("General (no project)"));
+    let out = a.actx(&["ls", "--general"]);
+    assert!(out.contains("First notes"), "{out}");
     // Even a matching source-relative folder must not silently become the destination.
     std::fs::create_dir_all(b.home.join("notes")).unwrap();
     assert!(b.actx(&["sync", "--auto"]).contains("needs a destination folder"));
@@ -412,6 +413,9 @@ fn cv_converts_without_init_git_or_original_folder_and_rewrites_paths() {
                 .then(|| p.file_stem().unwrap().to_string_lossy().into_owned())
         })
         .unwrap();
+    // The Antigravity copy is linked to the original Claude conversation; remove the original
+    // so converting back exercises a real conversion instead of reusing the linked copy.
+    std::fs::remove_file(&claude_file).unwrap();
     let out = m.pick(&["cv"], &[&agy_id, "claude"]);
     assert!(out.contains("(from Antigravity)"), "{out}");
     let expected_draft = native(&work.join("draft.md"));

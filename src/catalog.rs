@@ -15,7 +15,7 @@ pub fn aliases() -> HashMap<String, String> {
         _ => HashMap::new(),
     }
 }
-fn root(map: &HashMap<String, String>, key: &str) -> String {
+pub(crate) fn root(map: &HashMap<String, String>, key: &str) -> String {
     let mut seen = HashSet::new();
     let mut key = key;
     while let Some(parent) = map.get(key) {

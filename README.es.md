@@ -82,6 +82,8 @@ Y luego:
 | `actx mk <proyecto>` | Crea un proyecto vacío. |
 | `actx add [proyecto]` | Elige conversaciones locales para guardarlas en un proyecto existente. Si lo omites, se guardan en General. |
 | `actx delete [proyecto]` | Elige copias compartidas para borrar, de todos los proyectos y General o solo del proyecto indicado. Conserva originales locales y proyectos, aunque queden vacíos. |
+| `actx sync --dry-run [proyecto]` | Previsualiza operaciones y decisiones pendientes sin modificar datos; admite `--all` y `--general`. |
+| `actx clean [advanced]` | Sugiere conversaciones locales sin usar (subagentes, pruebas, aperturas repetidas, muy cortas) y mueve las elegidas a una cuarentena recuperable. |
 | `actx sync [proyecto]` | Sube lo que has seguido aquí y baja lo nuevo. Eliges los proyectos, o `--all`. |
 | `actx` / `actx browse [proyecto]` | Navegador: una fila por conversación con sus harnesses. Enter abre, Alt-H configura y Supr quita. |
 | `actx ls [proyecto]` | Lista compacta sin interacción, con los estados de las copias. |
@@ -155,6 +157,50 @@ se guarda una copia en `~/.local/state/actx/backups/`.
 
 Cierra la conversación en su agente antes de mezclar. Si actx detecta que está abierta, la mezcla
 queda pendiente hasta que la cierres y vuelvas a ejecutar `actx sync`.
+
+### Vista previa antes de sincronizar
+
+```sh
+actx sync --dry-run            # elige proyectos; todos si no hay terminal
+actx sync --dry-run --all      # todos los proyectos y General
+actx sync --dry-run miproyecto # un proyecto
+actx sync --dry-run --general  # solo General
+actx sync --dry-run --auto     # consulta el modo automático sin ejecutarlo
+```
+
+Muestra subidas, descargas, conversaciones nuevas, conflictos, copias entre harnesses y retención,
+con los destinos conocidos y las decisiones pendientes. No escribe conversaciones, estado, backups,
+logs, bloqueos compartidos ni binarios de actx. Consulta SQLite mediante copias temporales privadas
+y no ejecuta la CLI de opencode. Si una operación depende de descargar o resolver un conflicto,
+el plan indica que tendrá que comprobarse después.
+
+Es una vista del estado actual, no un plan guardado para ejecutar. Si detecta cambios mientras la
+prepara, pide repetirla. Un `sync` real recalcula las operaciones y conserva sus bloqueos y
+comprobaciones de seguridad.
+
+### Limpieza de conversaciones antiguas
+
+`actx clean` revisa conversaciones locales y sugiere las que probablemente ya no sirven:
+subagentes (hilos creados por otro agente), pruebas de conexión y peticiones de «responde solo OK»,
+aperturas repetidas y conversaciones muy cortas. No hay nada seleccionado por defecto y no se
+borra nada mientras revisas.
+
+```sh
+actx clean                  # sugerencias generales, 7 días de inactividad
+actx clean --dry-run        # lista las candidatas sin abrir la revisión
+actx clean advanced         # pregunta categorías, antigüedad, harnesses, longitud y texto
+actx clean quarantine       # lista las conversaciones recuperables
+actx clean restore          # recupera una, sin sobrescribir otra existente
+```
+
+Las copias compartidas y vinculadas, las conversaciones abiertas o activas hace poco y los padres
+de subagentes abiertos están protegidos. Las elegidas pasan a una cuarentena comprimida en
+`~/.local/state/actx/quarantine/`; no se borran para siempre. Nada se elimina automáticamente por
+antigüedad.
+
+Filtros: `--only agents,repeated,tests,short,old`, `--older-than DÍAS`, `--max-messages N`,
+`--max-chars N`, `--min-similar N`, `--harnesses claude,codex,opencode,antigravity`,
+`--folder RUTA` y `--contains TEXTO`.
 
 ### Sincronización automática
 

@@ -220,7 +220,7 @@ fn spanish_interface() {
     let w = World::new();
     let mut a = w.machine("desk");
     a.lang = "es".into();
-    assert!(a.actx(&[]).contains("Aún no hay proyectos"));
+    assert!(a.actx(&["ls"]).contains("No hay conversaciones en esta vista"));
 }
 
 #[test]

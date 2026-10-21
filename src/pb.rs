@@ -130,6 +130,45 @@ impl Msg {
     }
 }
 
+/// Filter length-delimited fields while copying every retained wire byte unchanged.
+pub fn filter_bytes(data: &[u8], field: u32, mut keep: impl FnMut(&[u8]) -> bool) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < data.len() {
+        let start = i;
+        let tag = varint(data, &mut i)?;
+        let number = (tag >> 3) as u32;
+        let wire = tag & 7;
+        let mut retain = true;
+        match wire {
+            0 => {
+                varint(data, &mut i)?;
+            }
+            1 => {
+                i = i.checked_add(8)?;
+            }
+            2 => {
+                let n = usize::try_from(varint(data, &mut i)?).ok()?;
+                let end = i.checked_add(n)?;
+                let bytes = data.get(i..end)?;
+                if number == field {
+                    retain = keep(bytes);
+                }
+                i = end;
+            }
+            5 => {
+                i = i.checked_add(4)?;
+            }
+            _ => return None,
+        }
+        let raw = data.get(start..i)?;
+        if retain {
+            out.extend_from_slice(raw);
+        }
+    }
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

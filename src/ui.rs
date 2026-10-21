@@ -247,6 +247,49 @@ pub fn fzf(rows: &[Row], header: &str, multi: bool, preview: bool) -> Vec<String
         .map(|s| s.keys)
         .unwrap_or_default()
 }
+pub fn checkbox_picker(rows: &[Row], header: &str, actions: &[&str], selected: &[String]) -> Option<Selection> {
+    if ctx().pick.is_some() {
+        return picker(rows, header, true, false, actions, selected);
+    }
+    let mut checked = selected.to_vec();
+    let mut focus = Vec::new();
+    loop {
+        let mut choices: Vec<Row> = rows
+            .iter()
+            .map(|row| Row {
+                key: row.key.clone(),
+                line: format!("{} {}", if checked.contains(&row.key) { "☑" } else { "☐" }, row.line),
+                preview: row.preview.clone(),
+            })
+            .collect();
+        choices.push(Row {
+            key: "::next".into(),
+            line: tr!("Next →"),
+            preview: String::new(),
+        });
+        let pick = picker(&choices, header, false, false, actions, &focus)?;
+        if pick.action == "ctrl-d" {
+            return Some(Selection {
+                action: pick.action,
+                keys: Vec::new(),
+            });
+        }
+        let key = pick.keys.first()?;
+        if key == "::next" {
+            return Some(Selection {
+                action: "enter".into(),
+                keys: checked,
+            });
+        }
+        if checked.contains(key) {
+            checked.retain(|item| item != key);
+        } else {
+            checked.push(key.clone());
+        }
+        focus = vec![key.clone()];
+    }
+}
+
 pub fn picker(
     rows: &[Row],
     header: &str,

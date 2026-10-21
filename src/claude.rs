@@ -259,6 +259,42 @@ pub fn local() -> Vec<Session> {
     out
 }
 
+/// Include native child transcripts for the explicit cleanup workflow only.
+pub fn clean_local() -> Vec<Session> {
+    let mut sessions = local();
+    for project in std::fs::read_dir(&ctx().claude_projects)
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
+        let dirname = project.file_name().to_string_lossy().into_owned();
+        for parent in std::fs::read_dir(project.path()).into_iter().flatten().flatten() {
+            let children = parent.path().join("subagents");
+            for entry in std::fs::read_dir(children).into_iter().flatten().flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                    continue;
+                }
+                let Ok((head, tail)) = chunks(&path) else { continue };
+                let Ok(meta) = path.metadata() else { continue };
+                let id = path.file_stem().unwrap_or_default().to_string_lossy().into_owned();
+                let mut session = Session::local(
+                    "claude",
+                    id,
+                    title(&head, &tail),
+                    project_path(&dirname, &head, &tail).0,
+                    meta.modified().map(epoch).unwrap_or(0.0),
+                    meta.len(),
+                );
+                session.size = Some(meta.len());
+                session.src = Some(path);
+                sessions.push(session);
+            }
+        }
+    }
+    sessions
+}
+
 pub fn preview(s: &Session) -> Vec<(String, String)> {
     s.src
         .as_ref()

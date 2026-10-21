@@ -79,7 +79,14 @@ pub fn opencode_major() -> Option<u8> {
         if !which("opencode") {
             return None;
         }
+        let home = tempfile::tempdir().ok()?;
         let out = hidden(&mut Command::new(resolve("opencode")))
+            .env("HOME", home.path())
+            .env("USERPROFILE", home.path())
+            .env("XDG_DATA_HOME", home.path().join("data"))
+            .env("XDG_CONFIG_HOME", home.path().join("config"))
+            .env("XDG_STATE_HOME", home.path().join("state"))
+            .env("XDG_CACHE_HOME", home.path().join("cache"))
             .args(["session", "--help"])
             .output()
             .ok()?;

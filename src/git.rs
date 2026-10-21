@@ -36,6 +36,7 @@ pub struct GitId {
 
 fn git(path: &str, args: &[&str]) -> Option<String> {
     let out = crate::ctx::command("git")
+        .env("GIT_OPTIONAL_LOCKS", "0")
         .arg("-C")
         .arg(path)
         .args(args)
