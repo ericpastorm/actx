@@ -133,6 +133,12 @@ pub fn linked_keys() -> Vec<String> {
         .map(|l| l.copies.into_values().map(|l| l.target).collect())
         .unwrap_or_default()
 }
+/// Every conversation named by a linked copy: both the source and its targets.
+pub fn linked_family() -> Vec<String> {
+    read()
+        .map(|l| l.copies.into_values().flat_map(|l| [l.source, l.target]).collect())
+        .unwrap_or_default()
+}
 fn append(s: &mut Session, delta: &[Turn]) -> Result<()> {
     // Never manufacture replies or silently flatten an incomplete turn.
     if !delta.len().is_multiple_of(2) || delta.chunks(2).any(|p| p[0].who != "user" || p[1].who != "assistant") {

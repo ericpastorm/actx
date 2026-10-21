@@ -303,13 +303,16 @@ impl Catalog {
             .find(|g| g.id == key || g.selection_key() == key || g.copies.iter().any(|c| c.session().key() == key))
     }
     pub fn scoped(&self, args: &crate::commands::Args) -> Vec<&Conversation> {
+        // By default the browser shows what actx syncs: conversations with a shared copy.
+        // Plain local conversations stay hidden unless --all asks for them.
         self.groups
             .iter()
             .filter(|g| {
-                (!args.general
-                    || g.copies
-                        .iter()
-                        .any(|c| c.remote.as_ref().is_some_and(Session::is_general)))
+                (args.all || g.copies.iter().any(|c| c.remote.is_some()))
+                    && (!args.general
+                        || g.copies
+                            .iter()
+                            .any(|c| c.remote.as_ref().is_some_and(Session::is_general)))
                     && args.project.as_ref().is_none_or(|p| {
                         g.copies.iter().any(|c| {
                             c.remote
@@ -319,6 +322,14 @@ impl Catalog {
                     })
             })
             .collect()
+    }
+
+    /// Conversations actx is not syncing (no shared copy).
+    pub fn unmanaged(&self) -> usize {
+        self.groups
+            .iter()
+            .filter(|g| !g.copies.iter().any(|c| c.remote.is_some()))
+            .count()
     }
     /// Replace physical picker rows with compact rows, preserving candidate eligibility/order.
     pub fn compact(&self, rows: Vec<Row>) -> (Vec<Row>, HashMap<String, String>) {

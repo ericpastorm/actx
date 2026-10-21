@@ -84,9 +84,9 @@ Then:
 | `actx sync --dry-run [project]` | Preview operations and pending decisions without modifying data; supports `--all` and `--general`. |
 | `actx clean [advanced]` | Suggest unused local conversations (subagents, tests, repeated openings, very short ones) and move the ones you pick to recoverable quarantine. |
 | `actx sync [project]` | Push what you continued here, pull what's new. Pick projects and General, or use `--all`. |
-| `actx` / `actx browse [project]` | Compact browser: one conversation per row, with its harnesses. Enter opens, Alt-H configures, Delete removes. |
-| `actx ls [project]` | Print the compact list and copy states without interaction. |
-| `actx resume [project]` | Sync the selected conversation and open its chosen harness copy. |
+| `actx` / `actx browse [project]` | Compact browser: one conversation per row, with its harnesses. Only what actx syncs; `--all` also shows local conversations. Enter opens, Alt-H configures, Delete removes. |
+| `actx ls [project]` | Print the compact list and copy states without interaction (`--all` for local conversations too). |
+| `actx resume [project]` | Sync the selected conversation and open its chosen harness copy (`--all` to include local ones). |
 | `actx setup [folder]` | Full shared-folder and profile setup wizard. |
 | `actx profile` / `actx profile setup` | Readable preferences or the profile wizard; `--json` provides structured output. |
 | `actx cv [project]` | Copy a conversation into another tool (Claude Code, opencode, Codex, Antigravity). |
@@ -191,12 +191,14 @@ actx clean --dry-run        # list candidates without opening the review
 actx clean advanced         # questions: categories, age, harnesses, length and text filter
 actx clean quarantine       # list recoverable conversations
 actx clean restore          # recover one, without overwriting an existing conversation
+actx clean purge            # permanently delete selected quarantine entries
 ```
 
 Shared and linked copies, conversations open or recently active, and the parents of open
-subagents are protected. Selected conversations move to compressed quarantine in
-`~/.local/state/actx/quarantine/`; they are not deleted permanently. Nothing is removed
-automatically by age.
+subagents are protected. In the review, Enter marks or unmarks a candidate, **Select all** at the
+top marks every candidate, and **Next** continues. Selected conversations move to compressed
+quarantine in `~/.local/state/actx/quarantine/`; they stay there until you run `clean purge`,
+which asks for confirmation. Nothing is removed automatically by age.
 
 Filters: `--only agents,repeated,tests,short,old`, `--older-than DAYS`, `--max-messages N`,
 `--max-chars N`, `--min-similar N`, `--harnesses claude,codex,opencode,antigravity`,

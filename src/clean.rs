@@ -290,18 +290,8 @@ pub(crate) fn protected(sessions: &[Session]) -> HashSet<String> {
     let mut keys: HashSet<_> = store::store_root(true)
         .map(|root| store::stored_sessions(&root).into_iter().map(|s| s.key()).collect())
         .unwrap_or_default();
-    keys.extend(crate::multisync::linked_keys());
+    keys.extend(crate::multisync::linked_family());
     keys.extend(crate::state::load().base.into_keys());
-    let links = std::fs::read(ctx().state_dir.join("harness-links.json"))
-        .ok()
-        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
-    if let Some(copies) = links.as_ref().and_then(|v| v["copies"].as_object()) {
-        for link in copies.values() {
-            if let Some(source) = link["source"].as_str() {
-                keys.insert(source.into());
-            }
-        }
-    }
     let aliases = crate::catalog::aliases();
     let families: HashSet<_> = keys.iter().map(|key| crate::catalog::root(&aliases, key)).collect();
     for s in sessions {
@@ -321,6 +311,29 @@ pub(crate) fn protected(sessions: &[Session]) -> HashSet<String> {
         }
     }
     keys
+}
+/// Recheck one conversation against the shared folder, links, aliases and state without
+/// rescanning every local session. `cached` is the set computed when the batch started.
+pub(crate) fn now_protected(s: &Session, cached: &HashSet<String>) -> bool {
+    if cached.contains(&s.key()) {
+        return true;
+    }
+    let aliases = crate::catalog::aliases();
+    let root = crate::catalog::root(&aliases, &s.key());
+    managed_key(&root) || (root != s.key() && managed_key(&s.key()))
+}
+/// Is this key shared, linked or remembered as managed on this machine?
+fn managed_key(key: &str) -> bool {
+    if let Some((harness, id)) = key.split_once(':')
+        && let Some(root) = store::store_root(true)
+        && store::find_stored(&root, harness, id).is_some()
+    {
+        return true;
+    }
+    if crate::multisync::linked_family().iter().any(|k| k == key) {
+        return true;
+    }
+    crate::state::load().base.contains_key(key)
 }
 pub(crate) fn parent_active(s: &Session, sessions: &[Session]) -> bool {
     parent_key(s).is_some_and(|key| sessions.iter().any(|p| p.key() == key && agents::in_use(p)))
@@ -348,7 +361,10 @@ fn scan(options: &Options) -> Result<Vec<Candidate>> {
         .map(|p| crate::paths::canonical(p).unwrap_or_else(|_| p.clone()));
     let mut inspected = Vec::new();
     let mut skipped = 0;
-    for s in &sessions {
+    let total = sessions.len();
+    let label = tr!("Analyzing conversations");
+    for (index, s) in sessions.iter().enumerate() {
+        ui::progress(index + 1, total, &label);
         if s.updated <= 0.0
             || s.updated > cutoff
             || s.harness == "opencode" && crate::opencode::clean_has_children(&s.id)
@@ -454,6 +470,7 @@ fn scan(options: &Options) -> Result<Vec<Candidate>> {
             .then(a.session.updated.total_cmp(&b.session.updated))
             .then(a.session.key().cmp(&b.session.key()))
     });
+    ui::progress_clear();
     ui::say(&tr!("Protected or recent conversations skipped: {n}", n = skipped));
     for error in inspection::errors() {
         ui::warn(&error);
@@ -499,6 +516,7 @@ fn wizard(options: &mut Options) -> Option<()> {
         &tr!("1. Which kinds of conversations should clean suggest? Enter toggles · Next continues"),
         &["enter"],
         &selected,
+        false,
     )?
     .keys
     .into_iter()
@@ -529,6 +547,7 @@ fn wizard(options: &mut Options) -> Option<()> {
         &tr!("3. Which harnesses? Enter toggles · Next continues"),
         &["enter"],
         &options.harnesses.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        false,
     )?;
     options.harnesses = tools.keys.iter().filter_map(|n| harness::known(n)).collect();
     if options.rules.contains("short") || options.rules.contains("tests") {
@@ -645,12 +664,15 @@ pub fn run(mut options: Options) {
             ),
         })
         .collect();
-    let keys = ui::fzf(
+    let keys = ui::checkbox_picker(
         &rows,
-        &tr!("Review cleanup candidates · TAB marks · Enter confirms selection · Esc cancels"),
+        &tr!("Review cleanup candidates · Enter toggles · Next continues · Esc cancels"),
+        &["enter"],
+        &[],
         true,
-        true,
-    );
+    )
+    .map(|selection| selection.keys)
+    .unwrap_or_default();
     let selected: Vec<_> = candidates.iter().filter(|c| keys.contains(&c.session.key())).collect();
     if selected.is_empty()
         || !ui::confirm(&tr!(
@@ -739,6 +761,11 @@ pub fn command() -> clap::Command {
             .about(tr!("Recover a quarantined conversation without overwriting anything"))
             .arg(Arg::new("id")),
     )
+    .subcommand(
+        Command::new("purge")
+            .about(tr!("Permanently delete quarantined conversations"))
+            .arg(Arg::new("id").help(tr!("quarantine id; if omitted, choose from a list"))),
+    )
 }
 pub fn dispatch(matches: &clap::ArgMatches) {
     if let Some(("quarantine", _)) = matches.subcommand() {
@@ -747,6 +774,10 @@ pub fn dispatch(matches: &clap::ArgMatches) {
     }
     if let Some(("restore", m)) = matches.subcommand() {
         crate::quarantine::restore(m.get_one::<String>("id").map(String::as_str));
+        return;
+    }
+    if let Some(("purge", m)) = matches.subcommand() {
+        crate::quarantine::purge(m.get_one::<String>("id").map(String::as_str));
         return;
     }
     let advanced = matches.subcommand_name() == Some("advanced");

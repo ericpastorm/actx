@@ -144,19 +144,17 @@ fn unchanged(c: &Candidate) -> Result<()> {
 pub fn apply(selected: &[&Candidate]) -> Result<()> {
     let _lock = lock()?;
     let mut count = 0;
-    for c in selected {
+    // One scan for the whole batch; each candidate is then rechecked against the shared
+    // folder, links and its parent chain without rescanning every local session.
+    let _guard = inspection::Guard::new();
+    let sessions = clean::locals(&harness::CONVERTS);
+    let protected = clean::protected(&sessions);
+    let label = tr!("Moving conversations to quarantine");
+    for (index, c) in selected.iter().enumerate() {
+        ui::progress(index + 1, selected.len(), &label);
         let result = (|| -> Result<()> {
             unchanged(c)?;
-            inspection::enable();
-            let sessions = clean::locals(&harness::CONVERTS);
-            let protected = clean::protected(&sessions);
-            let parent_open = clean::parent_key(&c.session).is_some_and(|key| {
-                sessions
-                    .iter()
-                    .any(|s| s.key() == key && (agents::in_use(s) || agents::in_use_by_agent_now(s)))
-            });
-            inspection::finish();
-            if protected.contains(&c.session.key()) || parent_open {
+            if clean::now_protected(&c.session, &protected) || parent_blocked(&c.session, &sessions, &protected) {
                 return Err(Error(tr!(
                     "Conversation became shared, linked or owned by an active parent; cleanup deferred"
                 )));
@@ -253,6 +251,25 @@ fn has_codex_db() -> bool {
         .flatten()
         .any(|e| e.path().extension().is_some_and(|x| x == "sqlite"))
 }
+/// A candidate is deferred if any ancestor is open, shared or linked right now.
+fn parent_blocked(s: &Session, sessions: &[Session], protected: &std::collections::HashSet<String>) -> bool {
+    let mut parent = clean::parent_key(s);
+    let mut depth = 0;
+    while let Some(key) = parent {
+        if depth > 64 || protected.contains(&key) {
+            return true;
+        }
+        let Some(p) = sessions.iter().find(|p| p.key() == key) else {
+            return false;
+        };
+        if agents::in_use(p) || agents::in_use_by_agent_now(p) || clean::now_protected(p, protected) {
+            return true;
+        }
+        parent = clean::parent_key(p);
+        depth += 1;
+    }
+    false
+}
 pub fn list() {
     let all = entries();
     if all.is_empty() {
@@ -283,6 +300,92 @@ fn restore_file(payload: &Path, destination: &Path, allow_existing: bool, expect
         .map_err(|error| Error(error.error.to_string()))?;
     Ok(())
 }
+pub fn purge(id: Option<&str>) {
+    let all = entries();
+    if all.is_empty() {
+        ui::say(&tr!("Quarantine is empty"));
+        return;
+    }
+    if id.is_none() && !ui::interactive() && ctx().pick.is_none() {
+        ui::die(&tr!("Purge needs an interactive terminal, or pass the quarantine id"));
+    }
+    let chosen: Vec<(PathBuf, Entry)> = if let Some(id) = id {
+        all.into_iter().filter(|(_, entry)| entry.id == id).collect()
+    } else {
+        let rows: Vec<_> = all
+            .iter()
+            .map(|(_, entry)| Row {
+                key: entry.id.clone(),
+                line: format!("{} {} {}", entry.harness, entry.title, entry.folder),
+                preview: format!(
+                    "{}\n{}\n{}\n{} · {}",
+                    entry.title, entry.session_id, entry.folder, entry.harness, entry.status
+                ),
+            })
+            .collect();
+        let keys = ui::checkbox_picker(
+            &rows,
+            &tr!("Delete quarantined conversations permanently · Enter toggles · Next continues · Esc cancels"),
+            &["enter"],
+            &[],
+            true,
+        )
+        .map(|selection| selection.keys)
+        .unwrap_or_default();
+        all.into_iter().filter(|(_, entry)| keys.contains(&entry.id)).collect()
+    };
+    if chosen.is_empty() {
+        ui::say(&tr!("No quarantined conversations selected"));
+        return;
+    }
+    if chosen.len() == 1 {
+        if !ui::confirm(&tr!(
+            "Permanently delete {title} from quarantine? This cannot be undone.",
+            title = chosen[0].1.title
+        )) {
+            return;
+        }
+    } else if !ui::confirm(&tr!(
+        "Permanently delete {n} quarantined conversations? This cannot be undone.",
+        n = chosen.len()
+    )) {
+        return;
+    }
+    let _lock = match lock() {
+        Ok(lock) => lock,
+        Err(error) => {
+            ui::fail(&error.to_string());
+            return;
+        }
+    };
+    let (mut removed, mut failed) = (0, 0);
+    for (dir, entry) in chosen {
+        let current = std::fs::read(dir.join("entry.json"))
+            .ok()
+            .and_then(|data| serde_json::from_slice::<Entry>(&data).ok());
+        if current.is_none_or(|current| current.id != entry.id) {
+            failed += 1;
+            continue;
+        }
+        match std::fs::remove_dir_all(&dir) {
+            Ok(()) => removed += 1,
+            Err(error) => {
+                failed += 1;
+                ui::warn(&format!("{}: {error}", entry.title));
+            }
+        }
+    }
+    if removed > 0 {
+        ui::ok(&tr!("Permanently deleted {n} quarantined conversation(s)", n = removed));
+    }
+    if failed > 0 {
+        ui::warn(&tr!(
+            "Some quarantine entries changed and were not deleted: {n}",
+            n = failed
+        ));
+    }
+}
+
 pub fn restore(id: Option<&str>) {
     let all = entries();
     if all.is_empty() {

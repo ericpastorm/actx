@@ -85,6 +85,12 @@ fn cli() -> Command {
             .conflicts_with("project")
             .help(tr!("only General conversations (no project)"))
     };
+    let show_all = || {
+        Arg::new("all")
+            .long("all")
+            .action(ArgAction::SetTrue)
+            .help(tr!("also show local conversations actx is not syncing yet"))
+    };
     Command::new("actx")
         .about(i18n::translate(i18n::HELP, &[]))
         .version(VERSION)
@@ -182,19 +188,22 @@ fn cli() -> Command {
             Command::new("ls")
                 .about(tr!("show projects and their state"))
                 .arg(project())
-                .arg(general()),
+                .arg(general())
+                .arg(show_all()),
         )
         .subcommand(
             Command::new("browse")
                 .about(tr!("Browse conversations in one compact view"))
                 .arg(project())
-                .arg(general()),
+                .arg(general())
+                .arg(show_all()),
         )
         .subcommand(
             Command::new("resume")
                 .about(tr!("Sync a conversation and open it in a harness"))
                 .arg(project())
                 .arg(general())
+                .arg(show_all())
                 .arg(
                     Arg::new("print")
                         .long("print")
@@ -316,17 +325,20 @@ fn main() {
         Some(("ls", m)) => commands::ls(Args {
             project: get(m, "project"),
             general: m.get_flag("general"),
+            all: m.get_flag("all"),
             ..Default::default()
         }),
         Some(("browse", m)) => browser::browse(Args {
             project: get(m, "project"),
             general: m.get_flag("general"),
+            all: m.get_flag("all"),
             ..Default::default()
         }),
         Some(("resume", m)) => browser::resume(Args {
             project: get(m, "project"),
             general: m.get_flag("general"),
             print: m.get_flag("print"),
+            all: m.get_flag("all"),
             ..Default::default()
         }),
         Some(("rm", m)) => commands::rm(Args {

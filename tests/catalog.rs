@@ -4,6 +4,25 @@ use common::*;
 use serde_json::{Value, json};
 
 #[test]
+fn browser_hides_local_conversations_until_all() {
+    let w = World::new();
+    let m = w.machine("pc");
+    let work = m.home.join("notes");
+    std::fs::create_dir_all(&work).unwrap();
+    claude_session(
+        &m,
+        &work,
+        &[("user", "just local"), ("assistant", "answer")],
+        Some("Only local"),
+    );
+    let out = m.actx(&["ls"]);
+    assert!(!out.contains("Only local"), "{out}");
+    assert!(out.contains("No conversations in this view"), "{out}");
+    let out = m.actx(&["ls", "--all"]);
+    assert!(out.contains("Only local"), "{out}");
+}
+
+#[test]
 fn compact_view_groups_converted_copies_but_never_merges_matching_titles() {
     let w = World::new();
     let m = w.machine("pc");
@@ -25,7 +44,7 @@ fn compact_view_groups_converted_copies_but_never_merges_matching_titles() {
     let id = source.file_stem().unwrap().to_string_lossy();
     let out = m.pick(&["cv"], &[&id, "antigravity"]);
     assert!(out.contains("agy --conversation"), "{out}");
-    let view = m.actx(&["ls"]);
+    let view = m.actx(&["ls", "--all"]);
     assert_eq!(
         view.lines().filter(|l| l.contains("Matching title")).count(),
         2,
@@ -36,7 +55,7 @@ fn compact_view_groups_converted_copies_but_never_merges_matching_titles() {
         view.contains("(claude)"),
         "unrelated conversation is still separate: {view}"
     );
-    let out = m.pick(&["resume", "--print"], &[&id, "antigravity"]);
+    let out = m.pick(&["resume", "--all", "--print"], &[&id, "antigravity"]);
     assert!(out.contains("agy --conversation"), "{out}");
     let before = files_under(&m.home.join(".gemini/antigravity-cli/conversations")).len();
     m.actx(&["profile", "--harnesses", "claude,antigravity"]);

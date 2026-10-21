@@ -156,6 +156,24 @@ fn selected_claude_conversations_are_compressed_and_recoverable_without_overwrit
     assert!(m.actx(&["clean", "quarantine"]).contains("Quarantine is empty"));
 }
 #[test]
+fn purge_removes_quarantine_payloads_permanently() {
+    let w = World::new();
+    let m = w.machine("desk");
+    let (path, id) = conversation(&m, "Purge test", "Responde solo OK", "OK");
+    let out = native(&m, &["clean"], Some(&id));
+    assert!(out.contains("Quarantined:"), "{out}");
+    let (manifest, record) = entry(&m);
+    let key = record["id"].as_str().unwrap();
+    let dir = manifest.parent().unwrap().to_path_buf();
+    assert!(dir.exists());
+    let out = native(&m, &["clean", "purge", key], None);
+    assert!(out.contains("Permanently deleted"), "{out}");
+    assert!(!dir.exists());
+    assert!(!path.exists());
+    assert!(m.actx(&["clean", "quarantine"]).contains("Quarantine is empty"));
+}
+
+#[test]
 fn antigravity_round_trip_preserves_messages_index_and_cache() {
     let w = World::new();
     let m = w.machine("desk");
@@ -195,7 +213,7 @@ fn antigravity_round_trip_preserves_messages_index_and_cache() {
             .unwrap(),
         n
     );
-    assert!(m.actx(&["ls"]).contains("AGY disposable"));
+    assert!(m.actx(&["ls", "--all"]).contains("AGY disposable"));
 }
 #[test]
 fn codex_native_archive_and_recovery_preserve_identity_and_transcript() {
@@ -222,7 +240,7 @@ fn codex_native_archive_and_recovery_preserve_identity_and_transcript() {
     let out = native(&m, &["clean", "restore", record["id"].as_str().unwrap()], None);
     assert!(out.contains("Recovered:"), "{out}");
     assert_eq!(std::fs::read(&path).unwrap(), bytes);
-    assert!(m.actx(&["ls"]).contains("Native disposable"));
+    assert!(m.actx(&["ls", "--all"]).contains("Native disposable"));
 }
 
 #[test]

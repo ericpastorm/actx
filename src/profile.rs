@@ -62,7 +62,7 @@ pub fn configure(
             .filter_map(Value::as_str)
             .map(String::from)
             .collect();
-        ui::checkbox_picker(&rows,&tr!("Which harnesses do you use? Enter toggles · Next continues · Ctrl-D disables linked copies · Esc keeps preferences"),&["enter","ctrl-d"],&selected)
+        ui::checkbox_picker(&rows,&tr!("Which harnesses do you use? Enter toggles · Next continues · Ctrl-D disables linked copies · Esc keeps preferences"),&["enter","ctrl-d"],&selected,false)
             .map(|pick|if pick.action=="ctrl-d"{Vec::new()}else{pick.keys})
     } else {
         None

@@ -39,6 +39,30 @@ pub fn harness_tag(h: &str) -> String {
 }
 
 static AUTO: AtomicBool = AtomicBool::new(false);
+static PROGRESS: AtomicBool = AtomicBool::new(false);
+
+/// A one-line spinner for slow loops. Only in a real terminal, never in scripts or auto runs.
+pub fn progress(index: usize, total: usize, label: &str) {
+    if !progress_allowed() {
+        return;
+    }
+    const FRAMES: [&str; 4] = ["|", "/", "-", "\\"];
+    print!("\r{} {} {index}/{total}   ", FRAMES[index % FRAMES.len()], label);
+    let _ = std::io::stdout().flush();
+    PROGRESS.store(true, Ordering::Relaxed);
+}
+
+/// Remove the spinner line before printing anything else.
+pub fn progress_clear() {
+    if PROGRESS.swap(false, Ordering::Relaxed) {
+        print!("\r{:78}\r", "");
+        let _ = std::io::stdout().flush();
+    }
+}
+
+fn progress_allowed() -> bool {
+    !is_auto() && ctx().pick.is_none() && std::io::stdout().is_terminal() && std::io::stdin().is_terminal()
+}
 
 /// Automatic runs: nobody is watching, output goes to a log.
 pub fn set_auto() {
@@ -51,6 +75,7 @@ pub fn is_auto() -> bool {
 
 /// Print a line (in automatic runs, with the time: it's a log).
 pub fn say(msg: &str) {
+    progress_clear();
     if is_auto() {
         println!("{} {msg}", local_time(crate::ctx::now(), "%Y-%m-%d %H:%M:%S"));
     } else {
@@ -59,6 +84,7 @@ pub fn say(msg: &str) {
 }
 
 pub fn die(msg: &str) -> ! {
+    progress_clear();
     eprintln!("{}{msg}", paint("31", "✗ "));
     std::process::exit(1)
 }
@@ -81,6 +107,7 @@ pub fn interactive() -> bool {
 }
 
 pub fn ask(question: &str, lower: bool) -> String {
+    progress_clear();
     if let Some(answer) = &ctx().answer {
         println!("{} {question} {answer}", paint("33", "?"));
         return answer.clone();
@@ -247,27 +274,38 @@ pub fn fzf(rows: &[Row], header: &str, multi: bool, preview: bool) -> Vec<String
         .map(|s| s.keys)
         .unwrap_or_default()
 }
-pub fn checkbox_picker(rows: &[Row], header: &str, actions: &[&str], selected: &[String]) -> Option<Selection> {
+pub fn checkbox_picker(
+    rows: &[Row],
+    header: &str,
+    actions: &[&str],
+    selected: &[String],
+    preview: bool,
+) -> Option<Selection> {
     if ctx().pick.is_some() {
-        return picker(rows, header, true, false, actions, selected);
+        return picker(rows, header, true, preview, actions, selected);
     }
     let mut checked = selected.to_vec();
+    let all_keys: Vec<String> = rows.iter().map(|row| row.key.clone()).collect();
     let mut focus = Vec::new();
     loop {
-        let mut choices: Vec<Row> = rows
-            .iter()
-            .map(|row| Row {
-                key: row.key.clone(),
-                line: format!("{} {}", if checked.contains(&row.key) { "☑" } else { "☐" }, row.line),
-                preview: row.preview.clone(),
-            })
-            .collect();
+        let all_checked = !all_keys.is_empty() && all_keys.iter().all(|key| checked.contains(key));
+        let mut choices: Vec<Row> = Vec::with_capacity(rows.len() + 2);
         choices.push(Row {
-            key: "::next".into(),
-            line: tr!("Next →"),
+            key: "::all".into(),
+            line: format!("{} {}", if all_checked { "☑" } else { "☐" }, tr!("Select all")),
             preview: String::new(),
         });
-        let pick = picker(&choices, header, false, false, actions, &focus)?;
+        choices.push(Row {
+            key: "::next".into(),
+            line: tr!("Next → ({n})", n = checked.len()),
+            preview: String::new(),
+        });
+        choices.extend(rows.iter().map(|row| Row {
+            key: row.key.clone(),
+            line: format!("{} {}", if checked.contains(&row.key) { "☑" } else { "☐" }, row.line),
+            preview: row.preview.clone(),
+        }));
+        let pick = picker(&choices, header, false, preview, actions, &focus)?;
         if pick.action == "ctrl-d" {
             return Some(Selection {
                 action: pick.action,
@@ -281,7 +319,13 @@ pub fn checkbox_picker(rows: &[Row], header: &str, actions: &[&str], selected: &
                 keys: checked,
             });
         }
-        if checked.contains(key) {
+        if key == "::all" {
+            if all_checked {
+                checked.clear();
+            } else {
+                checked = all_keys.clone();
+            }
+        } else if checked.contains(key) {
             checked.retain(|item| item != key);
         } else {
             checked.push(key.clone());
@@ -298,6 +342,7 @@ pub fn picker(
     actions: &[&str],
     selected: &[String],
 ) -> Option<Selection> {
+    progress_clear();
     if let Some(pick) = &ctx().pick {
         let keys = rows
             .iter()

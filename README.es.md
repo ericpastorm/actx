@@ -85,9 +85,9 @@ Y luego:
 | `actx sync --dry-run [proyecto]` | Previsualiza operaciones y decisiones pendientes sin modificar datos; admite `--all` y `--general`. |
 | `actx clean [advanced]` | Sugiere conversaciones locales sin usar (subagentes, pruebas, aperturas repetidas, muy cortas) y mueve las elegidas a una cuarentena recuperable. |
 | `actx sync [proyecto]` | Sube lo que has seguido aquí y baja lo nuevo. Eliges los proyectos, o `--all`. |
-| `actx` / `actx browse [proyecto]` | Navegador: una fila por conversación con sus harnesses. Enter abre, Alt-H configura y Supr quita. |
-| `actx ls [proyecto]` | Lista compacta sin interacción, con los estados de las copias. |
-| `actx resume [proyecto]` | Sincroniza la conversación elegida y abre su copia en el harness seleccionado. |
+| `actx` / `actx browse [proyecto]` | Navegador: una fila por conversación con sus harnesses. Solo lo que sincroniza actx; `--all` muestra también las locales. Enter abre, Alt-H configura y Supr quita. |
+| `actx ls [proyecto]` | Lista compacta sin interacción, con los estados de las copias (`--all` incluye las locales). |
+| `actx resume [proyecto]` | Sincroniza la conversación elegida y abre su copia en el harness seleccionado (`--all` incluye las locales). |
 | `actx setup [carpeta]` | Asistente completo de carpeta compartida, harnesses, retención y preferencia al abrir. |
 | `actx profile` / `actx profile setup` | Resumen del perfil o asistente para modificarlo. `--json` conserva la salida estructurada. |
 | `actx cv [proyecto]` | Copia una conversación a otro programa (Claude Code, opencode, Codex, Antigravity). |
@@ -191,12 +191,14 @@ actx clean --dry-run        # lista las candidatas sin abrir la revisión
 actx clean advanced         # pregunta categorías, antigüedad, harnesses, longitud y texto
 actx clean quarantine       # lista las conversaciones recuperables
 actx clean restore          # recupera una, sin sobrescribir otra existente
+actx clean purge            # borra definitivamente las entradas elegidas
 ```
 
 Las copias compartidas y vinculadas, las conversaciones abiertas o activas hace poco y los padres
-de subagentes abiertos están protegidos. Las elegidas pasan a una cuarentena comprimida en
-`~/.local/state/actx/quarantine/`; no se borran para siempre. Nada se elimina automáticamente por
-antigüedad.
+de subagentes abiertos están protegidos. En la revisión, Enter marca o desmarca una candidata,
+**Seleccionar todas** en la parte superior las marca todas y **Siguiente** continúa. Las elegidas
+pasan a una cuarentena comprimida en `~/.local/state/actx/quarantine/`; siguen ahí hasta que
+ejecutes `clean purge`, que pide confirmación. Nada se elimina automáticamente por antigüedad.
 
 Filtros: `--only agents,repeated,tests,short,old`, `--older-than DÍAS`, `--max-messages N`,
 `--max-chars N`, `--min-similar N`, `--harnesses claude,codex,opencode,antigravity`,

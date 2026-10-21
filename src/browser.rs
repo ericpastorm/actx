@@ -41,6 +41,18 @@ pub fn list(args: &Args) {
     if groups.is_empty() {
         println!("{}", tr!("No conversations in this view"));
     }
+    if !args.all {
+        let hidden = catalog.unmanaged();
+        if hidden > 0 {
+            println!(
+                "{}",
+                ui::dim(&tr!(
+                    "{n} local conversations actx is not syncing are hidden; use --all to see them",
+                    n = hidden
+                ))
+            );
+        }
+    }
     if groups.iter().any(|g| {
         g.copies
             .iter()
