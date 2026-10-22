@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Desktop CI and workflow fixes
+
+- Build and lint the GUI and launcher on Linux, macOS and Windows. Run frontend state and
+  compact/wide egui rendering tests, plus a real Linux window under Xvfb with isolated histories.
+- Verify project/add/delete/General catalog updates, offline snapshot retention and preservation
+  of the original conversation while the native window is running.
+- Keep project-creation folders separate from conversation destinations. Preserve settings drafts
+  when saving or automatic-sync setup fails, and freeze those editors during reviewed actions.
+- After adding a conversation, show its confirmed destination even if the editor selection changed.
+  Show the active shared folder in the sidebar and release controls when a worker disconnects.
+
 ### Cross-machine sync and CI fixes
 
 - Rewrite conversation paths using the latest publishing computer's metadata when syncing back
@@ -91,8 +102,8 @@ Focused Linux checks cover content edits, compaction, reviewed actions, cleanup/
 publication failures and GUI catalog behavior. An isolated native cleanup cancellation check confirms
 that completed moves remain recoverable and unprocessed originals remain present.
 
-The existing [CI workflow](.github/workflows/test.yml) tests default CLI features on Linux, macOS and
-Windows. It does **not** enable the optional GUI feature. Native Windows/macOS desktop dialogs,
+The [CI workflow](.github/workflows/test.yml) tests default CLI features and separately enables the
+GUI on Linux, macOS and Windows, with an additional native Linux window check. Windows/macOS desktop dialogs,
 terminal launching, cancellation and filesystem recovery behavior still require validation.
 
 See the [desktop guide](docs/desktop.md) for installation and platform limits, or the

@@ -76,8 +76,9 @@ cargo install --git https://github.com/ericpastorm/actx --locked
 actx setup
 ```
 
-**CLI:** CI covers Linux, macOS and Windows. **Desktop preview:** checked natively on Linux;
-Windows/macOS windows, folder dialogs and terminal launches still need hands-on validation.
+**CI:** CLI tests plus GUI builds, Clippy and desktop state/rendering tests on Linux, macOS and
+Windows. Linux also opens a real window under Xvfb. Windows/macOS windows, folder dialogs and
+terminal launches still need hands-on validation.
 See [installation requirements](docs/cli.md#install) and the [desktop guide](docs/desktop.md).
 
 ## From desktop to laptop

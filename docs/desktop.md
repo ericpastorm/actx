@@ -131,14 +131,28 @@ Frontend sync excludes retention and binary publication. Tray icons and notifica
 | Coverage | Current state |
 | --- | --- |
 | CLI tests | The repository CI matrix runs default-feature builds/tests on Linux, macOS and Windows. Check the run for the relevant commit before assuming it passed. |
-| GUI build and service regressions | Checked locally on Linux with `--features gui`; that feature is currently absent from the CI workflow. |
-| Native Linux desktop | Startup, rendering, catalog updates, hidden-window task handling and cleanup cancellation checked with isolated data. |
+| GUI builds and frontend tests | A separate CI matrix enables `--features gui` on Linux, macOS and Windows: Clippy, unit tests, compact/wide egui rendering, and builds of both `actx` and `actx-gui`. |
+| Native Linux desktop | CI starts a real window under Xvfb with software OpenGL and isolated conversations. It verifies API-driven project/add/delete/General catalog refreshes, offline snapshot retention and unchanged original history. Startup, hidden-window handling and cleanup cancellation also have focused regressions. |
 | Native Windows/macOS desktop | Window behavior, folder dialogs, terminal launching and cancellation still require hands-on validation. |
 
 Code review and simulated machines do not establish native platform parity. In particular, Windows
 discovery invalidation uses file size/mtime where Unix also uses change time/inode. Publication
 payloads are flushed before swapping; directory syncing is Unix-specific. Crash recovery and cache
 invalidation still need native filesystem testing on Windows/macOS.
+
+Run the frontend checks locally with:
+
+```sh
+cargo clippy --locked --features gui --all-targets -- -D warnings
+cargo test --locked --features gui --bin actx --bin actx-gui
+cargo build --locked --features gui --bins
+# Linux, with Xvfb, xauth and Mesa installed:
+xvfb-run -a cargo test --locked --features gui --test desktop -- --ignored --nocapture
+```
+
+The native window test uses temporary homes/storage and is ignored by ordinary test runs.
+It tests catalog updates through the reviewed API; it does not click every native dialog or launch
+an interactive coding agent. Headless egui tests render ten views/dialogs at compact and wide sizes.
 
 ## Advanced discovery performance
 

@@ -46,8 +46,8 @@ comparación, recuperación y limpieza local. Muestra el último catálogo guard
 segundo plano; carga los mensajes cuando seleccionas una conversación.
 
 Se ha comprobado el escritorio nativo en Linux. Faltan pruebas manuales de ventanas, diálogos y
-apertura de terminal en Windows/macOS. La matriz actual de CI prueba la CLI en los tres sistemas
-y no activa la GUI opcional. Consulta los [requisitos y límites de escritorio](desktop.md).
+apertura de terminal en Windows/macOS. El CI prueba la CLI y compila/prueba la GUI opcional en
+los tres sistemas, con una ventana nativa en Linux. Consulta los [requisitos y límites de escritorio](desktop.md).
 
 ## Primeros pasos
 
@@ -373,15 +373,16 @@ mezclas y conversiones. Lo manejan con `ACTX_HOST` (el nombre del PC), `ACTX_PIC
 selectores), `ACTX_ANSWER` (la respuesta a cada pregunta), `ACTX_LOCK_WAIT` (segundos de espera por el
 bloqueo de la carpeta compartida) y `ACTX_HOOK_WAIT` (los hooks esperan al sync que lanzan). La CI los
 ejecuta en Linux, macOS y Windows, y además pasa `cargo fmt --check` y
-`cargo clippy --locked --all-targets -- -D warnings`. El workflow usa las opciones predeterminadas
-de CLI. Para comprobar cambios de GUI localmente:
+`cargo clippy --locked --all-targets -- -D warnings`. Hay trabajos separados para el estado y
+renderizado de la GUI y la compilación de ambos binarios. Para comprobar la GUI localmente:
 
 ```sh
-cargo check --locked --features gui --all-targets
-cargo test --locked --features gui --bin actx
+cargo clippy --locked --features gui --all-targets -- -D warnings
+cargo test --locked --features gui --bin actx --bin actx-gui
 ```
 
-Estas comprobaciones no prueban diálogos nativos, gráficos ni apertura de terminales. El
+El CI de Linux también abre una ventana bajo Xvfb y comprueba refrescos del catálogo mediante
+la API y conservación de la copia sin conexión. Diálogos y terminales requieren revisión manual. El
 [historial de cambios](../CHANGELOG.md) distingue lo implementado de la validación pendiente.
 
 actx 0.3 es una reescritura en Rust del script en Python de las versiones 0.1–0.2. Todas las versiones

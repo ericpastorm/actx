@@ -47,8 +47,8 @@ comparison, recovery and local cleanup. It displays the last saved catalog immed
 it in the background; messages load when you select a conversation.
 
 Native desktop behavior has been checked on Linux. Windows/macOS windows, dialogs and terminal
-launches still need hands-on validation. The current CI matrix tests the CLI on all three systems
-and does not enable the optional GUI feature. See [desktop requirements and limits](desktop.md).
+launches still need hands-on validation. CI tests the CLI and separately builds/tests the optional
+GUI on all three systems, with a native Linux window check. See [desktop requirements and limits](desktop.md).
 
 ## Quick start
 
@@ -374,14 +374,15 @@ that share one folder, and run the real binary on them: syncs, merges and conver
 every question), `ACTX_LOCK_WAIT` (seconds to wait for the shared folder's lock) and `ACTX_HOOK_WAIT`
 (hooks wait for the sync they start). CI runs on Linux, macOS and Windows, plus
 `cargo fmt --check` and `cargo clippy --locked --all-targets -- -D warnings`.
-The workflow currently uses default CLI features. To check GUI changes locally:
+Separate GUI jobs enable desktop state/rendering tests and build both binaries. To check locally:
 
 ```sh
-cargo check --locked --features gui --all-targets
-cargo test --locked --features gui --bin actx
+cargo clippy --locked --features gui --all-targets -- -D warnings
+cargo test --locked --features gui --bin actx --bin actx-gui
 ```
 
-GUI feature checks do not exercise native dialogs, graphics or terminal launching. The
+Linux CI additionally opens a window under Xvfb and checks API-driven catalog refreshes and offline
+retention. Native dialogs and terminal launching still need hands-on checks. The
 [changelog](../CHANGELOG.md) separates implemented behavior from pending platform validation.
 
 actx 0.3 is a Rust rewrite of the 0.1–0.2 Python script. All versions read and write the same shared

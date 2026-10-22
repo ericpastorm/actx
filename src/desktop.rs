@@ -23,6 +23,7 @@ enum Kind {
     Apply,
     RootFolder,
     WorkFolder,
+    ProjectFolder,
     Comparison,
     Recoveries,
     Diagnostics,
@@ -86,6 +87,7 @@ struct Desktop {
     show_settings: bool,
     new_project: bool,
     project_name: String,
+    project_folder: String,
     pending: Option<Pending>,
     result: Option<Value>,
     notice: String,
@@ -148,6 +150,7 @@ impl Desktop {
             show_settings: false,
             new_project: false,
             project_name: String::new(),
+            project_folder: String::new(),
             pending: None,
             result: None,
             notice: String::new(),
@@ -221,7 +224,12 @@ impl Desktop {
         self.enqueue(Kind::Catalog, request);
     }
     fn navigation_locked(&self) -> bool {
-        let locked = |kind| matches!(kind, Kind::Preview | Kind::Apply | Kind::RootFolder | Kind::WorkFolder);
+        let locked = |kind| {
+            matches!(
+                kind,
+                Kind::Preview | Kind::Apply | Kind::RootFolder | Kind::WorkFolder | Kind::ProjectFolder
+            )
+        };
         self.pending.is_some() || self.running.is_some_and(locked) || self.queue.iter().any(|j| locked(j.kind))
     }
     fn busy(&self) -> bool {
@@ -245,7 +253,7 @@ impl Desktop {
         std::thread::spawn(move || {
             let epoch = gui_index::epoch();
             let index = (job.kind == Kind::Catalog && gui_index::normal(&job.request)).then(gui_index::Index::current);
-            let mut result = if matches!(job.kind, Kind::RootFolder | Kind::WorkFolder) {
+            let mut result = if matches!(job.kind, Kind::RootFolder | Kind::WorkFolder | Kind::ProjectFolder) {
                 Ok(rfd::FileDialog::new()
                     .pick_folder()
                     .map(|p| json!(p))
@@ -281,6 +289,7 @@ impl Desktop {
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.catalog_receiver = None;
+                    self.catalog_control = None;
                     self.notice = tr!("Catalog check failed; showing the last known data");
                     self.catalog_cached = !self.catalog.is_null();
                 }
@@ -298,6 +307,7 @@ impl Desktop {
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.receiver = None;
                     self.running = None;
+                    self.control = None;
                     self.notice = tr!("Action needs attention");
                 }
                 _ => {}
@@ -372,10 +382,12 @@ impl Desktop {
                 return;
             }
         };
-        if matches!(done.kind, Kind::RootFolder | Kind::WorkFolder) {
+        if matches!(done.kind, Kind::RootFolder | Kind::WorkFolder | Kind::ProjectFolder) {
             if let Some(path) = response.as_str() {
                 if done.kind == Kind::RootFolder {
                     self.root = path.into()
+                } else if done.kind == Kind::ProjectFolder {
+                    self.project_folder = path.into()
                 } else {
                     self.folder = path.into()
                 }
@@ -515,6 +527,7 @@ impl Desktop {
                 if response["status"] == "ok" && done.request["action"] == "add" {
                     self.picking = false;
                     self.all = false;
+                    self.project = done.request["project"].as_str().unwrap_or(crate::store::GENERAL).into();
                     self.scope = self.project.clone();
                 }
                 if response["status"] == "ok" && done.request["action"] == "resolve" {
@@ -538,10 +551,10 @@ impl Desktop {
                 }
                 self.messages = Value::Null;
                 self.result = Some(response);
-                if done.request["action"] == "configure" || done.request["action"] == "automatic" {
-                    if done.request["action"] == "configure"
-                        && self.result.as_ref().is_some_and(|r| r["status"] == "ok")
-                    {
+                if self.result.as_ref().is_some_and(|r| r["status"] == "ok")
+                    && matches!(done.request["action"].as_str(), Some("configure" | "automatic"))
+                {
+                    if done.request["action"] == "configure" {
                         self.catalog = Value::Null;
                         self.selected.clear();
                         self.source.clear();
@@ -658,7 +671,8 @@ impl Desktop {
             .clicked()
         {
             self.new_project = true;
-            self.folder.clear();
+            self.project_name.clear();
+            self.project_folder.clear();
         }
         if ui
             .add_enabled(!self.busy(), icons::button(Icon::Sync, tr!("Sync project scope")))
@@ -742,10 +756,11 @@ impl Desktop {
                 .small()
                 .weak(),
         );
-        if !self.root.is_empty() {
+        let active_root = text(&self.settings, "root");
+        if !active_root.is_empty() {
             ui.separator();
             ui.label(RichText::new(tr!("shared folder")).small().weak());
-            ui.label(RichText::new(&self.root).small().weak());
+            ui.label(RichText::new(active_root).small().weak());
         }
     }
     fn list(&mut self, ui: &mut egui::Ui) {
@@ -921,7 +936,7 @@ impl Desktop {
                 self.enqueue(Kind::Recoveries, json!({"action":"recoveries","ids":[self.selected]}));
             }
         });
-        self.folder_field(ui, false);
+        self.folder_field(ui, Kind::WorkFolder);
         ui.add_enabled_ui(!self.busy() && self.pending.is_none(), |ui| {
             ui.horizontal_wrapped(|ui| {
                 for (action, label) in [
@@ -993,16 +1008,24 @@ impl Desktop {
             }
         });
     }
-    fn folder_field(&mut self, ui: &mut egui::Ui, root: bool) {
+    fn folder_field(&mut self, ui: &mut egui::Ui, kind: Kind) {
         ui.horizontal_wrapped(|ui| {
-            ui.label(if root { tr!("shared folder") } else { tr!("Work folder") });
-            let path = if root { &mut self.root } else { &mut self.folder };
+            ui.label(if kind == Kind::RootFolder {
+                tr!("shared folder")
+            } else {
+                tr!("Work folder")
+            });
+            let path = match kind {
+                Kind::RootFolder => &mut self.root,
+                Kind::ProjectFolder => &mut self.project_folder,
+                _ => &mut self.folder,
+            };
             ui.add(egui::TextEdit::singleline(path).desired_width(220.));
             if ui
                 .add_enabled(!self.busy(), icons::button(Icon::Folder, tr!("Choose folder")))
                 .clicked()
             {
-                self.enqueue(if root { Kind::RootFolder } else { Kind::WorkFolder }, Value::Null);
+                self.enqueue(kind, Value::Null);
             }
         });
     }
@@ -1017,6 +1040,9 @@ impl Desktop {
             .max_height((ctx.content_rect().height() - 80.).max(240.))
             .vscroll(true)
             .show(ctx, |ui| {
+                if self.navigation_locked() {
+                    ui.disable();
+                }
                 if self.settings["root_from_env"] == true {
                     ui.label(tr!("ACTX_ROOT overrides the shared folder in settings"));
                 }
@@ -1040,7 +1066,7 @@ impl Desktop {
                     self.notice = e.to_string();
                 }
                 ui.separator();
-                self.folder_field(ui, true);
+                self.folder_field(ui, Kind::RootFolder);
                 ui.horizontal(|ui| {
                     ui.label(tr!("Language"));
                     let old = self.lang.clone();
@@ -1151,11 +1177,14 @@ impl Desktop {
             .open(&mut open)
             .default_width(520.)
             .show(ctx, |ui| {
+                if self.navigation_locked() {
+                    ui.disable();
+                }
                 ui.horizontal(|ui| {
                     ui.label(tr!("Name"));
                     ui.text_edit_singleline(&mut self.project_name);
                 });
-                self.folder_field(ui, false);
+                self.folder_field(ui, Kind::ProjectFolder);
                 ui.label(tr!(
                     "Create the project, then select its conversations from the local list"
                 ));
@@ -1165,7 +1194,7 @@ impl Desktop {
                 {
                     self.enqueue(
                         Kind::Preview,
-                        json!({"action":"create_project","project":self.project_name,"folder":self.folder}),
+                        json!({"action":"create_project","project":self.project_name,"folder":self.project_folder}),
                     );
                 }
             });
@@ -2058,5 +2087,126 @@ mod tests {
         assert!(app.catalog.is_null());
         assert!(app.selected.is_empty());
         assert_eq!(app.queue.iter().filter(|j| j.kind == Kind::Catalog).count(), 1);
+    }
+    #[test]
+    fn failed_settings_changes_keep_the_editor_and_its_unsaved_values() {
+        for action in ["configure", "automatic"] {
+            for status in ["error", "decision_required", "cancelled"] {
+                let mut app = Desktop::initial(None);
+                app.queue.clear();
+                app.show_settings = true;
+                app.root = "/draft/shared".into();
+                app.harnesses.insert("claude".into());
+                app.complete(Completed {
+                    kind: Kind::Apply,
+                    generation: 0,
+                    epoch: gui_index::epoch(),
+                    request: json!({"action":action,"apply":true}),
+                    result: Ok(json!({"status":status})),
+                });
+                assert!(app.show_settings);
+                assert_eq!(app.root, "/draft/shared");
+                assert!(app.harnesses.contains("claude"));
+                assert!(app.queue.iter().all(|j| j.kind != Kind::Settings));
+            }
+        }
+    }
+    #[test]
+    fn successful_add_shows_the_confirmed_destination_even_if_the_editor_changed() {
+        for (request, project) in [
+            (json!({"action":"add","project":"confirmed"}), "confirmed"),
+            (json!({"action":"add","general":true}), crate::store::GENERAL),
+        ] {
+            let mut app = Desktop::initial(None);
+            app.queue.clear();
+            app.project = "a-later-selection".into();
+            app.picking = true;
+            app.all = true;
+            app.complete(Completed {
+                kind: Kind::Apply,
+                generation: 0,
+                epoch: gui_index::epoch(),
+                request,
+                result: Ok(json!({"status":"ok"})),
+            });
+            assert_eq!(app.scope, project);
+            assert_eq!(app.project, project);
+            assert!(!app.picking && !app.all);
+        }
+    }
+    #[test]
+    fn project_folder_selection_does_not_change_a_conversations_destination() {
+        let mut app = Desktop::initial(None);
+        app.folder = "/resume/here".into();
+        app.complete(Completed {
+            kind: Kind::ProjectFolder,
+            generation: 0,
+            epoch: gui_index::epoch(),
+            request: Value::Null,
+            result: Ok(json!("/new/project")),
+        });
+        assert_eq!(app.project_folder, "/new/project");
+        assert_eq!(app.folder, "/resume/here");
+        app.select(&catalog()["conversations"][0]);
+        assert_eq!(app.project_folder, "/new/project");
+    }
+    #[test]
+    fn desktop_views_and_dialogs_render_in_compact_and_wide_windows() {
+        for width in [920., 1180.] {
+            for view in 0..10 {
+                let ctx = egui::Context::default();
+                theme::install(&ctx);
+                let mut frame = eframe::Frame::_new_kittest();
+                let mut app = Desktop::initial(None);
+                app.catalog = catalog();
+                app.select(&catalog()["conversations"][0]);
+                app.queue.clear();
+                app.detail_view = view != 0;
+                app.messages = json!({"data":{"messages":[{"role":"user","text":"Español · 中文"}]}});
+                app.settings = json!({"root":"/shared","tools":[{"id":"claude","installed":true},{"id":"codex","installed":false},{"id":"opencode","installed":true},{"id":"antigravity","installed":false}]});
+                match view {
+                    2 => app.show_settings = true,
+                    3 => app.new_project = true,
+                    4 => {
+                        app.comparison = Some(
+                            json!({"comparison":{"left":{"harness":"claude","messages":[{"role":"user","text":"local"}]},"right":{"harness":"codex","messages":[{"role":"assistant","text":"shared"}]}},"choices":["merge","defer"]}),
+                        );
+                    }
+                    5 => {
+                        app.recoveries = Some(
+                            json!({"entries":[{"id":"backup","title":"Saved","kind":"backup","can_restore":true}]}),
+                        );
+                    }
+                    6 => app.cleanup_editor = Some(cleanup::Editor::default()),
+                    7 => {
+                        app.adoption_editor = Some(AdoptionEditor {
+                            project: "Demo".into(),
+                            rule: Default::default(),
+                            paths: String::new(),
+                            titles: String::new(),
+                        });
+                    }
+                    8 => app.diagnostic_data = Some(json!({"shared_available":false})),
+                    9 => {
+                        app.pending = Some(Pending {
+                            request: json!({"action":"delete","ids":["claude:one"]}),
+                            response: json!({"status":"ok","data":{"expected":{},"operations":[]}}),
+                        });
+                    }
+                    _ => {}
+                }
+                for _ in 0..2 {
+                    let out = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 760.))),
+                            ..Default::default()
+                        },
+                        |ui| eframe::App::ui(&mut app, ui, &mut frame),
+                    );
+                    assert!(!ctx.tessellate(out.shapes.clone(), out.pixels_per_point).is_empty());
+                    out.drop_without_applying_deltas();
+                }
+            }
+        }
     }
 }

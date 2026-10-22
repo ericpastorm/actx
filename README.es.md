@@ -76,9 +76,10 @@ cargo install --git https://github.com/ericpastorm/actx --locked
 actx setup
 ```
 
-**CLI:** el CI cubre Linux, macOS y Windows. **GUI en vista previa:** comprobada de forma nativa
-en Linux; las ventanas, los selectores de carpetas y el lanzamiento de terminales en Windows/macOS
-siguen pendientes de validación manual. Consulta los [requisitos de instalación](docs/cli.es.md#instalación)
+**CI:** pruebas de CLI, compilación de GUI, Clippy y pruebas de estado/renderizado en Linux,
+macOS y Windows. Linux también abre una ventana real bajo Xvfb. Las ventanas, los selectores de
+carpetas y el lanzamiento de terminales en Windows/macOS siguen pendientes de validación manual.
+Consulta los [requisitos de instalación](docs/cli.es.md#instalación)
 y la [guía de escritorio](docs/desktop.md).
 
 ## Del sobremesa al portátil
