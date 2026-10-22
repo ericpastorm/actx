@@ -85,7 +85,7 @@ pub(crate) fn parent_key(s: &Session) -> Option<String> {
     }
     None
 }
-fn native_agent(s: &Session) -> bool {
+pub(crate) fn native_agent(s: &Session) -> bool {
     if parent_key(s).is_some() {
         return true;
     }

@@ -7,7 +7,7 @@ A standalone vector wordmark is available in [assets/actx.svg](../assets/actx.sv
 
 The desktop is an optional native frontend using [egui/eframe](https://docs.rs/eframe/0.37.0/eframe/)
 and [rfd](https://docs.rs/rfd/0.17.2/rfd/) folder dialogs. It shares the CLI's configuration,
-Rust services, adapters and backups. It does not install a timer or run a web server.
+Rust services, adapters and backups. Opening it does not install a timer or run a web server. Automatic-sync configuration is explicit.
 
 ```sh
 cargo build --release --features gui --locked
@@ -49,6 +49,12 @@ use system dialogs. Optional GUI dependencies are not needed to build or run the
    **Settings** shows automatic-sync components and lets you enable or disable them through a
    reviewed operation. **Diagnostics** shows storage availability, installed tools and recent
    automatic-sync logs. Partial OS setup failures are reported with actual component state.
+
+8. **Automatic additions** on a selected project edits its opt-in shared rule, harnesses, subfolders,
+   clone handling and exclusions. **Preview** lists current matches before saving. **Sync project
+   scope** applies the selected project, General or all projects; eligible new conversations are
+   included when their project rule is enabled. A conversation-only Sync keeps its explicit scope.
+   Rule activation applies on future syncs, and deleted conversations remain excluded until manually added.
 
 Discovery, history reads and actions run in isolated API subprocesses, outside the UI thread.
 A spinner stays active while they work. Confirmations include current revisions and are checked

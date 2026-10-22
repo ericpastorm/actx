@@ -59,3 +59,7 @@ JSON 使用独立于界面语言的标识、状态和原因码。写入操作需
 转换会将工具调用变为文本，并可能省略推理、图像和压缩前的消息。
 冲突不会被静默覆盖；请查看待处理状态并选择处理方式。
 完整安装和平台说明见 [英文文档](README.md)。中文译文仍欢迎母语使用者审校。
+
+## 自动添加
+
+按项目选择启用：`actx auto-add MyProject --on --exclude 'scratch/**'`。保存前可预览候选会话；`--off` 恢复手动添加。桌面界面提供相同的规则编辑器。参见[规则与排除](docs/json-api.md#automatic-additions-opt-in-per-project)。

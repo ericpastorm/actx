@@ -808,6 +808,7 @@ pub fn sync(mut args: Args) {
         store_root(false).expect("a shared folder")
     };
     args = scope(&args, &root);
+    crate::adoption::run(&root, &args);
     let explicit = auto || args.all || args.general || args.project.is_some();
     if explicit {
         crate::multisync::run(&root, &args);

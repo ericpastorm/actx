@@ -541,5 +541,20 @@
   "Linked copy": "关联副本",
   "Timer running": "定时器已启用",
   "Timer stopped": "定时器已停止",
-  "Saved copies": "已保存的副本"
+  "Saved copies": "已保存的副本",
+  "Configure automatic additions for a project": "配置项目的自动添加规则",
+  "Choose a project": "选择一个项目",
+  "More than one project matches; choose manually": "匹配到多个项目；请手动选择",
+  "Add a new conversation from the enabled project rule": "根据已启用的项目规则添加新会话",
+  "Finding new conversations in enabled projects": "正在已启用的项目中查找新会话",
+  "Sync project scope": "同步所选项目范围",
+  "Automatic additions": "自动添加",
+  "Manual by default. This shared rule applies on each computer with a resolved project folder.": "默认手动添加。此共享规则适用于已找到项目文件夹的每台电脑。",
+  "Add new conversations on project sync": "同步项目时添加新会话",
+  "Include subfolders": "包含子文件夹",
+  "Include other clones of this repository": "包含此仓库的其他克隆",
+  "Excluded relative folders, one pattern per line (scratch/**)": "排除的相对文件夹，每行一个模式（scratch/**）",
+  "Excluded titles, one pattern per line (*private*)": "排除的标题，每行一个模式（*private*）",
+  "Disabling keeps existing synchronized conversations. Deleted conversations stay excluded until added manually.": "关闭后保留已同步的会话。已删除的会话将保持排除，直到再次手动添加。",
+  "The rule takes effect on the next project sync. Previewed candidates can change.": "规则在下次项目同步时生效。预览的候选会话可能发生变化。"
 }

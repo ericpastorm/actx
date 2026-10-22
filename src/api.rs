@@ -112,6 +112,7 @@ impl Collection {
 pub struct Project {
     pub collection: Collection,
     pub local_folder: Option<String>,
+    pub auto_add: Option<crate::adoption::Rule>,
 }
 #[derive(Serialize)]
 pub struct Location {
@@ -276,6 +277,7 @@ pub fn list(args: &Args) -> Response<ListData> {
                     Some(Project {
                         collection: Collection::new(&name),
                         local_folder: st.folders.get(&crate::project::key(&name)).cloned(),
+                        auto_add: (name != store::GENERAL).then(|| crate::adoption::rule(root, &name)),
                     })
                 })
                 .collect()

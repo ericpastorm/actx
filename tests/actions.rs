@@ -458,3 +458,175 @@ fn desktop_setup_discovers_project_conversations_without_adding_them() {
         "project_binding_failed"
     );
 }
+
+#[test]
+fn automatic_additions_are_opt_in_reviewed_scoped_and_respect_explicit_deletion() {
+    let w = World::new();
+    let m = w.machine("adoption");
+    let folder = m.home.join("work");
+    let scratch = folder.join("scratch");
+    std::fs::create_dir_all(&scratch).unwrap();
+    let create = json!({"action":"create_project","project":"work","folder":folder});
+    let p = api(&m, create.clone());
+    assert_eq!(api(&m, confirmed(&create, &p))["status"], "ok");
+    let source = claude_session(&m, &folder, &[("user", "hello"), ("assistant", "yes")], Some("Main"));
+    let key = format!("claude:{}", source.file_stem().unwrap().to_string_lossy());
+    let original = std::fs::read(&source).unwrap();
+    claude_session(
+        &m,
+        &scratch,
+        &[("user", "scratch"), ("assistant", "yes")],
+        Some("Scratch"),
+    );
+    claude_session(
+        &m,
+        &folder,
+        &[("user", "private"), ("assistant", "yes")],
+        Some("Private conversation"),
+    );
+    claude_session(
+        &m,
+        &m.home,
+        &[("user", "unrelated"), ("assistant", "yes")],
+        Some("Unrelated"),
+    );
+    let sync = json!({"action":"sync","project":"work"});
+    assert!(
+        api(&m, sync.clone())["data"]["operations"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let request = json!({"action":"adoption","project":"work","adoption":{"enabled":true,"harnesses":["claude"],"exclude":["scratch/**"],"exclude_titles":["*private*"]}});
+    let p = api(&m, request.clone());
+    assert_eq!(p["status"], "ok", "{p}");
+    assert_eq!(p["data"]["candidate_operations"].as_array().unwrap().len(), 1, "{p}");
+    assert!(!serde_json::from_slice::<Value>(&std::fs::read(m.store.join("work/.project.json")).unwrap()).unwrap()["auto_add"].is_object());
+    assert_eq!(api(&m, confirmed(&request, &p))["status"], "ok");
+    let p = api(&m, sync.clone());
+    assert_eq!(p["data"]["operations"][0]["kind"], "adopt", "{p}");
+    let dry = api(&m, json!({"action":"preview","project":"work"}));
+    assert_eq!(dry["data"]["operations"][0]["kind"], "adopt", "{dry}");
+    assert!(!m.store.join("work/claude").exists());
+    let r = api(&m, confirmed(&sync, &p));
+    assert_eq!(r["status"], "ok", "{r}");
+    assert_eq!(
+        api(&m, json!({"action":"list"}))["data"]["conversations"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let delete = json!({"action":"delete","ids":[key]});
+    let p = api(&m, delete.clone());
+    assert_eq!(api(&m, confirm(&delete, &p))["status"], "ok");
+    assert!(
+        api(&m, sync.clone())["data"]["operations"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let manual = json!({"action":"add","project":"work","ids":[key]});
+    let p = api(&m, manual.clone());
+    assert_eq!(api(&m, confirm(&manual, &p))["status"], "ok");
+    assert_eq!(std::fs::read(&source).unwrap(), original);
+    let off = json!({"action":"adoption","project":"work","adoption":{"enabled":false}});
+    let p = api(&m, off.clone());
+    assert_eq!(api(&m, confirmed(&off, &p))["status"], "ok");
+    claude_session(&m, &folder, &[("user", "new"), ("assistant", "yes")], Some("Later"));
+    assert!(
+        !api(&m, sync)["data"]["operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|o| o["kind"] == "adopt")
+    );
+}
+
+#[test]
+fn automatic_additions_defer_ambiguous_project_membership() {
+    let w = World::new();
+    let m = w.machine("ambiguous");
+    let parent = m.home.join("parent");
+    let child = parent.join("child");
+    std::fs::create_dir_all(&child).unwrap();
+    for (project, folder) in [("Parent", &parent), ("Child", &child)] {
+        let create = json!({"action":"create_project","project":project,"folder":folder});
+        let p = api(&m, create.clone());
+        assert_eq!(api(&m, confirmed(&create, &p))["status"], "ok");
+        let enable = json!({"action":"adoption","project":project,"adoption":{"enabled":true,"harnesses":["claude"]}});
+        let p = api(&m, enable.clone());
+        assert_eq!(api(&m, confirmed(&enable, &p))["status"], "ok");
+    }
+    claude_session(
+        &m,
+        &child,
+        &[("user", "hello"), ("assistant", "yes")],
+        Some("Ambiguous"),
+    );
+    let p = api(&m, json!({"action":"sync","project":"Child"}));
+    assert_eq!(p["data"]["operations"][0]["kind"], "deferred", "{p}");
+    assert_eq!(p["data"]["operations"][0]["reason"], "ambiguous_project");
+    assert!(
+        api(&m, json!({"action":"list"}))["data"]["conversations"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn shared_adoption_rules_follow_the_other_computers_bound_project_folder() {
+    let w = World::new();
+    let a = w.machine("rule-desktop");
+    let b = w.machine("rule-laptop");
+    let repo = git_repo(&a.home.join("source"));
+    let clone = git_clone(&repo, &b.home.join("workspace/different-name"));
+    let clone2 = git_clone(&repo, &b.home.join("workspace/another-clone"));
+    let create = json!({"action":"create_project","project":"Portable","folder":repo});
+    let p = api(&a, create.clone());
+    assert_eq!(api(&a, confirmed(&create, &p))["status"], "ok");
+    // Bind explicitly on laptop; metadata/rules remain shared.
+    b.actx_with(
+        &["mk", "Portable"],
+        Opts {
+            cwd: Some(&clone),
+            ..Default::default()
+        },
+    );
+    let enable = json!({"action":"adoption","project":"Portable","adoption":{"enabled":true,"subfolders":false,"harnesses":["claude"]}});
+    let p = api(&a, enable.clone());
+    assert_eq!(api(&a, confirmed(&enable, &p))["status"], "ok");
+    claude_session(&b, &clone, &[("user", "local"), ("assistant", "yes")], Some("Laptop"));
+    claude_session(
+        &b,
+        &clone2,
+        &[("user", "clone"), ("assistant", "yes")],
+        Some("Another clone"),
+    );
+    let child = clone2.join("child");
+    std::fs::create_dir_all(&child).unwrap();
+    claude_session(
+        &b,
+        &child,
+        &[("user", "child"), ("assistant", "yes")],
+        Some("Clone child"),
+    );
+    let plan = api(&b, json!({"action":"adoption","project":"Portable"}));
+    assert_eq!(
+        plan["data"]["candidate_operations"].as_array().unwrap().len(),
+        1,
+        "{plan}"
+    );
+    assert_eq!(plan["data"]["candidate_operations"][0]["title"], "Laptop");
+    let clones = json!({"action":"adoption","project":"Portable","adoption":{"enabled":true,"subfolders":false,"include_clones":true,"harnesses":["claude"]}});
+    let p = api(&b, clones);
+    assert_eq!(p["data"]["candidate_operations"].as_array().unwrap().len(), 2, "{p}");
+    assert!(
+        !p["data"]["candidate_operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["title"] == "Clone child")
+    );
+}

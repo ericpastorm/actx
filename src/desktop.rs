@@ -37,6 +37,12 @@ struct Pending {
     request: Value,
     response: Value,
 }
+struct AdoptionEditor {
+    project: String,
+    rule: crate::adoption::Rule,
+    paths: String,
+    titles: String,
+}
 struct Desktop {
     queue: VecDeque<Job>,
     receiver: Option<mpsc::Receiver<Completed>>,
@@ -67,6 +73,7 @@ struct Desktop {
     comparison_request: Value,
     recoveries: Option<Value>,
     diagnostic_data: Option<Value>,
+    adoption_editor: Option<AdoptionEditor>,
 }
 fn text(v: &Value, k: &str) -> String {
     v[k].as_str().unwrap_or_default().to_string()
@@ -134,6 +141,7 @@ impl Desktop {
             comparison_request: Value::Null,
             recoveries: None,
             diagnostic_data: None,
+            adoption_editor: None,
         };
         app.enqueue(Kind::Settings, json!({"action":"settings"}));
         app.refresh();
@@ -327,6 +335,9 @@ impl Desktop {
                     self.scope = "*".into();
                     self.project = crate::store::GENERAL.into();
                 }
+                if response["status"] == "ok" && done.request["action"] == "adoption" {
+                    self.adoption_editor = None;
+                }
                 self.messages = Value::Null;
                 self.result = Some(response);
                 if done.request["action"] == "configure" || done.request["action"] == "automatic" {
@@ -442,6 +453,38 @@ impl Desktop {
         {
             self.new_project = true;
             self.folder.clear();
+        }
+        if ui
+            .add_enabled(!self.busy(), egui::Button::new(tr!("Sync project scope")))
+            .clicked()
+        {
+            let mut req = json!({"action":"sync"});
+            if self.scope == crate::store::GENERAL {
+                req["general"] = json!(true);
+            } else if self.scope != "*" {
+                req["project"] = json!(self.scope);
+            } else {
+                req["all"] = json!(true);
+            }
+            self.enqueue(Kind::Preview, req);
+        }
+        if self.scope != "*"
+            && self.scope != crate::store::GENERAL
+            && ui
+                .add_enabled(!self.busy(), egui::Button::new(tr!("Automatic additions")))
+                .clicked()
+        {
+            let rule = array(&self.catalog, "projects")
+                .into_iter()
+                .find(|p| p["collection"]["id"] == self.scope)
+                .and_then(|p| serde_json::from_value::<crate::adoption::Rule>(p["auto_add"].clone()).ok())
+                .unwrap_or_default();
+            self.adoption_editor = Some(AdoptionEditor {
+                project: self.scope.clone(),
+                paths: rule.exclude.join("\n"),
+                titles: rule.exclude_titles.join("\n"),
+                rule,
+            });
         }
         if self.scope != "*"
             && self.scope != crate::store::GENERAL
@@ -1097,6 +1140,60 @@ impl Desktop {
             self.recoveries = None;
         }
     }
+    fn adoption_window(&mut self, ctx: &egui::Context) {
+        let Some(mut editor) = self.adoption_editor.take() else {
+            return;
+        };
+        let mut open = true;
+        let mut preview = false;
+        egui::Window::new(tr!("Automatic additions"))
+            .open(&mut open).default_width(550.)
+            .max_height((ctx.content_rect().height()-80.).max(240.)).vscroll(true)
+            .show(ctx, |ui| {
+                ui.strong(&editor.project);
+                ui.label(tr!("Manual by default. This shared rule applies on each computer with a resolved project folder."));
+                ui.checkbox(&mut editor.rule.enabled,tr!("Add new conversations on project sync"));
+                ui.checkbox(&mut editor.rule.subfolders,tr!("Include subfolders"));
+                ui.checkbox(&mut editor.rule.include_clones,tr!("Include other clones of this repository"));
+                ui.label(tr!("Harnesses"));
+                for harness in crate::harness::NAMES {
+                    let mut enabled=editor.rule.harnesses.iter().any(|h|h==harness);
+                    if ui.checkbox(&mut enabled,harness).changed() {
+                        editor.rule.harnesses.retain(|h|h!=harness);
+                        if enabled { editor.rule.harnesses.push(harness.into()); }
+                    }
+                }
+                ui.label(tr!("Excluded relative folders, one pattern per line (scratch/**)"));
+                ui.text_edit_multiline(&mut editor.paths);
+                ui.label(tr!("Excluded titles, one pattern per line (*private*)"));
+                ui.text_edit_multiline(&mut editor.titles);
+                ui.label(tr!("Disabling keeps existing synchronized conversations. Deleted conversations stay excluded until added manually."));
+                preview=ui.add_enabled(!self.busy(),egui::Button::new(tr!("Preview"))).clicked();
+            });
+        if preview {
+            editor.rule.exclude = editor
+                .paths
+                .lines()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+                .collect();
+            editor.rule.exclude_titles = editor
+                .titles
+                .lines()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+                .collect();
+            self.enqueue(
+                Kind::Preview,
+                json!({"action":"adoption","project":editor.project,"adoption":editor.rule}),
+            );
+        }
+        if open {
+            self.adoption_editor = Some(editor);
+        }
+    }
     fn diagnostics_window(&mut self, ctx: &egui::Context) {
         let Some(data) = self.diagnostic_data.clone() else {
             return;
@@ -1190,7 +1287,8 @@ fn operations(ui: &mut egui::Ui, data: &Value) {
     }
     for op in ops {
         let label = match op["kind"].as_str().unwrap_or_default() {
-            "add" => tr!("Add"),
+            "add" | "adopt" => tr!("Add"),
+            "adoption" => tr!("Automatic additions"),
             "delete" => tr!("Delete"),
             "configure" => tr!("Save settings"),
             "create_project" => tr!("Create project"),
@@ -1213,7 +1311,7 @@ fn operations(ui: &mut egui::Ui, data: &Value) {
             "new" => tr!("New local conversation"),
             "synced" => tr!("Up to date"),
             "conflict" => tr!("Conflict"),
-            "skip" => tr!("Deferred"),
+            "skip" | "deferred" => tr!("Deferred"),
             "check" => tr!("Recheck after synchronization"),
             "linked_push" => tr!("Import linked continuation and upload"),
             "linked_pull" => tr!("Update linked copy"),
@@ -1258,6 +1356,57 @@ fn operations(ui: &mut egui::Ui, data: &Value) {
             ui.colored_label(theme::WARNING, requirement(req.as_str().unwrap_or_default()));
         }
         ui.separator();
+    }
+    for candidate in array(data, "candidate_operations") {
+        ui.label(format!(
+            "{} · {} · {}",
+            text(&candidate, "title"),
+            text(&candidate, "project"),
+            match candidate["reason"].as_str() {
+                Some("ambiguous_project") => tr!("More than one project matches; choose manually"),
+                Some("turn_in_progress") => tr!("Finish the current agent turn before synchronizing"),
+                _ => tr!("Add"),
+            }
+        ));
+    }
+    if data["rule"].is_object() {
+        ui.label(tr!(
+            "The rule takes effect on the next project sync. Previewed candidates can change."
+        ));
+        ui.label(format!("{}: {}", tr!("Automatic additions"), data["rule"]["enabled"]));
+        ui.label(format!(
+            "{}: {}",
+            tr!("Harnesses"),
+            array(&data["rule"], "harnesses")
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+        ui.label(format!("{}: {}", tr!("Include subfolders"), data["rule"]["subfolders"]));
+        ui.label(format!(
+            "{}: {}",
+            tr!("Include other clones of this repository"),
+            data["rule"]["include_clones"]
+        ));
+        for (key, label) in [
+            (
+                "exclude",
+                tr!("Excluded relative folders, one pattern per line (scratch/**)"),
+            ),
+            (
+                "exclude_titles",
+                tr!("Excluded titles, one pattern per line (*private*)"),
+            ),
+        ] {
+            let patterns = array(&data["rule"], key);
+            if !patterns.is_empty() {
+                ui.label(label);
+                for p in patterns {
+                    ui.label(p.as_str().unwrap_or_default());
+                }
+            }
+        }
     }
     if let Some(sync) = data["sync_operations"].as_array()
         && !sync.is_empty()
@@ -1374,6 +1523,7 @@ impl eframe::App for Desktop {
         self.comparison_window(&ctx);
         self.recovery_window(&ctx);
         self.diagnostics_window(&ctx);
+        self.adoption_window(&ctx);
         self.confirmation(&ctx);
         if self.result.is_some() {
             let mut open = true;

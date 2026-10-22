@@ -2,6 +2,7 @@
 //! machines, grouped into projects, through any shared folder (a NAS, Syncthing, ...).
 
 mod actions;
+mod adoption;
 mod agents;
 mod antigravity;
 mod api;
@@ -139,6 +140,7 @@ fn cli() -> Command {
         ))
         .subcommand(clean::command())
         .subcommands(recovery::commands())
+        .subcommand(adoption::command())
         .subcommand(Command::new("api").about(tr!("Read one structured request from stdin")))
         .subcommand(Command::new("gui").about(tr!("Open the desktop interface")))
         .subcommand(
@@ -413,6 +415,7 @@ fn main() {
         }),
         Some(("clean", m)) => clean::dispatch(m),
         Some(("update", _)) => commands::update(),
+        Some(("auto-add", m)) => adoption::cli(m),
         Some(("auto", m)) => auto::auto(get(m, "action").as_deref()),
         Some((name @ ("compare" | "resolve" | "recoveries"), m)) => recovery::cli(
             name,

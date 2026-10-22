@@ -324,6 +324,9 @@ pub(crate) fn resolve_pair(
     }
     Ok(())
 }
+pub fn retired_keys() -> Vec<String> {
+    read().map(|l| l.retired).unwrap_or_default()
+}
 pub fn linked_keys() -> Vec<String> {
     read()
         .map(|l| l.copies.into_values().map(|l| l.target).collect())

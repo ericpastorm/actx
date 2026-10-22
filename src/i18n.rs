@@ -83,6 +83,54 @@ const HELP_ES: &str = "actx (agent context): mantiene tus conversaciones de Clau
 
 pub static ES: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| {
     HashMap::from([
+        (
+            "Configure automatic additions for a project",
+            "Configurar la incorporación automática de un proyecto",
+        ),
+        ("Choose a project", "Elige un proyecto"),
+        (
+            "More than one project matches; choose manually",
+            "Coincide con varios proyectos; elige manualmente",
+        ),
+        (
+            "Add a new conversation from the enabled project rule",
+            "Añadir una conversación nueva según la regla del proyecto",
+        ),
+        (
+            "Finding new conversations in enabled projects",
+            "Buscando conversaciones nuevas en proyectos habilitados",
+        ),
+        ("Sync project scope", "Sincronizar proyectos seleccionados"),
+        ("Automatic additions", "Incorporación automática"),
+        (
+            "Manual by default. This shared rule applies on each computer with a resolved project folder.",
+            "Manual por defecto. Esta regla compartida se aplica en cada PC que tenga localizada la carpeta del proyecto.",
+        ),
+        (
+            "Add new conversations on project sync",
+            "Añadir conversaciones nuevas al sincronizar el proyecto",
+        ),
+        ("Include subfolders", "Incluir subcarpetas"),
+        (
+            "Include other clones of this repository",
+            "Incluir otros clones de este repositorio",
+        ),
+        (
+            "Excluded relative folders, one pattern per line (scratch/**)",
+            "Carpetas relativas excluidas, un patrón por línea (scratch/**)",
+        ),
+        (
+            "Excluded titles, one pattern per line (*private*)",
+            "Títulos excluidos, un patrón por línea (*privado*)",
+        ),
+        (
+            "Disabling keeps existing synchronized conversations. Deleted conversations stay excluded until added manually.",
+            "Desactivar conserva las conversaciones ya sincronizadas. Las borradas quedan excluidas hasta que las añadas manualmente.",
+        ),
+        (
+            "The rule takes effect on the next project sync. Previewed candidates can change.",
+            "La regla se aplica en la próxima sincronización del proyecto. Los candidatos pueden cambiar.",
+        ),
         ("Delete project", "Borrar proyecto"),
         ("Recovery", "Recuperación"),
         ("Compare histories", "Comparar historiales"),

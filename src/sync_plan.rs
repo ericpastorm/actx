@@ -65,13 +65,15 @@ impl Operation {
 }
 fn label(kind: &str) -> String {
     match kind {
+        "adopt" => tr!("Add"),
         "push" => tr!("Upload"),
         "pull" => tr!("Download"),
         "new" => tr!("New local conversation"),
         "conflict" => tr!("Conflict"),
-        "skip" => tr!("Deferred"),
+        "skip" | "deferred" => tr!("Deferred"),
         "synced" => tr!("Up to date"),
         "convert" => tr!("Create linked copy"),
+        "linked_refresh" => tr!("Repair linked copy"),
         "linked_push" => tr!("Import linked continuation and upload"),
         "linked_pull" => tr!("Update linked copy"),
         "link" => tr!("Link existing copy"),
@@ -128,7 +130,11 @@ pub fn inspect(root: &Path, args: &Args) -> Plan {
         .collect();
     keys.extend(converted);
     let locals = harness::local_keys(&keys).into_iter().map(|s| (s.key(), s)).collect();
-    let operations = prepare(&remote, &locals, &st, args);
+    let mut operations = prepare(&remote, &locals, &st, args);
+    match crate::adoption::candidates(root, args, None) {
+        Ok(c) => operations.extend(crate::adoption::operations(&c)),
+        Err(e) => inspection::record_error(e.to_string()),
+    }
     Plan {
         operations,
         changed: inspection::changed(),
@@ -295,5 +301,6 @@ pub fn prepare(remote: &[Session], locals: &HashMap<String, Session>, st: &State
         operations.push(op);
     }
     operations.extend(crate::multisync::preview(remote, locals, st, args));
+
     operations
 }

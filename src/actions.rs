@@ -40,6 +40,7 @@ pub enum Action {
     Diagnostics,
     Automatic,
     DeleteProject,
+    Adoption,
 }
 
 #[derive(Clone, Deserialize)]
@@ -57,6 +58,7 @@ pub struct Request {
     pub target: Option<String>,
     pub choice: Option<String>,
     pub backup: Option<String>,
+    pub adoption: Option<crate::adoption::Rule>,
     pub root: Option<String>,
     pub lang: Option<String>,
     pub harnesses: Option<Vec<String>>,
@@ -102,6 +104,7 @@ impl Request {
             Action::Diagnostics => "diagnostics",
             Action::Automatic => "automatic",
             Action::DeleteProject => "delete_project",
+            Action::Adoption => "adoption",
         }
     }
 }
@@ -334,7 +337,8 @@ pub(crate) fn save_selected(
         .map(|s| {
             outcome(
                 &s.key(),
-                store::push_one(root, collection, s, crate::git::git_info(&s.path), st, remote).map(|_| ()),
+                store::push_one(root, collection, s, crate::git::git_info(&s.path), st, remote)
+                    .and_then(|_| crate::adoption::allow(root, &s.key())),
             )
         })
         .collect()
@@ -343,7 +347,13 @@ pub(crate) fn delete_selected(selected: &[&Session], st: &mut State) -> Vec<Outc
     selected
         .iter()
         .map(|s| {
-            let result = store::remove_stored(s);
+            let result = s
+                .store_dir()
+                .ancestors()
+                .nth(3)
+                .ok_or_else(|| crate::ctx::Error("Missing shared root".into()))
+                .and_then(|root| crate::adoption::suppress(root, &s.key()))
+                .and_then(|_| store::remove_stored(s));
             if result.is_ok() {
                 st.base.remove(&s.key());
                 st.folders.remove(&format!("session:{}", s.key()));
@@ -372,6 +382,7 @@ pub fn run(req: Request) -> Response<Value> {
         Action::Sync => return crate::engine::sync(&req),
         Action::Convert => return crate::engine::convert(&req),
         Action::Resume => return crate::engine::resume(&req),
+        Action::Adoption => return crate::adoption::configure(&req),
         Action::Compare | Action::Resolve | Action::Recoveries | Action::Restore => return crate::recovery::run(&req),
         Action::Settings
         | Action::Configure

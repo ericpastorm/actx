@@ -419,3 +419,7 @@ la matriz de harnesses queda para la siguiente sesión de depuración.
 ## Licencia
 
 [MIT](LICENSE). actx es un proyecto independiente, sin relación con Anthropic, OpenAI ni el equipo de opencode.
+
+## Incorporación automática
+
+Es opcional por proyecto: `actx auto-add MiProyecto --on --exclude 'scratch/**'`. Revisa los candidatos antes de guardar; `--off` vuelve a la selección manual. La GUI incluye el mismo editor. Consulta [reglas y exclusiones](docs/json-api.md#automatic-additions-opt-in-per-project).

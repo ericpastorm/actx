@@ -211,3 +211,33 @@ Desktop administration adds read-only `diagnostics` and reviewed `automatic` (`c
 and `delete_project` (`project`). Automatic-sync changes recheck the hook/timer configuration;
 OS failures report `incomplete` with actual component state. Project deletion checks the complete
 shared-copy selection again under the store lock and preserves all local histories.
+
+## Automatic additions (opt-in per project)
+
+`{"action":"adoption","project":"Work"}` inspects the shared rule and current matching
+candidates. Passing `adoption` proposes a replacement rule; use the returned `expected.adoption`
+with `apply:true` to save it. Saving a rule does not immediately add conversations.
+
+```json
+{"action":"adoption","project":"Work","adoption":{"enabled":true,"subfolders":true,"include_clones":false,"harnesses":["claude","codex"],"exclude":["scratch/**"],"exclude_titles":["*private*"]}}
+```
+
+Rules default to disabled and live in project metadata, so each machine uses its own resolved
+project folder. Enabled rules run during project/all sync (including the existing automatic
+sync hooks/timer); explicit conversation-ID sync and General do not discover new histories.
+Normal catalog browsing does not scan the local inventory. Only selected native harnesses are
+scanned when an enabled, resolvable project needs discovery. Discovery uses session work folders;
+opening-message path mentions remain a manual discovery suggestion.
+
+`subfolders` defaults to true; other clones are excluded unless `include_clones` is enabled.
+Exclusions are case-insensitive glob patterns (`*`, `?`, `**`), relative to the project folder;
+`scratch/**` excludes both that folder and descendants. Title exclusions use the same syntax.
+Matching more than one enabled rule yields a `deferred` operation with `ambiguous_project`;
+active sessions/unfinished Codex turns are deferred. Subagents, linked/retired copies, known aliases,
+and already shared IDs are excluded. Delete records a suppression in `.auto-add-ignored.json`;
+manual Add clears it after a successful save. Disabling a rule preserves previously added histories.
+
+Sync preview/dry-run includes `adopt` operations; applying sync rechecks its candidate snapshot.
+The desktop exposes the same rule editor and candidate preview. CLI configuration uses
+`actx auto-add Work --on --exclude 'scratch/**' --exclude-title '*private*'`; `--off` disables,
+`--clear-exclusions` clears patterns, and `--json` returns a read-only plan.

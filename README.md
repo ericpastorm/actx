@@ -412,3 +412,7 @@ reserved for the upcoming debugging session.
 ## License
 
 [MIT](LICENSE). actx is an independent project, not affiliated with Anthropic, OpenAI or the opencode team.
+
+## Project auto-add
+
+Automatic additions are optional per project: `actx auto-add MyProject --on --exclude 'scratch/**'`. Review candidates before saving; `--off` keeps manual additions. The desktop exposes the same editor. See [rules and exclusions](docs/json-api.md#automatic-additions-opt-in-per-project).

@@ -67,6 +67,7 @@ struct SyncSnapshot {
     local: HashMap<String, Session>,
     operations: Vec<PlannedOperation>,
     token: String,
+    adoptions: Vec<crate::adoption::Candidate>,
 }
 fn sync_snapshot(req: &Request) -> std::result::Result<SyncSnapshot, Diagnostic> {
     let _guard = inspection::Guard::new();
@@ -149,14 +150,23 @@ fn sync_snapshot(req: &Request) -> std::result::Result<SyncSnapshot, Diagnostic>
     if !inspection::errors().is_empty() {
         return Err(Diagnostic::new("inspection_failed", inspection::errors().join("; ")));
     }
+    let adoptions = crate::adoption::candidates(&root, &args, None)
+        .map_err(|e| Diagnostic::new("discovery_failed", e.to_string()))?;
     let mut revisions: BTreeMap<String, String> = local
         .iter()
         .map(|(id, s)| (id.clone(), actions::revision(s, remote.iter().find(|r| r.key() == *id))))
         .collect();
+    operations.extend(crate::adoption::operations(&adoptions).into_iter().map(Into::into));
+    for c in adoptions.iter().filter(|c| c.eligible) {
+        revisions.insert(c.session.key(), actions::revision(&c.session, None));
+    }
     for r in &remote {
         revisions
             .entry(r.key())
             .or_insert_with(|| actions::revision(r, Some(r)));
+    }
+    if !inspection::errors().is_empty() {
+        return Err(Diagnostic::new("inspection_failed", inspection::errors().join("; ")));
     }
     let token=digest(&serde_json::to_vec(&json!({"operations":operations,"revisions":revisions,"folders":st.folders,"base":st.base,"target":req.target})).unwrap());
     Ok(SyncSnapshot {
@@ -167,6 +177,7 @@ fn sync_snapshot(req: &Request) -> std::result::Result<SyncSnapshot, Diagnostic>
         local,
         operations,
         token,
+        adoptions,
     })
 }
 fn sync_data(p: &SyncSnapshot, applied: bool) -> Value {
@@ -210,7 +221,10 @@ pub fn sync(req: &Request) -> Response<Value> {
     if let Some(r) = ready("sync", req, sync_data(&p, false), &p.token, blocked(&p)) {
         return r;
     }
-    let mut results = Vec::new();
+    let mut results = match crate::adoption::apply(&p.root, &p.adoptions, &mut p.state) {
+        Ok(v) => v,
+        Err(e) => return actions::error("sync", "adoption_failed", e.to_string()),
+    };
     let mut diagnostics = Vec::new();
     for op in p.operations.iter().filter(|o| o.target_harness.is_none()) {
         let Some(r) = p.remote.iter().find(|r| r.key() == op.session_id) else {
