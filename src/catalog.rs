@@ -10,10 +10,7 @@ use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 pub fn aliases() -> HashMap<String, String> {
-    match std::fs::read(ctx().state_dir.join("conversation-groups.json")) {
-        Ok(data) => serde_json::from_slice(&data).unwrap_or_default(),
-        _ => HashMap::new(),
-    }
+    crate::inspection::optional_json(&ctx().state_dir.join("conversation-groups.json")).unwrap_or_default()
 }
 pub(crate) fn root(map: &HashMap<String, String>, key: &str) -> String {
     let mut seen = HashSet::new();

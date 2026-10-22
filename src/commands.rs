@@ -780,6 +780,14 @@ pub(crate) fn session_folder(r: &Session, st: &mut State, prompt: bool) -> Optio
     Some(folder)
 }
 
+pub(crate) fn scope(args: &Args, root: &Path) -> Args {
+    let mut args = args.clone();
+    if !args.auto && !args.all && !args.general && args.project.is_none() {
+        args.project = crate::project::current(root, &state::load(), &cwd());
+    }
+    args
+}
+
 pub fn sync(mut args: Args) {
     if args.dry_run {
         crate::sync_plan::preview(&args);
@@ -800,9 +808,7 @@ pub fn sync(mut args: Args) {
     } else {
         store_root(false).expect("a shared folder")
     };
-    if !auto && !args.all && !args.general && args.project.is_none() {
-        args.project = crate::project::current(&root, &state::load(), &cwd());
-    }
+    args = scope(&args, &root);
     let explicit = auto || args.all || args.general || args.project.is_some();
     if explicit {
         crate::multisync::run(&root, &args);
@@ -1089,6 +1095,10 @@ pub fn sync(mut args: Args) {
 // ── ls ──────────────────────────────────────────────────────────────────────
 
 pub fn ls(args: Args) {
+    if args.json {
+        crate::api::print(crate::api::list(&args));
+        return;
+    }
     crate::browser::list(&args);
 }
 

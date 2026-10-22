@@ -28,10 +28,7 @@ fn number(v: &Value) -> Option<u64> {
 }
 
 fn read_file(file: &Path) -> State {
-    let raw: Value = std::fs::read_to_string(file)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or(Value::Null);
+    let raw: Value = crate::inspection::optional_json(file).unwrap_or(Value::Null);
     let mut st = State::default();
     if let Some(base) = raw.get("base").and_then(Value::as_object) {
         for (key, pair) in base {

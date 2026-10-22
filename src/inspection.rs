@@ -101,6 +101,27 @@ pub fn record_error(error: String) {
     }
 }
 
+/// Preserve optional-file behavior, but never hide corrupt data from an inspection result.
+pub fn optional_json<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
+    match std::fs::read(path) {
+        Ok(data) => match serde_json::from_slice(&data) {
+            Ok(value) => Some(value),
+            Err(error) => {
+                if enabled() {
+                    record_error(format!("{}: {error}", path.display()));
+                }
+                None
+            }
+        },
+        Err(error) => {
+            if enabled() && error.kind() != std::io::ErrorKind::NotFound {
+                record_error(format!("{}: {error}", path.display()));
+            }
+            None
+        }
+    }
+}
+
 fn sidecar(path: &Path, suffix: &str) -> PathBuf {
     let mut name = path.as_os_str().to_os_string();
     name.push(suffix);

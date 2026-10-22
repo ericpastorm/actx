@@ -644,6 +644,9 @@ pub fn views(local: &HashMap<String, Session>) -> Vec<LinkView> {
     let links = match read() {
         Ok(l) => l,
         Err(e) => {
+            if crate::inspection::enabled() {
+                crate::inspection::record_error(e.to_string());
+            }
             ui::warn(&format!("Multiharness: {e}"));
             return Vec::new();
         }
@@ -727,10 +730,12 @@ pub fn preview(
     let links = match read() {
         Ok(links) => links,
         Err(error) => {
+            crate::inspection::record_error(error.to_string());
             if let Some(r) = stored.first() {
                 operations.push(Operation::new(
                     "check",
                     r,
+                    "linked_state_unreadable",
                     tr!("Cannot read linked state: {error}", error = error),
                 ));
             }
@@ -763,16 +768,28 @@ pub fn preview(
             .into_iter()
             .filter(|n| *n != r.harness)
             .collect();
-        let source = sessions.get(&key);
+        let mut source = sessions.get(&key).cloned();
+        if r.meta().get("project_folder").is_some()
+            && let Some(source) = source.as_mut()
+        {
+            source.path = crate::commands::session_folder(r, &mut st.clone(), false).unwrap_or_default();
+        }
+        let source = source.as_ref();
         let mut histories = Histories::default();
         let family_start = operations.len();
         for target in targets {
-            let mut op = Operation::new("check", r, String::new());
+            let mut op = Operation::new("check", r, "recheck_after_sync", String::new());
             op.harness = format!("{} ↔ {target}", r.harness);
-            let inspect = (|| -> Result<(&'static str, String)> {
+            op.target_harness = Some(target.to_string());
+            op.conversation_id = family.clone();
+            op.destination = crate::commands::session_folder(r, &mut st.clone(), false)
+                .or_else(|| source.map(|s| s.path.clone()).filter(|p| !p.is_empty()));
+
+            let inspect = (|| -> Result<(&'static str, &'static str, String)> {
                 let Some(source) = source else {
                     return Ok((
                         "check",
+                        "source_download_required",
                         tr!("Create or update linked copies after downloading the source and choosing its folder"),
                     ));
                 };
@@ -782,27 +799,35 @@ pub fn preview(
                 ) {
                     return Ok((
                         "check",
+                        "source_sync_required",
                         tr!("Recheck linked copies after downloading or resolving the shared conflict"),
                     ));
                 }
                 if agents::in_use(source) || args.busy.as_deref() == Some(key.as_str()) {
                     return Ok((
                         "skip",
+                        "source_active",
                         tr!("Source open or active in the last 2 minutes; linked copies are deferred"),
                     ));
                 }
                 if source.path.is_empty() || !Path::new(&source.path).is_dir() {
-                    return Ok(("skip", tr!("An existing work folder is required for linked copies")));
+                    return Ok((
+                        "skip",
+                        "work_folder_required",
+                        tr!("An existing work folder is required for linked copies"),
+                    ));
                 }
                 let history = histories.get(source)?;
                 let a = hashes(&history.0);
                 if a.is_empty() {
-                    return Ok(("skip", tr!("No conversation turns to convert")));
+                    return Ok(("skip", "no_turns", tr!("No conversation turns to convert")));
                 }
                 if let Some(link) = links.copies.get(&format!("{key}/{target}")) {
+                    op.target_id = Some(link.target.clone());
                     let Some(mirror) = sessions.get(&link.target) else {
                         return Ok((
                             "skip",
+                            "linked_copy_missing",
                             tr!("Linked copy missing; restore it or change the conversation profile"),
                         ));
                     };
@@ -810,17 +835,23 @@ pub fn preview(
                     let b = hashes(&mirror_history.0);
                     let (kind, delta, destination) = match link_change(link, &a, &b) {
                         LinkChange::Unchanged => {
-                            return Ok(("synced", tr!("Linked histories match their saved baselines")));
+                            return Ok((
+                                "synced",
+                                "linked_copies_match",
+                                tr!("Linked histories match their saved baselines"),
+                            ));
                         }
                         LinkChange::Edited => {
                             return Ok((
                                 "conflict",
+                                "history_edited",
                                 tr!("Linked history edited or compacted; both copies are kept"),
                             ));
                         }
                         LinkChange::Diverged => {
                             return Ok((
                                 "conflict",
+                                "histories_diverged",
                                 tr!("Both harnesses continued independently; both copies are kept"),
                             ));
                         }
@@ -829,6 +860,7 @@ pub fn preview(
                         LinkChange::Baselines => {
                             return Ok((
                                 "link",
+                                "baselines_need_update",
                                 tr!("Same continuation in both harnesses; update linked baselines"),
                             ));
                         }
@@ -838,22 +870,25 @@ pub fn preview(
                     {
                         return Ok((
                             "skip",
+                            "incomplete_turn",
                             tr!("Incomplete continuation; finish the agent turn before syncing"),
                         ));
                     }
                     if agents::in_use(destination) {
                         return Ok((
                             "skip",
+                            "destination_active",
                             tr!("Destination conversation open or recently active; update deferred"),
                         ));
                     }
                     return Ok((
                         kind,
+                        "continuation_ready",
                         tr!("Append complete new turns; preserve conversation identifiers and existing history"),
                     ));
                 }
                 if !harness::get(target).installed() {
-                    return Ok(("skip", tr!("Target harness is not installed")));
+                    return Ok(("skip", "harness_not_installed", tr!("Target harness is not installed")));
                 }
                 let existing: Vec<_> = sessions
                     .values()
@@ -869,32 +904,43 @@ pub fn preview(
                 if existing.len() > 1 {
                     return Ok((
                         "conflict",
+                        "multiple_copies",
                         tr!("Several identified copies exist in this harness; choose one before linking"),
                     ));
                 }
                 if let Some(copy) = existing.first() {
+                    op.target_id = Some(copy.key());
                     let b = histories.get(copy)?;
                     if hashes(&turns::fit(history.0.clone(), "actx", None))
                         != hashes(&turns::fit(b.0.clone(), "actx", None))
                     {
                         return Ok((
                             "conflict",
+                            "copy_history_differs",
                             tr!("Existing harness copy has different history; no duplicate will be created"),
                         ));
                     }
                     return Ok((
                         "link",
+                        "matching_copy_found",
                         tr!("Adopt the existing matching harness copy without creating a duplicate"),
                     ));
                 }
-                Ok(("convert", tr!("Convert the source into a new linked conversation")))
+                Ok((
+                    "convert",
+                    "linked_copy_required",
+                    tr!("Convert the source into a new linked conversation"),
+                ))
             })();
             match inspect {
-                Ok((kind, reason)) => {
+                Ok((kind, code, reason)) => {
+                    op.reason_code = code;
                     op.kind = kind;
                     op.reason = reason;
                 }
                 Err(error) => {
+                    crate::inspection::record_error(error.to_string());
+                    op.reason_code = "linked_history_unreadable";
                     op.kind = "check";
                     op.reason = tr!("Cannot inspect linked history: {error}", error = error);
                 }
@@ -912,6 +958,7 @@ pub fn preview(
             for op in family_ops {
                 if op.kind == "synced" || reverse > 1 && op.kind == "linked_push" {
                     op.kind = "check";
+                    op.reason_code = "linked_source_changed";
                     op.reason = tr!(
                         "A linked continuation changes the source; recheck propagation and conflicts between harnesses during sync"
                     );
@@ -926,6 +973,7 @@ pub fn preview(
             let mut op = Operation::new(
                 "retention",
                 r,
+                "retention_expired",
                 tr!(
                     "Older than {days} days; delete only the shared copy, keeping local originals",
                     days = days
@@ -940,6 +988,7 @@ pub fn preview(
                 })
             {
                 op.kind = "check";
+                op.reason_code = "retention_pending_changes";
                 op.reason = tr!("Retention deferred until pending changes and linked copies are resolved");
             } else {
                 for link in links.copies.values().filter(|l| l.source == key) {
@@ -951,6 +1000,7 @@ pub fn preview(
                                 .unwrap_or(true))
                     {
                         op.kind = "skip";
+                        op.reason_code = "retention_linked_copy_not_ready";
                         op.reason = tr!("Retention deferred: a linked copy is active, changed or unreadable");
                         break;
                     }

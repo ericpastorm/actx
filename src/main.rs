@@ -3,6 +3,7 @@
 
 mod agents;
 mod antigravity;
+mod api;
 mod auto;
 mod browser;
 mod catalog;
@@ -158,6 +159,13 @@ fn cli() -> Command {
                         .conflicts_with_all(["log", "after", "delay"])
                         .help(tr!("Preview synchronization without changing any data")),
                 )
+                .arg(
+                    Arg::new("json")
+                        .long("json")
+                        .requires("dry-run")
+                        .action(ArgAction::SetTrue)
+                        .help(tr!("Output versioned JSON without prompts")),
+                )
                 .arg(project().help(tr!("only this project (otherwise a picker shows up)")))
                 .arg(general())
                 .arg(
@@ -193,6 +201,12 @@ fn cli() -> Command {
         .subcommand(
             Command::new("ls")
                 .about(tr!("show projects and their state"))
+                .arg(
+                    Arg::new("json")
+                        .long("json")
+                        .action(ArgAction::SetTrue)
+                        .help(tr!("Output versioned JSON without prompts")),
+                )
                 .arg(project())
                 .arg(general())
                 .arg(show_all()),
@@ -282,6 +296,12 @@ fn main() {
     }
     i18n::set_spanish(language().to_lowercase().starts_with("es"));
     let matches = cli().get_matches();
+    if matches
+        .subcommand()
+        .is_some_and(|(_, m)| m.try_get_one::<bool>("json").ok().flatten().copied().unwrap_or(false))
+    {
+        ui::set_machine_mode();
+    }
     let get = |m: &clap::ArgMatches, name: &str| m.try_get_one::<String>(name).ok().flatten().cloned();
     let _loading = if matches.subcommand_name() != Some("hook")
         && !matches
@@ -328,6 +348,7 @@ fn main() {
             auto::run_logged(m.get_one::<String>("log").map(String::as_str).unwrap_or_default())
         }
         Some(("sync", m)) => commands::sync(Args {
+            json: m.get_flag("json"),
             dry_run: m.get_flag("dry-run"),
             project: get(m, "project"),
             all: m.get_flag("all"),
@@ -339,6 +360,7 @@ fn main() {
             ..Default::default()
         }),
         Some(("ls", m)) => commands::ls(Args {
+            json: m.get_flag("json"),
             project: get(m, "project"),
             general: m.get_flag("general"),
             all: m.get_flag("all"),

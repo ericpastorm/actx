@@ -188,6 +188,11 @@ Es una vista del estado actual, no un plan guardado para ejecutar. Si detecta ca
 prepara, pide repetirla. Un `sync` real recalcula las operaciones y conserva sus bloqueos y
 comprobaciones de seguridad.
 
+Para scripts y otras interfaces, `actx ls --json` devuelve el catálogo y
+`actx sync --dry-run --json` devuelve la vista previa de sincronización. Ambos son de solo
+lectura, sin preguntas, con datos versionados e identificadores, estados, motivos y diagnósticos
+estables. Consulta el [contrato JSON](docs/json-api.md) para ver alcances, campos y códigos de salida.
+
 ### Limpieza de conversaciones antiguas
 
 `actx clean` revisa conversaciones locales y sugiere las que probablemente ya no sirven:

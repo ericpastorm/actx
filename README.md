@@ -188,6 +188,11 @@ This is a snapshot, not a saved execution plan. If inputs change while it is bei
 actx asks you to run the preview again. A real `sync` recalculates the operations and applies
 its existing locks and safety checks.
 
+For scripts and other interfaces, `actx ls --json` returns the catalog and
+`actx sync --dry-run --json` returns the synchronization preview. Both are read-only,
+noninteractive and use versioned data with stable identifiers, states, reasons and diagnostics.
+See the [JSON interface contract](docs/json-api.md) for scopes, fields and exit codes.
+
 ### Cleaning up old conversations
 
 `actx clean` reviews local conversations and suggests ones that are probably no longer useful:

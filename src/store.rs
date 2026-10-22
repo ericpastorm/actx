@@ -193,10 +193,20 @@ pub fn find_project(root: &Path, name: &str) -> Option<PathBuf> {
 
 /// The conversation stored in `dir` (<project>/<tool>/<id>).
 fn stored_session(dir: PathBuf, project: &str) -> Option<Session> {
-    let meta = std::fs::read_to_string(dir.join("meta.json"))
-        .ok()
-        .and_then(|s| serde_json::from_str::<Value>(&s).ok())?; // none: a half-written upload
-    let harness = crate::harness::known(jstr(&meta, "harness"))?; // stored by a newer actx that knows more tools
+    let file = dir.join("meta.json");
+    let meta = crate::inspection::optional_json::<Value>(&file);
+    if meta.is_none() && dir.is_dir() && !file.exists() && crate::inspection::enabled() {
+        crate::inspection::record_error(format!("Missing session metadata: {}", file.display()));
+    }
+    let meta = meta?; // none: a half-written upload
+    let harness = crate::harness::known(jstr(&meta, "harness"));
+    if (harness.is_none() || jstr(&meta, "id").is_empty()) && crate::inspection::enabled() {
+        crate::inspection::record_error(format!(
+            "Unsupported or incomplete session metadata: {}",
+            file.display()
+        ));
+    }
+    let harness = harness?; // stored by a newer actx that knows more tools
     let path = match meta.get("rel").and_then(Value::as_str) {
         Some(rel) => crate::paths::under_home(rel),
         None => jstr(&meta, "path").to_string(),
@@ -223,9 +233,7 @@ pub fn stored_sessions(root: &Path) -> Vec<Session> {
     let mut out = Vec::new();
     for project in collection_dirs(root) {
         let pname = project_name(&project);
-        let context = std::fs::read(project.join(".project.json"))
-            .ok()
-            .and_then(|data| serde_json::from_slice::<Value>(&data).ok());
+        let context = crate::inspection::optional_json::<Value>(&project.join(".project.json"));
         for tool in names(&project).into_iter().filter(|n| !n.starts_with('.')) {
             for id in names(&project.join(&tool)).into_iter().filter(|n| !n.starts_with('.')) {
                 if let Some(mut s) = stored_session(project.join(&tool).join(&id), &pname) {

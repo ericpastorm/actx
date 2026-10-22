@@ -75,6 +75,8 @@ fn preview_preserves_legacy_state_and_every_local_and_shared_file() {
     let out = a.actx(&["sync", "--dry-run", "--all"]);
     assert!(out.contains("Upload"), "{out}");
     assert!(out.contains("Local changes since the last sync"), "{out}");
+    let out = a.actx(&["sync", "--dry-run"]);
+    assert!(out.contains("Local continuation"), "{out}");
     let out = b.actx(&["sync", "--dry-run", "--general", "--auto"]);
     assert!(out.contains("New local conversation"), "{out}");
     assert!(out.contains("Destination folder needs a decision"), "{out}");

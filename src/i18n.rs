@@ -45,6 +45,14 @@ const HELP_ES: &str = "actx (agent context): mantiene tus conversaciones de Clau
 
 pub static ES: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| {
     HashMap::from([
+        (
+            "Preparing synchronization preview",
+            "Preparando la vista previa de sincronización",
+        ),
+        (
+            "Output versioned JSON without prompts",
+            "Mostrar JSON versionado sin preguntas",
+        ),
         ("Deleting {title}", "Borrando {title}"),
         (
             "Updating the shared actx binary",

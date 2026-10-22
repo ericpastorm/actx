@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 use std::io::{IsTerminal, Read, Write};
 use std::process::Stdio;
-use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize};
 use std::sync::{Mutex, mpsc};
 
 use chrono::{Local, TimeZone};
@@ -15,7 +15,7 @@ use crate::tr;
 pub const N_PREVIEW: usize = 14;
 
 pub fn paint(code: &str, s: &str) -> String {
-    if ctx().no_color {
+    if ctx().no_color || machine_mode() {
         s.to_string()
     } else {
         format!("\x1b[{code}m{s}\x1b[0m")
@@ -41,6 +41,28 @@ pub fn harness_tag(h: &str) -> String {
 }
 
 static AUTO: AtomicBool = AtomicBool::new(false);
+static MACHINE: AtomicBool = AtomicBool::new(false);
+static SILENT: AtomicUsize = AtomicUsize::new(0);
+/// Services return diagnostics to their caller instead of writing to a terminal.
+pub struct Silence;
+impl Silence {
+    pub fn new() -> Self {
+        SILENT.fetch_add(1, Ordering::Relaxed);
+        Self
+    }
+}
+impl Drop for Silence {
+    fn drop(&mut self) {
+        SILENT.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+pub fn set_machine_mode() {
+    progress_clear();
+    MACHINE.store(true, Ordering::Relaxed);
+}
+pub fn machine_mode() -> bool {
+    MACHINE.load(Ordering::Relaxed)
+}
 static PROGRESS: AtomicBool = AtomicBool::new(false);
 static LOADING_ID: AtomicU64 = AtomicU64::new(0);
 static PROGRESS_OUTPUT: Mutex<()> = Mutex::new(());
@@ -137,7 +159,12 @@ pub fn progress_clear() {
 }
 
 fn progress_allowed() -> bool {
-    !is_auto() && ctx().pick.is_none() && std::io::stdout().is_terminal() && std::io::stdin().is_terminal()
+    SILENT.load(Ordering::Relaxed) == 0
+        && !machine_mode()
+        && !is_auto()
+        && ctx().pick.is_none()
+        && std::io::stdout().is_terminal()
+        && std::io::stdin().is_terminal()
 }
 
 /// Automatic runs: nobody is watching, output goes to a log.
@@ -151,8 +178,13 @@ pub fn is_auto() -> bool {
 
 /// Print a line (in automatic runs, with the time: it's a log).
 pub fn say(msg: &str) {
+    if SILENT.load(Ordering::Relaxed) > 0 {
+        return;
+    }
     progress_clear();
-    if is_auto() {
+    if machine_mode() {
+        eprintln!("{msg}");
+    } else if is_auto() {
         println!("{} {msg}", local_time(crate::ctx::now(), "%Y-%m-%d %H:%M:%S"));
     } else {
         println!("{msg}");
