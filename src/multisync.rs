@@ -242,6 +242,18 @@ fn run_inner(root: &Path, args: &crate::commands::Args, config: &serde_json::Val
     let Some(_shared) = crate::commands::lock_store(root) else {
         return Ok(());
     };
+    run_locked(root, args, config)
+}
+
+/// Noninteractive entry point; lock order matches the CLI and never waits on another frontend.
+pub(crate) fn run_service(root: &Path, args: &crate::commands::Args) -> Result<()> {
+    std::fs::create_dir_all(&ctx().state_dir)?;
+    let guard = std::fs::File::create(ctx().state_dir.join("multiharness.lock"))?;
+    guard.try_lock().map_err(|e| Error(e.to_string()))?;
+    let _shared = crate::actions::acquire(root).map_err(|d| Error(d.message))?;
+    run_locked(root, args, &profile::current())
+}
+fn run_locked(root: &Path, args: &crate::commands::Args, config: &serde_json::Value) -> Result<()> {
     let mut links = read()?;
     let mut st = state::load();
     let stored = store::stored_sessions(root);

@@ -13,6 +13,7 @@ mod clean;
 mod codex;
 mod commands;
 mod ctx;
+mod engine;
 mod git;
 mod harness;
 mod i18n;

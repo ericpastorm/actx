@@ -26,6 +26,27 @@ Busy folders return `shared_folder_busy` promptly, without blocking a frontend. 
 or state-save failures return `incomplete` with per-copy results; successful copies are not rolled
 back. The caller must refresh after any applied action. No binaries are published by this API.
 
+The `sync`, `convert` and `resume` actions also use preview/confirmation. Send the returned
+`data.expected` object unchanged in the confirmed request. `sync` accepts physical `ids`, a
+project/General scope, `folder` or per-copy `folders: {"harness:id":"/destination"}`. An empty
+selection syncs the scope. It rechecks native and linked changes, uses adapter backups and the
+same shared locks, and returns per-copy results plus `remaining` operations. Interactive conflict
+resolution is deliberately left pending; this action never silently chooses local or remote.
+Retention and binary publication are excluded from explicit frontend sync actions.
+
+`convert` requires one physical source ID and `target: "claude"|"codex"|"opencode"|"antigravity"`.
+It accepts `folder` when the source's work folder is unavailable. It reuses explicitly identified
+existing copies, preserving the source; a new conversion is local and is not implicitly published.
+Shared sources can be converted without installing the original harness. Conversion also works
+without configuring shared storage. `target_id` identifies the resulting copy.
+
+`resume` accepts one conversation ID and an optional target harness. It checks/syncs shared
+copies before opening and refuses pending conflicts or active agents. With `launch: false`
+(default), it returns a structured `launch: {program,args,folder}` after syncing. `launch: true`
+opens an agent in a separate system terminal: Windows Terminal on Windows, Terminal on macOS,
+or an available terminal on Linux. The frontend remains responsive and receives `terminal_pid`.
+Launching a terminal successfully does not guarantee the harness subsequently starts successfully.
+
 ```sh
 actx ls --json
 actx ls myproject --json

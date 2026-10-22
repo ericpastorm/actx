@@ -43,6 +43,10 @@ pub fn harness_tag(h: &str) -> String {
 static AUTO: AtomicBool = AtomicBool::new(false);
 static MACHINE: AtomicBool = AtomicBool::new(false);
 static SILENT: AtomicUsize = AtomicUsize::new(0);
+static REPORTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+pub(crate) fn take_reports() -> Vec<String> {
+    std::mem::take(&mut *REPORTS.lock().unwrap())
+}
 /// Services return diagnostics to their caller instead of writing to a terminal.
 pub struct Silence;
 impl Silence {
@@ -198,6 +202,10 @@ pub fn die(msg: &str) -> ! {
 }
 
 pub fn warn(msg: &str) {
+    if SILENT.load(Ordering::Relaxed) > 0 {
+        REPORTS.lock().unwrap().push(msg.to_string());
+        return;
+    }
     say(&format!("{}{msg}", paint("33", "⚠ ")));
 }
 
@@ -206,6 +214,10 @@ pub fn ok(msg: &str) {
 }
 
 pub fn fail(msg: &str) {
+    if SILENT.load(Ordering::Relaxed) > 0 {
+        REPORTS.lock().unwrap().push(msg.to_string());
+        return;
+    }
     say(&format!("{}{msg}", paint("31", "✗ ")));
 }
 

@@ -25,6 +25,9 @@ pub enum Action {
     Preview,
     Add,
     Delete,
+    Sync,
+    Convert,
+    Resume,
 }
 
 #[derive(Clone, Deserialize)]
@@ -39,6 +42,11 @@ pub struct Request {
     #[serde(default)]
     pub all: bool,
     pub folder: Option<String>,
+    pub target: Option<String>,
+    #[serde(default)]
+    pub launch: bool,
+    #[serde(default)]
+    pub folders: BTreeMap<String, String>,
     #[serde(default)]
     pub apply: bool,
     #[serde(default)]
@@ -61,6 +69,9 @@ impl Request {
             Action::Preview => "sync_preview",
             Action::Add => "add",
             Action::Delete => "delete",
+            Action::Sync => "sync",
+            Action::Convert => "convert",
+            Action::Resume => "resume",
         }
     }
 }
@@ -105,7 +116,7 @@ pub(crate) fn response(
 pub(crate) fn error(command: &'static str, code: &'static str, message: impl Into<String>) -> Response<Value> {
     Response::error(command, Diagnostic::new(code, message))
 }
-fn revision(s: &Session, remote: Option<&Session>) -> String {
+pub(crate) fn revision(s: &Session, remote: Option<&Session>) -> String {
     // This is an optimistic concurrency token, not a claim of full content fingerprinting.
     let mut bytes = format!("{}:{}:{}:{}", s.key(), s.weight, s.updated.to_bits(), s.path).into_bytes();
     if let Some(src) = &s.src {
@@ -303,6 +314,9 @@ pub fn run(req: Request) -> Response<Value> {
     match req.action {
         Action::List => return serde_response(api::list(&req.args())),
         Action::Preview => return serde_response(api::preview(&req.args())),
+        Action::Sync => return crate::engine::sync(&req),
+        Action::Convert => return crate::engine::convert(&req),
+        Action::Resume => return crate::engine::resume(&req),
         _ => {}
     }
     let inspect = || {
@@ -313,7 +327,7 @@ pub fn run(req: Request) -> Response<Value> {
         Ok(p) => p,
         Err(d) => return Response::error(command, d),
     };
-    let data = |p: &Prepared, applied: bool, results: &[Outcome]| json!({"applied":applied,"operations":p.operations,"results":results});
+    let data = |p: &Prepared, applied: bool, results: &[Outcome]| json!({"applied":applied,"operations":p.operations,"results":results,"expected":p.operations.iter().map(|o|(o.session_id.clone(),o.revision.clone())).collect::<BTreeMap<_,_>>()});
     if prepared
         .operations
         .iter()

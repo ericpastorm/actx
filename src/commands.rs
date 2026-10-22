@@ -1039,8 +1039,7 @@ pub fn sync(mut args: Args) {
             if !auto && checked.insert(folder.clone()) {
                 check_git(r.meta(), folder);
             }
-            let fix = fixer_for(r.meta(), folder);
-            match harness::get(r.harness).install(r, l.as_ref(), folder, fix.as_ref()) {
+            match install_one(r, l.as_ref(), folder, &mut st) {
                 Ok(weight) => {
                     st.base.insert(r.key(), (weight, r.weight));
                     let project = r.project.clone().unwrap_or_default();
@@ -1285,50 +1284,44 @@ fn pick_target(chosen: &[&Session]) -> Option<&'static str> {
 
 /// Create a copy of s in another tool and return it. The original is left untouched.
 fn convert_one(s: &Session, target: &str, st: &mut State) -> crate::ctx::Result<Session> {
-    let _loading = crate::ui::loading(&tr!("Syncing {title} to {tool}", title = s.title, tool = target));
-    use crate::ctx::Error;
-    let source = harness::get(s.harness);
-    let (folder, (turns, model)) = if let Some(meta) = &s.meta {
-        let folder = session_folder(s, st, true)
-            .ok_or_else(|| Error(tr!("I don't know which folder it goes in on this machine")))?;
-        let fix = fixer_for(meta, &folder);
-        let turns = source.stored_turns(s, fix.as_ref())?;
-        (folder, turns)
+    let folder = if s.meta.is_some() {
+        session_folder(s, st, true)
+    } else if !s.path.is_empty() && Path::new(&s.path).is_dir() {
+        Some(s.path.clone())
     } else {
-        let (mut turns, model) = source.local_turns(s)?;
-        if turns.is_empty() {
-            return Err(Error(tr!("it has no text messages to convert")));
-        }
-        let folder = if !s.path.is_empty() && Path::new(&s.path).is_dir() {
-            s.path.clone()
-        } else {
-            ask_local_folder(&s.title, &s.path, st).ok_or_else(|| {
-                if s.path.is_empty() {
-                    Error(tr!("I don't know which folder it goes in on this machine"))
-                } else {
-                    Error(tr!("{path} doesn't exist on this machine", path = short(&s.path)))
-                }
-            })?
-        };
-        if !s.path.is_empty()
-            && s.path != folder
-            && let Some(fix) = crate::paths::PathFixer::new(&[(&s.path, &folder)])
-        {
-            for t in &mut turns {
-                let json = serde_json::to_vec(&t.text)?;
-                t.text = serde_json::from_slice(&fix.fix(&json))?;
-            }
-        }
-        (folder, (turns, model))
+        ask_local_folder(&s.title, &s.path, st)
+    }
+    .ok_or_else(|| crate::ctx::Error(tr!("I don't know which folder it goes in on this machine")))?;
+    convert_at(s, target, &folder)
+}
+
+/// Conversion core: no prompts, discovery, publication or terminal commands.
+pub(crate) fn convert_at(s: &Session, target: &str, folder: &str) -> crate::ctx::Result<Session> {
+    let _loading = crate::ui::loading(&tr!("Syncing {title} to {tool}", title = s.title, tool = target));
+    if !Path::new(folder).is_dir() {
+        return Err(crate::ctx::Error(tr!(
+            "{path} doesn't exist on this machine",
+            path = short(folder)
+        )));
+    }
+    let source = harness::get(s.harness);
+    let (mut turns, model) = if let Some(meta) = &s.meta {
+        let fix = fixer_for(meta, folder);
+        source.stored_turns(s, fix.as_ref())?
+    } else {
+        source.local_turns(s)?
     };
     if turns.is_empty() {
-        return Err(Error(tr!("it has no text messages to convert")));
+        return Err(crate::ctx::Error(tr!("it has no text messages to convert")));
     }
-    if !Path::new(&folder).is_dir() {
-        return Err(Error(tr!(
-            "{path} doesn't exist on this machine",
-            path = short(&folder)
-        )));
+    if s.meta.is_none()
+        && !s.path.is_empty()
+        && s.path != folder
+        && let Some(fix) = crate::paths::PathFixer::new(&[(&s.path, folder)])
+    {
+        for t in &mut turns {
+            t.text = serde_json::from_slice(&fix.fix(&serde_json::to_vec(&t.text)?))?;
+        }
     }
     let turns = fit(turns, source.label(), model.as_deref());
     let title = tr!(
@@ -1336,7 +1329,23 @@ fn convert_one(s: &Session, target: &str, st: &mut State) -> crate::ctx::Result<
         title = COPY_SUFFIX.replace(&s.title, ""),
         source = source.label()
     );
-    harness::get(target).write(&turns, &folder, &title, model.as_deref())
+    harness::get(target).write(&turns, folder, &title, model.as_deref())
+}
+
+/// Native install used by interactive sync and structured actions. Adapters keep their backups.
+pub(crate) fn install_one(
+    r: &Session,
+    local: Option<&Session>,
+    folder: &str,
+    st: &mut State,
+) -> crate::ctx::Result<u64> {
+    let fix = fixer_for(r.meta(), folder);
+    let weight = harness::get(r.harness).install(r, local, folder, fix.as_ref())?;
+    st.base.insert(r.key(), (weight, r.weight));
+    if r.is_general() {
+        st.folders.insert(format!("session:{}", r.key()), folder.to_string());
+    }
+    Ok(weight)
 }
 
 pub fn cv(args: Args) {

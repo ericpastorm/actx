@@ -255,22 +255,9 @@ fn open(group: &Conversation, print: bool) {
         ui::warn(&tr!("The selected harness is not installed"));
         return;
     }
+    let (_, args) = crate::engine::launch_args(session);
     let mut command = crate::ctx::console_command(program);
-    command.current_dir(&session.path);
-    match tool {
-        "claude" => {
-            command.args(["--resume", &session.id]);
-        }
-        "codex" => {
-            command.args(["resume", &session.id]);
-        }
-        "opencode" => {
-            command.args(["-s", &session.id]);
-        }
-        _ => {
-            command.args(["--conversation", &session.id]);
-        }
-    }
+    command.current_dir(&session.path).args(args);
     if let Err(e) = command.status() {
         ui::fail(&e.to_string());
     }
