@@ -15,13 +15,16 @@ pub fn run(req: &Request) -> Response<Value> {
         Action::Settings => actions::response(
             "settings",
             Status::Ok,
-            json!({"root":store::configured_root(),"root_from_env":std::env::var("ACTX_ROOT").is_ok_and(|s|!s.is_empty()),"lang":i18n::code(),"harnesses":profile::current()["harnesses"],"retention":profile::current()["retention"],"tools":harness::CONVERTS.iter().map(|h|json!({"id":h,"installed":harness::get(h).installed(),"sync":harness::syncs(h)})).collect::<Vec<_>>()}),
+            json!({"root":store::configured_root(),"root_from_env":std::env::var("ACTX_ROOT").is_ok_and(|s|!s.is_empty()),"lang":i18n::code(),"harnesses":profile::current()["harnesses"],"retention":profile::current()["retention"],"automatic":crate::auto::status_data(),"tools":harness::CONVERTS.iter().map(|h|json!({"id":h,"installed":harness::get(h).installed(),"sync":harness::syncs(h)})).collect::<Vec<_>>()}),
             vec![],
         ),
         Action::Messages => messages(req),
         Action::Candidates => candidates(req),
         Action::Configure => configure(req),
         Action::CreateProject => create_project(req),
+        Action::Diagnostics => diagnostics(),
+        Action::Automatic => automatic(req),
+        Action::DeleteProject => delete_project(req),
         _ => actions::error("api", "invalid_action", "Unsupported action"),
     }
 }
@@ -227,5 +230,131 @@ fn create_project(req: &Request) -> Response<Value> {
             actions::response("create_project", Status::Ok, data, vec![])
         }
         Err(e) => actions::error("create_project", "project_create_failed", e.to_string()),
+    }
+}
+
+fn diagnostics() -> Response<Value> {
+    let _inspect = inspection::Guard::new();
+    let catalog = crate::catalog::Catalog::load();
+    let checks: Vec<_> = harness::CONVERTS
+        .iter()
+        .map(|h| json!({"tool":h,"installed":harness::get(h).installed(),"native_sync":harness::syncs(h)}))
+        .collect();
+    actions::response(
+        "diagnostics",
+        Status::Ok,
+        json!({"host":crate::ctx::ctx().host,"shared_folder":store::configured_root(),"shared_available":store::store_root(true).is_some(),"tools":checks,"automatic":crate::auto::status_data(),"conflicts":catalog.groups.iter().filter(|g|g.copies.iter().any(|c|matches!(c.state,"conflict"|"unknown"))).count(),"recovery_entries":state::backups().len()+crate::quarantine::recovery_entries().len()}),
+        inspection::errors()
+            .into_iter()
+            .map(|e| Diagnostic::new("inspection_failed", e))
+            .collect(),
+    )
+}
+fn automatic(req: &Request) -> Response<Value> {
+    let enabled = match req.choice.as_deref() {
+        Some("on") => true,
+        Some("off") => false,
+        _ => return actions::error("automatic", "selection_required", "Choose on or off"),
+    };
+    let token = crate::engine::digest(format!("{}:{enabled}", crate::auto::configuration_token()).as_bytes());
+    let mut data =
+        json!({"operations":[{"kind":"automatic","enabled":enabled}],"automatic":crate::auto::status_data()});
+    if let Some(r) = confirmation(req, "automatic", &mut data, token.clone()) {
+        return r;
+    }
+    let _local = match crate::engine::local_guard() {
+        Ok(g) => g,
+        Err(e) => return actions::error("automatic", "local_action_busy", e.to_string()),
+    };
+    if token != crate::engine::digest(format!("{}:{enabled}", crate::auto::configuration_token()).as_bytes()) {
+        return actions::error(
+            "automatic",
+            "settings_changed",
+            "Automatic sync configuration changed; preview again",
+        );
+    }
+    let errors = crate::auto::configure_service(enabled);
+    data["applied"] = json!(true);
+    data["automatic"] = crate::auto::status_data();
+    actions::response(
+        "automatic",
+        if errors.is_empty() {
+            Status::Ok
+        } else {
+            Status::Incomplete
+        },
+        data,
+        errors
+            .into_iter()
+            .map(|e| Diagnostic::new("automatic_setup_failed", e))
+            .collect(),
+    )
+}
+fn project_snapshot(
+    root: &Path,
+    name: &str,
+) -> crate::ctx::Result<(std::path::PathBuf, Vec<crate::session::Session>, String)> {
+    let path = store::find_project(root, name).ok_or_else(|| crate::ctx::Error("Project not found".into()))?;
+    let copies: Vec<_> = store::stored_sessions(root)
+        .into_iter()
+        .filter(|s| s.project.as_deref().is_some_and(|p| p.eq_ignore_ascii_case(name)))
+        .collect();
+    let revision = crate::engine::digest(&serde_json::to_vec(
+        &json!({"path":path,"project":std::fs::read(path.join(".project.json")).ok(),"copies":copies.iter().map(|s|actions::revision(s,Some(s))).collect::<Vec<_>>()}),
+    )?);
+    Ok((path, copies, revision))
+}
+fn delete_project(req: &Request) -> Response<Value> {
+    let Some(name) = req.project.as_deref().filter(|n| *n != store::GENERAL) else {
+        return actions::error("delete_project", "selection_required", "Choose a project");
+    };
+    let Some(root) = store::store_root(true) else {
+        return actions::error(
+            "delete_project",
+            "shared_folder_unavailable",
+            "Shared folder unavailable",
+        );
+    };
+    let snapshot = || {
+        let _inspect = inspection::Guard::new();
+        project_snapshot(&root, name)
+    };
+    let (path, copies, revision) = match snapshot() {
+        Ok(s) => s,
+        Err(e) => return actions::error("delete_project", "project_not_found", e.to_string()),
+    };
+    let mut data = json!({"operations":[{"kind":"delete_project","collection":name,"conversation_copies":copies.len(),"keeps_local_originals":true}]});
+    if let Some(r) = confirmation(req, "delete_project", &mut data, revision.clone()) {
+        return r;
+    }
+    let _local = match crate::engine::local_guard() {
+        Ok(g) => g,
+        Err(e) => return actions::error("delete_project", "local_action_busy", e.to_string()),
+    };
+    let _shared = match actions::acquire(&root) {
+        Ok(g) => g,
+        Err(d) => return Response::error("delete_project", d),
+    };
+    match snapshot() {
+        Ok((_, _, current)) if current == revision => {}
+        _ => return actions::error("delete_project", "preview_required", "Project changed; preview again"),
+    }
+    let result = (|| -> crate::ctx::Result<()> {
+        std::fs::remove_dir_all(&path)?;
+        let mut st = state::load();
+        for s in copies {
+            st.base.remove(&s.key());
+            st.content.remove(&s.key());
+            st.folders.remove(&format!("session:{}", s.key()));
+        }
+        st.folders.remove(&crate::project::key(name));
+        state::save(&mut st)
+    })();
+    match result {
+        Ok(()) => {
+            data["applied"] = json!(true);
+            actions::response("delete_project", Status::Ok, data, vec![])
+        }
+        Err(e) => actions::error("delete_project", "project_delete_failed", e.to_string()),
     }
 }

@@ -83,6 +83,37 @@ const HELP_ES: &str = "actx (agent context): mantiene tus conversaciones de Clau
 
 pub static ES: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| {
     HashMap::from([
+        ("Delete project", "Borrar proyecto"),
+        ("Recovery", "Recuperación"),
+        ("Compare histories", "Comparar historiales"),
+        ("Enable automatic sync", "Activar sincronización automática"),
+        ("Disable automatic sync", "Desactivar sincronización automática"),
+        ("Diagnostics", "Diagnóstico"),
+        (
+            "Review both versions; the alternative is preserved when resolving",
+            "Revisa ambas versiones; al resolver se conserva la alternativa",
+        ),
+        (
+            "This conversation contains a compacted history",
+            "Esta conversación contiene un historial compactado",
+        ),
+        (
+            "Preview shortened; the complete original is preserved",
+            "Vista previa recortada; se conserva el original completo",
+        ),
+        ("Merge preview", "Vista previa de la mezcla"),
+        (
+            "Choose a backup or quarantined conversation to review its recovery",
+            "Elige una copia de seguridad o conversación en cuarentena para revisar su recuperación",
+        ),
+        ("No recoverable conversations", "No hay conversaciones recuperables"),
+        ("Backup", "Copia de seguridad"),
+        ("Quarantine", "Cuarentena"),
+        ("Shared folder available", "Carpeta compartida disponible"),
+        ("Linked copy", "Copia vinculada"),
+        ("Timer running", "Temporizador activo"),
+        ("Timer stopped", "Temporizador detenido"),
+        ("Saved copies", "Copias guardadas"),
         ("Keep local", "Conservar local"),
         ("Keep shared", "Conservar compartida"),
         ("Merge both", "Mezclar ambas"),

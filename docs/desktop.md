@@ -39,8 +39,16 @@ use system dialogs. Optional GUI dependencies are not needed to build or run the
    **Delete** first show what will happen. Choose a work folder when the destination is unresolved.
    Delete removes shared copies, preserving native originals and projects. Conversion is local,
    reuses identified existing copies and does not implicitly publish them.
-5. Results show failures and remaining operations. Conflicts and active agents remain pending;
-   resolve conflicts with the CLI for this first preview. The GUI does not silently choose a winner.
+5. **Compare histories** shows local/shared or selected linked histories, omitted-message counts
+   and the native merge preview. Choose a resolution and review **Apply**; the alternative stays
+   recoverable. Independent edits are never silently replaced. A Codex compaction with an intact
+   target can repair the conversion while retaining the old native conversation.
+6. **Recovery** lists backups and quarantined conversations, with preview and confirmation.
+   Restoring a backup protects the current history; quarantine recovery does not overwrite it.
+7. A selected project's **Delete project** reviews all shared copies and keeps local originals.
+   **Settings** shows automatic-sync components and lets you enable or disable them through a
+   reviewed operation. **Diagnostics** shows storage availability, installed tools and recent
+   automatic-sync logs. Partial OS setup failures are reported with actual component state.
 
 Discovery, history reads and actions run in isolated API subprocesses, outside the UI thread.
 A spinner stays active while they work. Confirmations include current revisions and are checked
@@ -62,6 +70,4 @@ navigation were checked on Linux in Spanish and Chinese using isolated fixture d
 services were checked with simulated machines. Windows/macOS native windows, dialogs, terminal
 launching and accessibility still need hands-on review. Chinese welcomes native-speaker review.
 
-The desktop does not yet expose conflict resolution, backup/quarantine restoration, automatic-sync
-setup or project deletion. These remain in the CLI. Frontend sync excludes retention and binary
-publication. Tray icons and notifications are outside this version. See [JSON API](json-api.md).
+Frontend sync excludes retention and binary publication. Tray icons and notifications are outside this version. See [JSON API](json-api.md).

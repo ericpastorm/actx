@@ -195,6 +195,53 @@ fn conflicts_are_compared_resolved_and_recovered_with_revision_checks() {
 }
 
 #[test]
+fn desktop_project_deletion_and_automatic_previews_are_reviewed() {
+    let w = World::new();
+    let m = w.machine("desktop");
+    let folder = m.home.join("project");
+    std::fs::create_dir_all(&folder).unwrap();
+    let create = json!({"action":"create_project","project":"gui","folder":folder});
+    let p = api(&m, create.clone());
+    assert_eq!(api(&m, confirmed(&create, &p))["status"], "ok");
+    let first = claude_session(
+        &m,
+        &folder,
+        &[("user", "first"), ("assistant", "first reply")],
+        Some("First"),
+    );
+    let add = |file: &std::path::Path| json!({"action":"add","project":"gui","ids":[format!("claude:{}",file.file_stem().unwrap().to_string_lossy())]});
+    let req = add(&first);
+    let p = api(&m, req.clone());
+    assert_eq!(api(&m, confirm(&req, &p))["status"], "ok");
+    let delete = json!({"action":"delete_project","project":"gui"});
+    let stale = api(&m, delete.clone());
+    assert_eq!(stale["status"], "ok");
+    let second = claude_session(
+        &m,
+        &folder,
+        &[("user", "second"), ("assistant", "second reply")],
+        Some("Second"),
+    );
+    let req = add(&second);
+    let p = api(&m, req.clone());
+    assert_eq!(api(&m, confirm(&req, &p))["status"], "ok");
+    assert_eq!(api(&m, confirmed(&delete, &stale))["status"], "decision_required");
+    let p = api(&m, delete.clone());
+    let r = api(&m, confirmed(&delete, &p));
+    assert_eq!(r["status"], "ok", "{r}");
+    assert!(!m.store.join("gui").exists());
+    assert!(first.exists() && second.exists() && folder.exists());
+    let auto = json!({"action":"automatic","choice":"on"});
+    let p = api(&m, auto.clone());
+    assert_eq!(p["status"], "ok", "{p}");
+    assert!(!m.home.join(".config/systemd/user/actx-sync.service").exists());
+    let mut cancelled = confirmed(&auto, &p);
+    cancelled["cancel"] = json!(true);
+    assert_eq!(api(&m, cancelled)["status"], "cancelled");
+    assert!(!m.home.join(".config/systemd/user/actx-sync.service").exists());
+}
+
+#[test]
 fn services_sync_two_machines_and_convert_without_duplicates() {
     let w = World::new();
     let a = w.machine("desk");

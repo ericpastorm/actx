@@ -37,6 +37,9 @@ pub enum Action {
     Resolve,
     Recoveries,
     Restore,
+    Diagnostics,
+    Automatic,
+    DeleteProject,
 }
 
 #[derive(Clone, Deserialize)]
@@ -96,6 +99,9 @@ impl Request {
             Action::Resolve => "resolve",
             Action::Recoveries => "recoveries",
             Action::Restore => "restore",
+            Action::Diagnostics => "diagnostics",
+            Action::Automatic => "automatic",
+            Action::DeleteProject => "delete_project",
         }
     }
 }
@@ -367,7 +373,14 @@ pub fn run(req: Request) -> Response<Value> {
         Action::Convert => return crate::engine::convert(&req),
         Action::Resume => return crate::engine::resume(&req),
         Action::Compare | Action::Resolve | Action::Recoveries | Action::Restore => return crate::recovery::run(&req),
-        Action::Settings | Action::Configure | Action::CreateProject | Action::Messages | Action::Candidates => {
+        Action::Settings
+        | Action::Configure
+        | Action::CreateProject
+        | Action::Messages
+        | Action::Candidates
+        | Action::Diagnostics
+        | Action::Automatic
+        | Action::DeleteProject => {
             return crate::desktop_api::run(&req);
         }
         _ => {}

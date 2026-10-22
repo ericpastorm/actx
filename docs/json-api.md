@@ -206,3 +206,8 @@ preview are read-only. These services back `actx compare`, `actx resolve`, `actx
 `actx restore --backup <id>`; `--json` prints a plan, while the API applies confirmed requests.
 Opening a selected harness synchronizes only its native source and selected linked target;
 conflicts in other harnesses remain visible and preserved without blocking an otherwise safe copy.
+
+Desktop administration adds read-only `diagnostics` and reviewed `automatic` (`choice`: `on`/`off`)
+and `delete_project` (`project`). Automatic-sync changes recheck the hook/timer configuration;
+OS failures report `incomplete` with actual component state. Project deletion checks the complete
+shared-copy selection again under the store lock and preserves all local histories.

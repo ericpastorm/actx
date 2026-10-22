@@ -619,6 +619,63 @@ pub fn parts() -> Vec<(String, bool)> {
     out
 }
 
+pub(crate) fn configuration_token() -> String {
+    let mut paths = vec![
+        claude_settings(),
+        codex_hooks(),
+        timer_file(),
+        ctx().config_file.clone(),
+    ];
+    if cfg!(target_os = "linux") {
+        paths.push(systemd_dir().join(format!("{UNIT}.service")));
+    }
+    let mut bytes = ctx().self_path.to_string_lossy().as_bytes().to_vec();
+    for path in paths {
+        bytes.extend_from_slice(path.to_string_lossy().as_bytes());
+        bytes.extend_from_slice(&std::fs::read(path).unwrap_or_default());
+    }
+    crate::engine::digest(&bytes)
+}
+pub(crate) fn status_data() -> Value {
+    let parts = parts();
+    let timer_active = if cfg!(target_os = "linux") {
+        crate::ctx::quiet("systemctl")
+            .args(["--user", "is-active", "--quiet", "actx-sync.timer"])
+            .status()
+            .is_ok_and(|s| s.success())
+    } else {
+        timer_installed()
+    };
+    json!({"enabled":parts.iter().any(|(_,on)|*on),"timer_active":timer_active,"parts":parts.into_iter().map(|(label,enabled)|json!({"label":label,"enabled":enabled})).collect::<Vec<_>>(),"recent_runs":last_log(8)})
+}
+/// Does not print or prompt. Partial OS failures are returned to the frontend with actual state.
+pub(crate) fn configure_service(enabled: bool) -> Vec<String> {
+    let mut errors = Vec::new();
+    if enabled && crate::store::configured_root().is_none() {
+        return vec!["Configure a shared folder before enabling automatic sync".into()];
+    }
+    for (tool, _, file) in tools() {
+        let result = if enabled {
+            add_hooks(&file, tool)
+        } else {
+            remove_hooks(&file, tool)
+        };
+        if let Err(e) = result {
+            errors.push(e.to_string());
+        }
+    }
+    if enabled {
+        match add_timer() {
+            Ok(true) => {}
+            Ok(false) => errors.push("The operating system could not start the sync timer".into()),
+            Err(e) => errors.push(e.to_string()),
+        }
+    } else if timer_installed() && !remove_timer() {
+        errors.push("The operating system could not remove the sync timer".into());
+    }
+    errors
+}
+
 /// The last lines of the log.
 pub fn last_log(n: usize) -> Vec<String> {
     let text = std::fs::read_to_string(log_file()).unwrap_or_default();

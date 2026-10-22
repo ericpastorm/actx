@@ -20,6 +20,9 @@ enum Kind {
     Apply,
     RootFolder,
     WorkFolder,
+    Comparison,
+    Recoveries,
+    Diagnostics,
 }
 struct Job {
     kind: Kind,
@@ -60,6 +63,10 @@ struct Desktop {
     pending: Option<Pending>,
     result: Option<Value>,
     notice: String,
+    comparison: Option<Value>,
+    comparison_request: Value,
+    recoveries: Option<Value>,
+    diagnostic_data: Option<Value>,
 }
 fn text(v: &Value, k: &str) -> String {
     v[k].as_str().unwrap_or_default().to_string()
@@ -123,6 +130,10 @@ impl Desktop {
             pending: None,
             result: None,
             notice: String::new(),
+            comparison: None,
+            comparison_request: Value::Null,
+            recoveries: None,
+            diagnostic_data: None,
         };
         app.enqueue(Kind::Settings, json!({"action":"settings"}));
         app.refresh();
@@ -242,11 +253,43 @@ impl Desktop {
                     let page = self.detail_view;
                     self.select(group);
                     self.detail_view = page;
+                } else if self.messages.is_null()
+                    && let Some(group) = self.group()
+                {
+                    if !array(&group, "copies").iter().any(|c| c["id"] == self.source) {
+                        let page = self.detail_view;
+                        self.select(&group);
+                        self.detail_view = page;
+                    } else {
+                        self.enqueue(Kind::Messages, json!({"action":"messages","ids":[self.source]}));
+                    }
                 }
             }
             Kind::Messages => {
                 if done.request["ids"][0] == self.source {
                     self.messages = response;
+                }
+            }
+            Kind::Comparison => {
+                if response["status"] == "ok" {
+                    self.comparison = Some(response["data"].clone());
+                    self.comparison_request = done.request;
+                } else {
+                    self.result = Some(response);
+                }
+            }
+            Kind::Recoveries => {
+                if response["status"] == "ok" {
+                    self.recoveries = Some(response["data"].clone());
+                } else {
+                    self.result = Some(response);
+                }
+            }
+            Kind::Diagnostics => {
+                if response["status"] == "ok" {
+                    self.diagnostic_data = Some(response["data"].clone());
+                } else {
+                    self.result = Some(response);
                 }
             }
             Kind::Preview => {
@@ -274,8 +317,19 @@ impl Desktop {
                     self.all = false;
                     self.scope = self.project.clone();
                 }
+                if response["status"] == "ok" && done.request["action"] == "resolve" {
+                    self.comparison = None;
+                }
+                if response["status"] == "ok" && done.request["action"] == "restore" {
+                    self.recoveries = None;
+                }
+                if response["status"] == "ok" && done.request["action"] == "delete_project" {
+                    self.scope = "*".into();
+                    self.project = crate::store::GENERAL.into();
+                }
+                self.messages = Value::Null;
                 self.result = Some(response);
-                if done.request["action"] == "configure" {
+                if done.request["action"] == "configure" || done.request["action"] == "automatic" {
                     self.show_settings = false;
                     self.enqueue(Kind::Settings, json!({"action":"settings"}));
                 }
@@ -297,7 +351,8 @@ impl Desktop {
         let copies = array(group, "copies");
         self.source = copies
             .iter()
-            .find(|c| c["local"].is_object())
+            .find(|c| c["id"] == self.selected && c["local"].is_object())
+            .or_else(|| copies.iter().find(|c| c["local"].is_object()))
             .or(copies.first())
             .map(|c| text(c, "id"))
             .unwrap_or_default();
@@ -387,6 +442,23 @@ impl Desktop {
         {
             self.new_project = true;
             self.folder.clear();
+        }
+        if self.scope != "*"
+            && self.scope != crate::store::GENERAL
+            && ui
+                .add_enabled(
+                    !self.busy(),
+                    egui::Button::new(RichText::new(tr!("Delete project")).color(theme::RED)),
+                )
+                .clicked()
+        {
+            self.enqueue(Kind::Preview, json!({"action":"delete_project","project":self.scope}));
+        }
+        if ui
+            .add_enabled(!self.busy(), egui::Button::new(tr!("Recovery")))
+            .clicked()
+        {
+            self.enqueue(Kind::Recoveries, json!({"action":"recoveries"}));
         }
         let old = self.all;
         let add_clicked = ui
@@ -588,6 +660,26 @@ impl Desktop {
                     }
                 });
         });
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .add_enabled(!self.busy(), egui::Button::new(tr!("Compare histories")))
+                .clicked()
+            {
+                let copy = copies.iter().find(|c| c["id"] == self.source);
+                let mut req = json!({"action":"compare","ids":[self.source]});
+                if copy.is_some_and(|c| !c["shared"].is_object()) && self.source != self.selected {
+                    req["ids"] = json!([self.selected]);
+                    req["target"] = copy.unwrap()["harness"].clone();
+                }
+                self.enqueue(Kind::Comparison, req);
+            }
+            if ui
+                .add_enabled(!self.busy(), egui::Button::new(tr!("Recovery")))
+                .clicked()
+            {
+                self.enqueue(Kind::Recoveries, json!({"action":"recoveries","ids":[self.selected]}));
+            }
+        });
         self.folder_field(ui, false);
         ui.add_enabled_ui(!self.busy() && self.pending.is_none(), |ui| {
             ui.horizontal_wrapped(|ui| {
@@ -675,6 +767,8 @@ impl Desktop {
         egui::Window::new(tr!("Settings"))
             .open(&mut open)
             .default_width(550.)
+            .max_height((ctx.content_rect().height() - 80.).max(240.))
+            .vscroll(true)
             .show(ctx, |ui| {
                 if self.settings["root_from_env"] == true {
                     ui.label(tr!("ACTX_ROOT overrides the shared folder in settings"));
@@ -719,6 +813,42 @@ impl Desktop {
                         }
                     }
                 }
+                ui.separator();
+                ui.strong(tr!("Automatic sync"));
+                ui.label(if self.settings["automatic"]["timer_active"] == true {
+                    tr!("Timer running")
+                } else {
+                    tr!("Timer stopped")
+                });
+                for part in array(&self.settings["automatic"], "parts") {
+                    ui.label(format!(
+                        "{} {}",
+                        if part["enabled"] == true { "✓" } else { "·" },
+                        text(&part, "label")
+                    ));
+                }
+                ui.horizontal_wrapped(|ui| {
+                    for (choice, label) in [
+                        ("on", tr!("Enable automatic sync")),
+                        ("off", tr!("Disable automatic sync")),
+                    ] {
+                        if ui.add_enabled(!self.busy(), egui::Button::new(label)).clicked() {
+                            self.enqueue(Kind::Preview, json!({"action":"automatic","choice":choice}));
+                        }
+                    }
+                    if ui
+                        .add_enabled(!self.busy(), egui::Button::new(tr!("Diagnostics")))
+                        .clicked()
+                    {
+                        self.enqueue(Kind::Diagnostics, json!({"action":"diagnostics"}));
+                    }
+                    if ui
+                        .add_enabled(!self.busy(), egui::Button::new(tr!("Recovery")))
+                        .clicked()
+                    {
+                        self.enqueue(Kind::Recoveries, json!({"action":"recoveries"}));
+                    }
+                });
                 ui.small(tr!("Local originals are always kept."));
                 if self.root.is_empty() && ui.button(tr!("Use Convert without shared storage")).clicked() {
                     self.show_settings = false;
@@ -783,7 +913,7 @@ impl Desktop {
             ui.set_width((ctx.content_rect().width() - 80.).clamp(280., 600.));
             ui.heading(tr!("Confirm changes"));
             ui.label(tr!("Choose the destination and review changes before applying"));
-            if pending.request["action"] == "delete" {
+            if pending.request["action"] == "delete" || pending.request["action"] == "delete_project" {
                 ui.colored_label(theme::WARNING, tr!("Only saved copies are deleted"));
             }
             egui::ScrollArea::vertical().max_height(380.).show(ui, |ui| {
@@ -813,6 +943,213 @@ impl Desktop {
             self.pending = Some(pending);
         } else {
             self.notice = tr!("No changes were made");
+        }
+    }
+
+    fn comparison_window(&mut self, ctx: &egui::Context) {
+        let Some(data) = self.comparison.clone() else { return };
+        let mut open = true;
+        egui::Window::new(tr!("Compare histories"))
+            .open(&mut open)
+            .default_width(840.)
+            .max_height((ctx.content_rect().height() - 80.).max(240.))
+            .vscroll(true)
+            .show(ctx, |ui| {
+                ui.label(tr!("Review both versions; the alternative is preserved when resolving"));
+                if data["comparison"]["compacted"] == true {
+                    ui.colored_label(theme::WARNING, tr!("This conversation contains a compacted history"));
+                }
+                let render = |ui: &mut egui::Ui, side: &str, label: String| {
+                    let history = &data["comparison"][side];
+                    ui.strong(label);
+                    ui.small(format!("{} · {}", text(history, "harness"), text(history, "host")));
+                    if history["omitted_messages"].as_u64().unwrap_or(0) > 0 {
+                        ui.weak(tr!("Preview shortened; the complete original is preserved"));
+                    }
+                    egui::ScrollArea::vertical()
+                        .id_salt(("comparison", side))
+                        .max_height(320.)
+                        .show(ui, |ui| {
+                            for message in array(history, "messages") {
+                                ui.strong(if message["role"] == "user" {
+                                    tr!("You")
+                                } else {
+                                    tr!("Agent")
+                                });
+                                ui.label(text(&message, "text"));
+                                if message["truncated"] == true {
+                                    ui.weak(tr!("Preview shortened; the complete original is preserved"));
+                                }
+                                ui.separator();
+                            }
+                        });
+                };
+                if ui.available_width() > 650. {
+                    ui.columns(2, |columns| {
+                        render(&mut columns[0], "left", tr!("Local"));
+                        render(
+                            &mut columns[1],
+                            "right",
+                            if self.comparison_request["target"].is_string() {
+                                tr!("Linked copy")
+                            } else {
+                                tr!("Shared")
+                            },
+                        );
+                    });
+                } else {
+                    render(ui, "left", tr!("Local"));
+                    render(
+                        ui,
+                        "right",
+                        if self.comparison_request["target"].is_string() {
+                            tr!("Linked copy")
+                        } else {
+                            tr!("Shared")
+                        },
+                    );
+                }
+                if let Some(text) = data["merge_preview"]["text"].as_str() {
+                    ui.collapsing(tr!("Merge preview"), |ui| {
+                        egui::ScrollArea::vertical()
+                            .id_salt("merge-preview")
+                            .max_height(200.)
+                            .show(ui, |ui| {
+                                ui.label(text);
+                            });
+                    });
+                }
+                ui.horizontal_wrapped(|ui| {
+                    for choice in array(&data, "choices") {
+                        let Some(choice) = choice.as_str() else { continue };
+                        if ui
+                            .add_enabled(!self.busy(), egui::Button::new(crate::recovery::choice_label(choice)))
+                            .clicked()
+                        {
+                            if choice == "defer" {
+                                self.comparison = None;
+                            } else {
+                                let mut req = self.comparison_request.clone();
+                                req["action"] = json!("resolve");
+                                req["choice"] = json!(choice);
+                                self.enqueue(Kind::Preview, req);
+                            }
+                        }
+                    }
+                });
+            });
+        if !open {
+            self.comparison = None;
+        }
+    }
+    fn recovery_window(&mut self, ctx: &egui::Context) {
+        let Some(data) = self.recoveries.clone() else { return };
+        let mut open = true;
+        egui::Window::new(tr!("Recovery"))
+            .open(&mut open)
+            .default_width(680.)
+            .max_height((ctx.content_rect().height() - 80.).max(240.))
+            .vscroll(true)
+            .show(ctx, |ui| {
+                ui.label(tr!(
+                    "Choose a backup or quarantined conversation to review its recovery"
+                ));
+                let entries = array(&data, "entries");
+                if entries.is_empty() {
+                    ui.weak(tr!("No recoverable conversations"));
+                }
+                egui::ScrollArea::vertical()
+                    .id_salt("recoveries")
+                    .max_height(480.)
+                    .show(ui, |ui| {
+                        for entry in entries {
+                            let kind = if entry["kind"] == "quarantine" {
+                                tr!("Quarantine")
+                            } else {
+                                tr!("Backup")
+                            };
+                            let title = text(&entry, "title");
+                            let title = if title.is_empty() {
+                                text(&entry, "session_id")
+                            } else {
+                                title
+                            };
+                            let label = format!(
+                                "{kind} · {title}\n{} · {}",
+                                crate::ui::ago(entry["at"].as_f64().unwrap_or_default()),
+                                text(&entry, "folder")
+                            );
+                            if ui
+                                .add_enabled(
+                                    !self.busy(),
+                                    egui::Button::new(label)
+                                        .wrap()
+                                        .min_size(egui::vec2(ui.available_width(), 52.)),
+                                )
+                                .clicked()
+                            {
+                                self.enqueue(Kind::Preview, json!({"action":"restore","backup":entry["id"]}));
+                            }
+                        }
+                    });
+            });
+        if !open {
+            self.recoveries = None;
+        }
+    }
+    fn diagnostics_window(&mut self, ctx: &egui::Context) {
+        let Some(data) = self.diagnostic_data.clone() else {
+            return;
+        };
+        let mut open = true;
+        egui::Window::new(tr!("Diagnostics"))
+            .open(&mut open)
+            .default_width(620.)
+            .show(ctx, |ui| {
+                ui.label(format!(
+                    "{} · {}",
+                    text(&data, "host"),
+                    if data["shared_available"] == true {
+                        tr!("Shared folder available")
+                    } else {
+                        tr!("Shared folder unavailable. Check its location or connection.")
+                    }
+                ));
+                for tool in array(&data, "tools") {
+                    ui.label(format!(
+                        "{} {}",
+                        if tool["installed"] == true { "✓" } else { "·" },
+                        text(&tool, "tool")
+                    ));
+                }
+                ui.separator();
+                ui.strong(tr!("Automatic sync"));
+                for part in array(&data["automatic"], "parts") {
+                    ui.label(format!(
+                        "{} {}",
+                        if part["enabled"] == true { "✓" } else { "·" },
+                        text(&part, "label")
+                    ));
+                }
+                egui::ScrollArea::vertical()
+                    .id_salt("auto-log")
+                    .max_height(300.)
+                    .show(ui, |ui| {
+                        for line in array(&data["automatic"], "recent_runs") {
+                            if let Some(text) = line.as_str() {
+                                ui.small(text);
+                            }
+                        }
+                    });
+                if ui
+                    .add_enabled(!self.busy(), egui::Button::new(tr!("Refresh")))
+                    .clicked()
+                {
+                    self.enqueue(Kind::Diagnostics, json!({"action":"diagnostics"}));
+                }
+            });
+        if !open {
+            self.diagnostic_data = None;
         }
     }
 }
@@ -857,6 +1194,17 @@ fn operations(ui: &mut egui::Ui, data: &Value) {
             "delete" => tr!("Delete"),
             "configure" => tr!("Save settings"),
             "create_project" => tr!("Create project"),
+            "delete_project" => tr!("Delete project"),
+            "restore" => tr!("Recovery"),
+            "resolve" => crate::recovery::choice_label(op["resolution"].as_str().unwrap_or_default()),
+            "automatic" => {
+                if op["enabled"] == true {
+                    tr!("Enable automatic sync")
+                } else {
+                    tr!("Disable automatic sync")
+                }
+            }
+            "linked_refresh" => tr!("Repair linked copy"),
             "convert" => tr!("Convert"),
             "reuse" => tr!("Using existing copy"),
             "resume" => tr!("Resume"),
@@ -902,6 +1250,9 @@ fn operations(ui: &mut egui::Ui, data: &Value) {
                     .collect::<Vec<_>>()
                     .join(", ")
             ));
+        }
+        if let Some(n) = op["conversation_copies"].as_u64() {
+            ui.label(format!("{}: {n}", tr!("Saved copies")));
         }
         for req in array(&op, "requirements") {
             ui.colored_label(theme::WARNING, requirement(req.as_str().unwrap_or_default()));
@@ -1020,6 +1371,9 @@ impl eframe::App for Desktop {
         }
         self.settings_window(&ctx);
         self.new_project_window(&ctx);
+        self.comparison_window(&ctx);
+        self.recovery_window(&ctx);
+        self.diagnostics_window(&ctx);
         self.confirmation(&ctx);
         if self.result.is_some() {
             let mut open = true;
