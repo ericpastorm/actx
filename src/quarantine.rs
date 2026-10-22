@@ -82,7 +82,7 @@ fn entries() -> Vec<(PathBuf, Entry)> {
 fn lock() -> Result<std::fs::File> {
     std::fs::create_dir_all(&ctx().state_dir)?;
     let f = std::fs::File::create(ctx().state_dir.join("clean.lock"))?;
-    f.lock()?;
+    f.try_lock().map_err(|e| Error(e.to_string()))?;
     Ok(f)
 }
 fn digest(mut source: impl Read) -> Result<u64> {
@@ -143,9 +143,18 @@ fn unchanged(c: &Candidate) -> Result<()> {
     }
     Ok(())
 }
-pub fn apply(selected: &[&Candidate]) -> Result<()> {
+pub fn apply(selected: &[&Candidate]) -> Result<Vec<crate::actions::Outcome>> {
     let _loading = crate::ui::loading(&tr!("Reviewing local conversations"));
     let _lock = lock()?;
+    let _shared = if let Some(root) = store::configured_root() {
+        if store::store_root(true).is_none() {
+            return Err(Error("Shared folder unavailable; cleanup deferred".into()));
+        }
+        Some(crate::actions::acquire(&root).map_err(|d| Error(d.message))?)
+    } else {
+        None
+    };
+    let mut results = Vec::new();
     let mut count = 0;
     // One scan for the whole batch; each candidate is then rechecked against the shared
     // folder, links and its parent chain without rescanning every local session.
@@ -154,6 +163,9 @@ pub fn apply(selected: &[&Candidate]) -> Result<()> {
     let protected = clean::protected(&sessions);
     let label = tr!("Moving conversations to quarantine");
     for (index, c) in selected.iter().enumerate() {
+        if crate::work::cancelled() {
+            break;
+        }
         ui::progress(index + 1, selected.len(), &label);
         let result = (|| -> Result<()> {
             unchanged(c)?;
@@ -237,15 +249,22 @@ pub fn apply(selected: &[&Candidate]) -> Result<()> {
             ui::ok(&tr!("Quarantined: {title}", title = c.session.title));
             Ok(())
         })();
-        if let Err(error) = result {
+        let message = result.as_ref().err().map(ToString::to_string);
+        results.push(crate::actions::Outcome {
+            session_id: c.session.key(),
+            success: result.is_ok(),
+            message: message.clone(),
+        });
+        if let Some(error) = message {
             ui::warn(&format!("{}: {error}", c.session.title));
         }
+        crate::gui_index::invalidate();
     }
     ui::say(&tr!(
         "{n} local conversations quarantined. Recover with actx clean restore. Shared copies were kept.",
         n = count
     ));
-    Ok(())
+    Ok(results)
 }
 fn has_codex_db() -> bool {
     std::fs::read_dir(&ctx().codex_home)

@@ -630,3 +630,66 @@ fn shared_adoption_rules_follow_the_other_computers_bound_project_folder() {
             .any(|c| c["title"] == "Clone child")
     );
 }
+
+#[test]
+fn cleanup_api_reviews_only_selected_unmanaged_histories_and_restores_them() {
+    let w = World::new();
+    let m = w.machine("cleanup-gui");
+    let folder = m.home.join("notes");
+    std::fs::create_dir_all(&folder).unwrap();
+    let make = |title| {
+        let file = claude_session(&m, &folder, &[("user", "ping"), ("assistant", "pong")], Some(title));
+        std::fs::File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(15 * 86400))
+            .unwrap();
+        file
+    };
+    let first = make("Disposable");
+    let other = make("Not selected");
+    let shared = make("Maintained");
+    let id = |p: &std::path::Path| format!("claude:{}", p.file_stem().unwrap().to_string_lossy());
+    let add = json!({"action":"add","ids":[id(&shared)],"general":true});
+    let p = api(&m, add.clone());
+    assert_eq!(api(&m, confirm(&add, &p))["status"], "ok");
+    let before = std::fs::read(&first).unwrap();
+    let options = json!({"harnesses":["claude"]});
+    let scan = api(&m, json!({"action":"cleanup_scan","cleanup":options}));
+    assert_eq!(scan["status"], "ok", "{scan}");
+    assert_eq!(scan["data"]["candidates"].as_array().unwrap().len(), 2, "{scan}");
+    assert!(!m.home.join(".local/state/actx/quarantine").exists());
+    let clean = json!({"action":"cleanup","cleanup":options,"ids":[id(&first)]});
+    let p = api(&m, clean.clone());
+    assert_eq!(p["status"], "ok", "{p}");
+    let mut cancelled = confirmed(&clean, &p);
+    cancelled["cancel"] = json!(true);
+    assert_eq!(api(&m, cancelled)["status"], "cancelled");
+    assert_eq!(std::fs::read(&first).unwrap(), before);
+    let result = api(&m, confirmed(&clean, &p));
+    assert_eq!(result["status"], "ok", "{result}");
+    assert!(!first.exists());
+    assert!(other.exists() && shared.exists());
+    let recovery = api(&m, json!({"action":"recoveries"}));
+    let entry = recovery["data"]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["kind"] == "quarantine")
+        .unwrap();
+    let restore = json!({"action":"restore","backup":entry["id"]});
+    let p = api(&m, restore.clone());
+    let r = api(&m, confirmed(&restore, &p));
+    assert_eq!(r["status"], "ok", "{r}");
+    assert_eq!(std::fs::read(&first).unwrap(), before);
+    let stale = api(&m, clean.clone());
+    std::fs::write(
+        &first,
+        String::from_utf8(before.clone()).unwrap().replace("ping", "test"),
+    )
+    .unwrap();
+    let r = api(&m, confirmed(&clean, &stale));
+    assert_ne!(r["status"], "ok");
+    assert!(first.exists());
+}

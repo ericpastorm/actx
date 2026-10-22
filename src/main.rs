@@ -11,6 +11,7 @@ mod browser;
 mod catalog;
 mod claude;
 mod clean;
+mod cleanup_api;
 mod codex;
 mod commands;
 mod ctx;
@@ -40,6 +41,7 @@ mod store;
 mod sync_plan;
 mod turns;
 mod ui;
+mod work;
 
 use clap::{Arg, ArgAction, Command};
 

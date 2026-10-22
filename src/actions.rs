@@ -41,6 +41,8 @@ pub enum Action {
     Automatic,
     DeleteProject,
     Adoption,
+    CleanupScan,
+    Cleanup,
 }
 
 #[derive(Clone, Deserialize)]
@@ -59,6 +61,7 @@ pub struct Request {
     pub choice: Option<String>,
     pub backup: Option<String>,
     pub adoption: Option<crate::adoption::Rule>,
+    pub cleanup: Option<crate::cleanup_api::Settings>,
     pub root: Option<String>,
     pub lang: Option<String>,
     pub harnesses: Option<Vec<String>>,
@@ -83,7 +86,7 @@ impl Request {
             ..Default::default()
         }
     }
-    fn command(&self) -> &'static str {
+    pub(crate) fn command(&self) -> &'static str {
         match self.action {
             Action::List => "ls",
             Action::Preview => "sync_preview",
@@ -105,6 +108,8 @@ impl Request {
             Action::Automatic => "automatic",
             Action::DeleteProject => "delete_project",
             Action::Adoption => "adoption",
+            Action::CleanupScan => "cleanup_scan",
+            Action::Cleanup => "cleanup",
         }
     }
 }
@@ -390,6 +395,7 @@ fn execute(req: Request) -> Response<Value> {
         Action::Sync => return crate::engine::sync(&req),
         Action::Convert => return crate::engine::convert(&req),
         Action::Resume => return crate::engine::resume(&req),
+        Action::Cleanup | Action::CleanupScan => return crate::cleanup_api::run(&req),
         Action::Adoption => return crate::adoption::configure(&req),
         Action::Compare | Action::Resolve | Action::Recoveries | Action::Restore => return crate::recovery::run(&req),
         Action::Settings

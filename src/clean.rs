@@ -56,8 +56,8 @@ pub struct Candidate {
     pub session: Session,
     pub reasons: Vec<String>,
     pub(crate) fingerprint: String,
-    preview: String,
-    bytes: u64,
+    pub(crate) preview: String,
+    pub(crate) bytes: u64,
 }
 
 pub(crate) fn parent_key(s: &Session) -> Option<String> {
@@ -349,7 +349,7 @@ pub(crate) fn locals(tools: &[&str]) -> Vec<Session> {
         })
         .collect()
 }
-fn scan(options: &Options) -> Result<Vec<Candidate>> {
+pub(crate) fn scan(options: &Options) -> Result<Vec<Candidate>> {
     inspection::enable();
     let _guard = Inspection;
     let sessions = locals(&options.harnesses);
@@ -364,6 +364,7 @@ fn scan(options: &Options) -> Result<Vec<Candidate>> {
     let total = sessions.len();
     let label = tr!("Analyzing conversations");
     for (index, s) in sessions.iter().enumerate() {
+        crate::work::check()?;
         ui::progress(index + 1, total, &label);
         if s.updated <= 0.0
             || s.updated > cutoff
@@ -402,6 +403,7 @@ fn scan(options: &Options) -> Result<Vec<Candidate>> {
     }
     let mut candidates = Vec::new();
     for (session, data, observed_revision) in inspected {
+        crate::work::check()?;
         let mut reasons = Vec::new();
         if options.rules.contains("agents") {
             if data.native_agent {
@@ -474,6 +476,9 @@ fn scan(options: &Options) -> Result<Vec<Candidate>> {
     ui::say(&tr!("Protected or recent conversations skipped: {n}", n = skipped));
     for error in inspection::errors() {
         ui::warn(&error);
+    }
+    if !inspection::errors().is_empty() {
+        return Err(Error(inspection::errors().join("; ")));
     }
     Ok(candidates)
 }

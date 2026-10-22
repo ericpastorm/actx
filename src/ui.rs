@@ -146,6 +146,7 @@ fn clear_progress() {
 
 /// A one-line spinner for slow loops. Only in a real terminal, never in scripts or auto runs.
 pub fn progress(index: usize, total: usize, label: &str) {
+    crate::work::progress(index, total, label);
     if !progress_allowed() {
         return;
     }

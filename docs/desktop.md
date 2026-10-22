@@ -50,7 +50,11 @@ use system dialogs. Optional GUI dependencies are not needed to build or run the
    reviewed operation. **Diagnostics** shows storage availability, installed tools and recent
    automatic-sync logs. Partial OS setup failures are reported with actual component state.
 
-8. **Automatic additions** on a selected project edits its opt-in shared rule, harnesses, subfolders,
+8. **Clean local conversations** opens criteria and an explicit candidate checklist. Analyze first,
+   review reasons/previews, select entries and confirm moving them to recoverable quarantine.
+   Progress and cancellation are available; a running move finishes the current conversation before
+   stopping. **Recovery** restores completed moves. Nothing is selected by default.
+9. **Automatic additions** on a selected project edits its opt-in shared rule, harnesses, subfolders,
    clone handling and exclusions. **Preview** lists current matches before saving. **Sync project
    scope** applies the selected project, General or all projects; eligible new conversations are
    included when their project rule is enabled. A conversation-only Sync keeps its explicit scope.

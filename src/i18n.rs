@@ -83,6 +83,18 @@ const HELP_ES: &str = "actx (agent context): mantiene tus conversaciones de Clau
 
 pub static ES: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| {
     HashMap::from([
+        ("Clean local conversations", "Limpiar conversaciones locales"),
+        ("Analyze local conversations", "Analizar conversaciones locales"),
+        ("Move selected to quarantine", "Mover las seleccionadas a cuarentena"),
+        (
+            "Stopping after the current conversation",
+            "Se detendrá al terminar la conversación actual",
+        ),
+        (
+            "Selected local conversations move to recoverable quarantine",
+            "Las conversaciones locales seleccionadas se moverán a una cuarentena recuperable",
+        ),
+        ("Operation cancelled", "Operación cancelada"),
         (
             "Project data changed; refreshing the catalog",
             "Los datos del proyecto han cambiado; actualizando el catálogo",

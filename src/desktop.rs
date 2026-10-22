@@ -4,11 +4,11 @@ use eframe::egui::{self, RichText};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeSet, VecDeque},
-    io::Write,
-    process::Stdio,
-    sync::mpsc,
+    sync::{Arc, atomic::Ordering, mpsc},
     time::{Duration, Instant},
 };
+mod cleanup;
+mod jobs;
 mod theme;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -23,6 +23,7 @@ enum Kind {
     Comparison,
     Recoveries,
     Diagnostics,
+    CleanupScan,
 }
 struct Job {
     generation: u64,
@@ -50,6 +51,9 @@ struct Desktop {
     receiver: Option<mpsc::Receiver<Completed>>,
     running: Option<Kind>,
     running_request: Value,
+    control: Option<Arc<jobs::Control>>,
+    catalog_control: Option<Arc<jobs::Control>>,
+    cleanup_editor: Option<cleanup::Editor>,
     catalog_receiver: Option<mpsc::Receiver<Completed>>,
     catalog_generation: u64,
     messages_generation: u64,
@@ -93,33 +97,6 @@ fn text(v: &Value, k: &str) -> String {
 fn array(v: &Value, k: &str) -> Vec<Value> {
     v[k].as_array().cloned().unwrap_or_default()
 }
-fn call_api(request: &Value, lang: &str) -> Result<Value, String> {
-    let mut cmd = std::process::Command::new(std::env::current_exe().map_err(|e| e.to_string())?);
-    crate::ctx::hide_window(&mut cmd);
-    let mut child = cmd
-        .arg("api")
-        .env("ACTX_LANG", lang)
-        .env_remove("ACTX_PICK")
-        .env_remove("ACTX_ANSWER")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| e.to_string())?;
-    child
-        .stdin
-        .take()
-        .ok_or("Cannot open API stdin")?
-        .write_all(request.to_string().as_bytes())
-        .map_err(|e| e.to_string())?;
-    let output = child.wait_with_output().map_err(|e| e.to_string())?;
-    let response: Value = serde_json::from_slice(&output.stdout)
-        .map_err(|e| format!("{e}: {}", String::from_utf8_lossy(&output.stderr)))?;
-    if response["schema_version"] != 1 {
-        return Err("Unsupported API version".into());
-    }
-    Ok(response)
-}
 impl Desktop {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
         theme::install(&cc.egui_ctx);
@@ -132,6 +109,9 @@ impl Desktop {
             receiver: None,
             running: None,
             running_request: Value::Null,
+            control: None,
+            catalog_control: None,
+            cleanup_editor: None,
             catalog_receiver: None,
             catalog_generation: 0,
             messages_generation: 0,
@@ -241,9 +221,11 @@ impl Desktop {
     fn checking_catalog(&self) -> bool {
         self.catalog_receiver.is_some() || self.queue.iter().any(|j| j.kind == Kind::Catalog)
     }
-    fn start(job: Job, lang: String, ctx: &egui::Context) -> mpsc::Receiver<Completed> {
+    fn start(job: Job, lang: String, ctx: &egui::Context) -> (mpsc::Receiver<Completed>, Arc<jobs::Control>) {
         let (tx, rx) = mpsc::channel();
         let ctx = ctx.clone();
+        let control = Arc::new(jobs::Control::default());
+        let worker_control = control.clone();
         std::thread::spawn(move || {
             let index = (job.kind == Kind::Catalog && gui_index::normal(&job.request)).then(gui_index::Index::current);
             let mut result = if matches!(job.kind, Kind::RootFolder | Kind::WorkFolder) {
@@ -252,7 +234,7 @@ impl Desktop {
                     .map(|p| json!(p))
                     .unwrap_or(Value::Null))
             } else {
-                call_api(&job.request, &lang)
+                jobs::call_api(&job.request, &lang, worker_control.clone(), &ctx)
             };
             if let (Some(index), Ok(response)) = (&index, &result) {
                 let _ = index.store(response);
@@ -266,15 +248,17 @@ impl Desktop {
                 generation: job.generation,
                 result,
             });
+            worker_control.finished.store(true, Ordering::Relaxed);
             ctx.request_repaint();
         });
-        rx
+        (rx, control)
     }
     fn pump(&mut self, ctx: &egui::Context) {
         if let Some(rx) = &self.catalog_receiver {
             match rx.try_recv() {
                 Ok(done) => {
                     self.catalog_receiver = None;
+                    self.catalog_control = None;
                     self.complete(done);
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
@@ -289,6 +273,7 @@ impl Desktop {
             match rx.try_recv() {
                 Ok(done) => {
                     self.receiver = None;
+                    self.control = None;
                     self.running = None;
                     self.complete(done);
                 }
@@ -306,7 +291,9 @@ impl Desktop {
             let job = self.queue.remove(pos).unwrap();
             self.running = Some(job.kind);
             self.running_request = job.request.clone();
-            self.receiver = Some(Self::start(job, self.lang.clone(), ctx));
+            let (rx, control) = Self::start(job, self.lang.clone(), ctx);
+            self.receiver = Some(rx);
+            self.control = Some(control);
         }
         if self.catalog_receiver.is_none()
             && self.running != Some(Kind::Apply)
@@ -314,7 +301,9 @@ impl Desktop {
             && let Some(pos) = self.queue.iter().position(|j| j.kind == Kind::Catalog)
         {
             let job = self.queue.remove(pos).unwrap();
-            self.catalog_receiver = Some(Self::start(job, self.lang.clone(), ctx));
+            let (rx, control) = Self::start(job, self.lang.clone(), ctx);
+            self.catalog_receiver = Some(rx);
+            self.catalog_control = Some(control);
         }
         let focused = ctx.input(|i| i.viewport().focused.unwrap_or(true));
         let regained = focused && !self.focused;
@@ -447,12 +436,27 @@ impl Desktop {
                     self.result = Some(response);
                 }
             }
+            Kind::CleanupScan => {
+                if response["status"] == "ok" {
+                    if let Some(editor) = &mut self.cleanup_editor
+                        && serde_json::to_value(&editor.settings).unwrap() == done.request["cleanup"]
+                    {
+                        editor.data = response["data"].clone();
+                        editor.selected.clear();
+                    }
+                } else if response["status"] != "cancelled" {
+                    self.result = Some(response);
+                }
+            }
             Kind::Diagnostics => {
                 if response["status"] == "ok" {
                     self.diagnostic_data = Some(response["data"].clone());
                 } else {
                     self.result = Some(response);
                 }
+            }
+            Kind::Preview if response["status"] == "cancelled" => {
+                self.notice = tr!("Operation cancelled");
             }
             Kind::Preview => {
                 self.pending = Some(Pending {
@@ -491,6 +495,12 @@ impl Desktop {
                 }
                 if response["status"] == "ok" && done.request["action"] == "adoption" {
                     self.adoption_editor = None;
+                }
+                if done.request["action"] == "cleanup"
+                    && let Some(editor) = &mut self.cleanup_editor
+                {
+                    editor.data = Value::Null;
+                    editor.selected.clear();
                 }
                 self.messages = Value::Null;
                 self.result = Some(response);
@@ -664,6 +674,12 @@ impl Desktop {
             .clicked()
         {
             self.enqueue(Kind::Recoveries, json!({"action":"recoveries"}));
+        }
+        if ui
+            .add_enabled(!self.busy(), egui::Button::new(tr!("Clean local conversations")))
+            .clicked()
+        {
+            self.cleanup_editor = Some(cleanup::Editor::default());
         }
         let old = self.all;
         let add_clicked = ui
@@ -1121,6 +1137,12 @@ impl Desktop {
             if pending.request["action"] == "delete" || pending.request["action"] == "delete_project" {
                 ui.colored_label(theme::WARNING, tr!("Only saved copies are deleted"));
             }
+            if pending.request["action"] == "cleanup" {
+                ui.colored_label(
+                    theme::WARNING,
+                    tr!("Selected local conversations move to recoverable quarantine"),
+                );
+            }
             egui::ScrollArea::vertical().max_height(380.).show(ui, |ui| {
                 operations(ui, &pending.response["data"]);
                 diagnostics(ui, &pending.response);
@@ -1412,6 +1434,23 @@ impl Desktop {
         }
     }
 }
+impl Drop for Desktop {
+    fn drop(&mut self) {
+        for control in [&self.control, &self.catalog_control].into_iter().flatten() {
+            control.cancel();
+        }
+        for _ in 0..25 {
+            if [&self.control, &self.catalog_control]
+                .into_iter()
+                .flatten()
+                .all(|c| c.finished.load(Ordering::Relaxed))
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+}
 fn state_label(state: &str) -> String {
     match state {
         "synced" => tr!("Up to date"),
@@ -1450,6 +1489,7 @@ fn operations(ui: &mut egui::Ui, data: &Value) {
     for op in ops {
         let label = match op["kind"].as_str().unwrap_or_default() {
             "add" | "adopt" => tr!("Add"),
+            "quarantine" => tr!("Move selected to quarantine"),
             "adoption" => tr!("Automatic additions"),
             "delete" => tr!("Delete"),
             "configure" => tr!("Save settings"),
@@ -1639,6 +1679,20 @@ impl eframe::App for Desktop {
                     } else {
                         ui.weak(tr!("No changes were made"));
                     }
+                    if let Some(control) = &self.control {
+                        let progress = control.progress();
+                        if let Some(label) = progress["label"].as_str() {
+                            ui.label(format!("{} {}/{}", label, progress["done"], progress["total"]));
+                        }
+                        if self.running_request["action"]
+                            .as_str()
+                            .is_some_and(|s| s.starts_with("cleanup"))
+                            && ui.button(tr!("Cancel")).clicked()
+                        {
+                            control.cancel();
+                            self.notice = tr!("Stopping after the current conversation");
+                        }
+                    }
                     if self.catalog_cached {
                         ui.colored_label(theme::WARNING, tr!("Last known data; verification pending"));
                     }
@@ -1696,6 +1750,7 @@ impl eframe::App for Desktop {
         self.recovery_window(&ctx);
         self.diagnostics_window(&ctx);
         self.adoption_window(&ctx);
+        self.cleanup_window(&ctx);
         self.confirmation(&ctx);
         if self.result.is_some() {
             let mut open = true;

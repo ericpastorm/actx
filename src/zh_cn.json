@@ -561,5 +561,11 @@
   "Checking conversations in the background": "正在后台检查会话",
   "Last known data; verification pending": "上次已知的数据；等待验证",
   "Last checked {when}": "上次检查：{when}",
-  "Project data changed; refreshing the catalog": "项目数据已更改；正在刷新目录"
+  "Project data changed; refreshing the catalog": "项目数据已更改；正在刷新目录",
+  "Clean local conversations": "清理本地会话",
+  "Analyze local conversations": "分析本地会话",
+  "Move selected to quarantine": "将所选会话移至隔离区",
+  "Stopping after the current conversation": "将在当前会话处理完毕后停止",
+  "Selected local conversations move to recoverable quarantine": "所选本地会话将移至可恢复的隔离区",
+  "Operation cancelled": "操作已取消"
 }

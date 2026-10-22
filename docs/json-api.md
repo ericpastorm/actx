@@ -241,3 +241,23 @@ Sync preview/dry-run includes `adopt` operations; applying sync rechecks its can
 The desktop exposes the same rule editor and candidate preview. CLI configuration uses
 `actx auto-add Work --on --exclude 'scratch/**' --exclude-title '*private*'`; `--off` disables,
 `--clear-exclusions` clears patterns, and `--json` returns a read-only plan.
+
+## Reviewed local cleanup
+
+`cleanup_scan` lists unmaintained local candidates with reasons, size, folder, bounded preview and
+revision. Optional `cleanup` criteria include `days` (7), `max_messages` (4), `max_chars` (500),
+`min_similar` (3), `harnesses`, `rules` (`agents`, `repeated`, `tests`, `short`; optionally `old`),
+`folder` and `contains`. Nothing is selected or moved by analysis.
+
+`cleanup` requires explicit physical `ids` and the same criteria. Preview returns quarantine
+operations and `expected.cleanup`; use that revision with `apply:true`. Changed/protected/missing
+selections are rejected. Shared storage must be reachable when configured. The existing cleanup
+engine rechecks fingerprints, live agents, parent chains and maintained identities under locks,
+creates durable compressed recovery copies, then moves only the reviewed local originals.
+`recoveries`/`restore` expose the resulting quarantine. There is no GUI permanent-purge action.
+
+Desktop workers use opt-in JSON progress events on stderr; stdout remains one API envelope.
+Canceling analysis stops its read-only subprocess. Canceling cleanup signals a cooperative stop
+between conversations, preserving any completed moves in quarantine and reporting their results.
+Closing a read-only desktop job also cancels its subprocess. A write confirmation can be canceled
+without creating quarantine entries or changing histories.
