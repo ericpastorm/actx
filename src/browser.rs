@@ -171,6 +171,7 @@ fn open(group: &Conversation, print: bool) {
         commands::sync(Args {
             all: true,
             skip_retention: true,
+            target: Some(tool.to_string()),
             keys: Some(shared.iter().map(|s| s.key()).collect()),
             ..Default::default()
         });
@@ -188,6 +189,7 @@ fn open(group: &Conversation, print: bool) {
     if group
         .copies
         .iter()
+        .filter(|c| c.session().harness == tool || c.session().key() == group.id)
         .any(|c| ["conflict", "unknown", "push", "pull"].contains(&c.state))
     {
         ui::warn(&tr!(

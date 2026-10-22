@@ -141,6 +141,60 @@ fn a_codex_compaction_rebuilds_an_untouched_mirror_and_preserves_its_original() 
 }
 
 #[test]
+fn conflicts_are_compared_resolved_and_recovered_with_revision_checks() {
+    let w = World::new();
+    let a = w.machine("left");
+    let b = w.machine("right");
+    let folder = a.home.join("work");
+    std::fs::create_dir_all(&folder).unwrap();
+    let file = claude_session(
+        &a,
+        &folder,
+        &[("user", "base question"), ("assistant", "base answer")],
+        Some("Conflict"),
+    );
+    let sid = file.file_stem().unwrap().to_string_lossy().to_string();
+    let key = format!("claude:{sid}");
+    let add = json!({"action":"add","ids":[key],"general":true});
+    let p = api(&a, add.clone());
+    assert_eq!(api(&a, confirm(&add, &p))["status"], "ok");
+    let dest = b.home.join("work");
+    std::fs::create_dir_all(&dest).unwrap();
+    let sync = json!({"action":"sync","ids":[key],"folder":dest});
+    let p = api(&b, sync.clone());
+    let r = api(&b, confirmed(&sync, &p));
+    assert_eq!(r["status"], "ok", "{r}");
+    let local = claude_transcript(&b, &sid).0;
+    claude_continue(&file, &[("user", "from left"), ("assistant", "left answer")], None);
+    let p = api(&a, add.clone());
+    assert_eq!(api(&a, confirm(&add, &p))["status"], "ok");
+    claude_continue(&local, &[("user", "from right"), ("assistant", "right answer")], None);
+    let comparison = api(&b, json!({"action":"compare","ids":[key]}));
+    assert_eq!(comparison["status"], "ok", "{comparison}");
+    assert!(comparison["data"]["comparison"]["common_messages"].as_u64().unwrap() >= 2);
+    let defer = api(
+        &b,
+        json!({"action":"resolve","ids":[key],"choice":"defer","apply":true}),
+    );
+    assert_eq!(defer["status"], "cancelled");
+    let resolve = json!({"action":"resolve","ids":[key],"choice":"remote"});
+    let p = api(&b, resolve.clone());
+    let r = api(&b, confirmed(&resolve, &p));
+    assert_eq!(r["status"], "ok", "{r}");
+    assert!(claude_transcript(&b, &sid).1.contains(&"left answer".into()));
+    let backups = api(&b, json!({"action":"recoveries","ids":[key]}));
+    let entry = backups["data"]["entries"].as_array().unwrap().first().unwrap();
+    let restore = json!({"action":"restore","backup":entry["id"]});
+    let p = api(&b, restore.clone());
+    claude_continue(&local, &[("user", "late edit"), ("assistant", "late reply")], None);
+    assert_eq!(api(&b, confirmed(&restore, &p))["status"], "decision_required");
+    let p = api(&b, restore.clone());
+    let r = api(&b, confirmed(&restore, &p));
+    assert_eq!(r["status"], "ok", "{r}");
+    assert!(claude_transcript(&b, &sid).1.contains(&"right answer".into()));
+}
+
+#[test]
 fn services_sync_two_machines_and_convert_without_duplicates() {
     let w = World::new();
     let a = w.machine("desk");

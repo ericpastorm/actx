@@ -17,7 +17,7 @@ use crate::ui::{dim, harness_tag, last_chars, pad, paint};
 /// at most this many characters for the other branch's summary
 const MERGE_BUDGET: usize = 100_000;
 
-fn branch_summary(turns: &[Turn], host: &str) -> String {
+pub(crate) fn branch_summary(turns: &[Turn], host: &str) -> String {
     let (you, agent) = (tr!("You"), tr!("Agent"));
     let body: String = turns
         .iter()
@@ -63,10 +63,10 @@ pub fn merge_one(root: &Path, l: &mut Session, r: &Session, st: &mut State) -> R
     if turns.is_empty() {
         // nothing really new there: this one wins
         push_one(root, &project, l, git, st, &none)?;
-        println!(
+        crate::ui::say(&format!(
             "{tag}  {}",
             dim(&tr!("(no new messages on {host}: keeping this one)", host = host))
-        );
+        ));
         return Ok(());
     }
     let title = tr!(
@@ -90,6 +90,6 @@ pub fn merge_one(root: &Path, l: &mut Session, r: &Session, st: &mut State) -> R
         host = host,
         title = branch.title
     );
-    println!("{tag}  {}", dim(&note));
+    crate::ui::say(&format!("{tag}  {}", dim(&note)));
     Ok(())
 }

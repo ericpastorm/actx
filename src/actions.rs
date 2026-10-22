@@ -33,6 +33,10 @@ pub enum Action {
     CreateProject,
     Messages,
     Candidates,
+    Compare,
+    Resolve,
+    Recoveries,
+    Restore,
 }
 
 #[derive(Clone, Deserialize)]
@@ -48,6 +52,8 @@ pub struct Request {
     pub all: bool,
     pub folder: Option<String>,
     pub target: Option<String>,
+    pub choice: Option<String>,
+    pub backup: Option<String>,
     pub root: Option<String>,
     pub lang: Option<String>,
     pub harnesses: Option<Vec<String>>,
@@ -68,6 +74,7 @@ impl Request {
             project: self.project.clone(),
             general: self.general,
             all: self.all,
+            target: self.target.clone(),
             ..Default::default()
         }
     }
@@ -85,6 +92,10 @@ impl Request {
             Action::CreateProject => "create_project",
             Action::Messages => "messages",
             Action::Candidates => "candidates",
+            Action::Compare => "compare",
+            Action::Resolve => "resolve",
+            Action::Recoveries => "recoveries",
+            Action::Restore => "restore",
         }
     }
 }
@@ -355,6 +366,7 @@ pub fn run(req: Request) -> Response<Value> {
         Action::Sync => return crate::engine::sync(&req),
         Action::Convert => return crate::engine::convert(&req),
         Action::Resume => return crate::engine::resume(&req),
+        Action::Compare | Action::Resolve | Action::Recoveries | Action::Restore => return crate::recovery::run(&req),
         Action::Settings | Action::Configure | Action::CreateProject | Action::Messages | Action::Candidates => {
             return crate::desktop_api::run(&req);
         }

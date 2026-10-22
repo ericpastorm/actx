@@ -416,7 +416,7 @@ pub fn restore(id: Option<&str>) {
         };
         key
     };
-    let Some((dir, mut entry)) = all.into_iter().find(|(_, e)| e.id == key) else {
+    let Some((_, entry)) = all.into_iter().find(|(_, e)| e.id == key) else {
         ui::fail(&tr!("Quarantine entry not found"));
         return;
     };
@@ -426,7 +426,31 @@ pub fn restore(id: Option<&str>) {
     )) {
         return;
     }
-    let result = (|| -> Result<()> {
+    let result = recover(&key);
+    match result {
+        Ok(()) => ui::ok(&tr!("Recovered: {title}", title = entry.title)),
+        Err(error) => ui::fail(&error.to_string()),
+    }
+}
+
+pub(crate) fn recovery_entries() -> Vec<serde_json::Value> {
+    entries().into_iter().map(|(_, e)| serde_json::json!({"id":format!("quarantine:{}",e.id),"kind":"quarantine","session_id":format!("{}:{}",e.harness,e.session_id),"title":e.title,"folder":e.folder,"at":e.at,"status":e.status})).collect()
+}
+pub(crate) fn recovery_token(id: &str) -> Result<String> {
+    let (dir, _) = entries()
+        .into_iter()
+        .find(|(_, e)| e.id == id)
+        .ok_or_else(|| Error("Missing quarantine entry".into()))?;
+    let mut data = std::fs::read(dir.join("entry.json"))?;
+    data.extend_from_slice(&std::fs::read(dir.join("payload.zst"))?);
+    Ok(crate::engine::digest(&data))
+}
+pub(crate) fn recover(key: &str) -> Result<()> {
+    let (dir, mut entry) = entries()
+        .into_iter()
+        .find(|(_, e)| e.id == key)
+        .ok_or_else(|| Error("Missing quarantine entry".into()))?;
+    (|| -> Result<()> {
         let _loading = crate::ui::loading(&crate::tr!("Restoring the conversation"));
         let _lock = lock()?;
         let saved: Entry = serde_json::from_slice(&std::fs::read(dir.join("entry.json"))?)?;
@@ -476,11 +500,7 @@ pub fn restore(id: Option<&str>) {
         entry.status = "restored".into();
         save(&dir, &entry)?;
         Ok(())
-    })();
-    match result {
-        Ok(()) => ui::ok(&tr!("Recovered: {title}", title = entry.title)),
-        Err(error) => ui::fail(&error.to_string()),
-    }
+    })()
 }
 
 #[derive(Serialize, Deserialize)]

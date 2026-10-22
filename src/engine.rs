@@ -119,6 +119,11 @@ fn sync_snapshot(req: &Request) -> std::result::Result<SyncSnapshot, Diagnostic>
         .filter(|o| !o.reason_code.starts_with("retention_"))
         .map(Into::into)
         .collect();
+    operations.retain(|o| {
+        req.target
+            .as_deref()
+            .is_none_or(|t| o.target_harness.as_deref().is_none_or(|h| h == t))
+    });
     for op in &mut operations {
         let folder = req.folders.get(&op.session_id).or(req.folder.as_ref());
         if let Some(folder) = folder {
@@ -542,7 +547,7 @@ pub fn resume(req: &Request) -> Response<Value> {
     let mut sync_req = req.clone();
     sync_req.action = actions::Action::Sync;
     sync_req.ids = remote;
-    sync_req.target = None;
+    sync_req.target = Some(target.to_string());
     let sync_plan = if sync_req.ids.is_empty() {
         None
     } else {
@@ -612,6 +617,7 @@ pub fn resume(req: &Request) -> Response<Value> {
     if group
         .copies
         .iter()
+        .filter(|c| c.session().harness == target || c.session().key() == group.id)
         .any(|c| matches!(c.state, "conflict" | "unknown" | "push" | "pull"))
     {
         return actions::error(

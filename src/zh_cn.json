@@ -514,5 +514,13 @@
   "Add conversations": "添加对话",
   "Enable the target harness in Settings before resuming": "继续前，请在设置中启用目标工具",
   "Compacted history repaired; the previous native copy was preserved": "已修复压缩后的历史记录；保留了原来的本地副本",
-  "Finish the current agent turn before synchronizing": "请等待代理完成当前轮次后再同步"
+  "Finish the current agent turn before synchronizing": "请等待代理完成当前轮次后再同步",
+  "Keep local": "保留本地版本",
+  "Keep shared": "保留共享版本",
+  "Merge both": "合并两个版本",
+  "Repair linked copy": "修复关联副本",
+  "Choose what to do": "选择操作",
+  "Compare conversation histories": "比较对话历史",
+  "Resolve a conversation conflict": "解决对话冲突",
+  "Browse recoverable conversations": "浏览可恢复的对话"
 }

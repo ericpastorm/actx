@@ -187,3 +187,22 @@ keep unfinished Codex turns out of published snapshots. Old state remains readab
 baselines on a successful sync; changes predating that first baseline cannot be inferred retroactively.
 A new Codex compaction can replace an unchanged linked conversion while preserving the old native
 copy as a retired local conversation. Independent target edits remain conflicts.
+
+## Conflict comparison and recovery
+
+`compare` takes one physical source ID, optionally `target` for an explicitly linked harness.
+It returns recent messages, omitted/truncated counts, common-prefix counts and an exact bounded
+native merge preview. `resolve` previews and confirms `choice`: `local`, `remote`, `merge`, or
+`defer` for native copies; linked copies support `repair`, `local`, `merge`, `defer`.
+Keeping local natively preserves the shared version as a separate branch; keeping shared backs
+up local. Linked repair keeps the retired native copy; `repair` refuses independent target edits.
+Merges of edited, non-prefix linked targets require a manual decision and remain untouched.
+All mutations require the returned `expected`, recheck revisions and protect open agents.
+
+`recoveries` lists local backup/quarantine entries (optionally filtered by `ids`). `restore` takes
+the listed opaque `backup` ID and uses preview/confirmation. Existing copies are backed up for
+backup restoration; quarantine restoration never overwrites an existing conversation. Listing and
+preview are read-only. These services back `actx compare`, `actx resolve`, `actx recoveries` and
+`actx restore --backup <id>`; `--json` prints a plan, while the API applies confirmed requests.
+Opening a selected harness synchronizes only its native source and selected linked target;
+conflicts in other harnesses remain visible and preserved without blocking an otherwise safe copy.

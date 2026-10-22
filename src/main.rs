@@ -31,6 +31,7 @@ mod pb;
 mod profile;
 mod project;
 mod quarantine;
+mod recovery;
 mod session;
 mod state;
 mod store;
@@ -137,6 +138,7 @@ fn cli() -> Command {
                 ),
         ))
         .subcommand(clean::command())
+        .subcommands(recovery::commands())
         .subcommand(Command::new("api").about(tr!("Read one structured request from stdin")))
         .subcommand(Command::new("gui").about(tr!("Open the desktop interface")))
         .subcommand(
@@ -259,7 +261,12 @@ fn cli() -> Command {
                         .help(tr!("turn it on or off (otherwise: how it's doing)")),
                 ),
         )
-        .subcommand(Command::new("restore").about(tr!("put back a conversation from a backup")))
+        .subcommand(
+            Command::new("restore")
+                .about(tr!("put back a conversation from a backup"))
+                .arg(Arg::new("backup").long("backup"))
+                .arg(Arg::new("json").long("json").action(ArgAction::SetTrue)),
+        )
         .subcommand(Command::new("doctor").about(tr!("check that everything is in place")))
         .subcommand(Command::new("update").about(tr!("install the newest actx from the shared folder")))
         .subcommand(
@@ -407,6 +414,16 @@ fn main() {
         Some(("clean", m)) => clean::dispatch(m),
         Some(("update", _)) => commands::update(),
         Some(("auto", m)) => auto::auto(get(m, "action").as_deref()),
+        Some((name @ ("compare" | "resolve" | "recoveries"), m)) => recovery::cli(
+            name,
+            get(m, "conversation").as_deref(),
+            get(m, "target").as_deref(),
+            get(m, "choice").as_deref(),
+            m.get_flag("json"),
+        ),
+        Some(("restore", m)) if m.get_one::<String>("backup").is_some() => {
+            recovery::cli("restore", get(m, "backup").as_deref(), None, None, m.get_flag("json"))
+        }
         Some(("restore", _)) => commands::restore(),
         Some(("doctor", _)) => commands::doctor(),
         Some(("completions", m)) => {

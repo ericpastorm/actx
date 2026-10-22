@@ -203,6 +203,127 @@ fn local() -> HashMap<String, Session> {
         .map(|s| (s.key(), s))
         .collect()
 }
+pub(crate) fn pair(key: &str, target: &str) -> Result<(Session, Session)> {
+    let links = read()?;
+    let source = crate::catalog::identity(key);
+    let link = links
+        .copies
+        .get(&format!("{source}/{target}"))
+        .ok_or_else(|| Error("Linked copy not found".into()))?;
+    let mut copies: HashMap<_, _> = harness::local_keys(&std::collections::HashSet::from([
+        link.source.clone(),
+        link.target.clone(),
+    ]))
+    .into_iter()
+    .map(|s| (s.key(), s))
+    .collect();
+    let a = copies
+        .remove(&link.source)
+        .ok_or_else(|| Error("Source copy missing".into()))?;
+    let b = copies
+        .remove(&link.target)
+        .ok_or_else(|| Error("Linked copy missing".into()))?;
+    Ok((a, b))
+}
+/// Explicit repair/merge keeps both original native histories. The caller holds action/store locks.
+pub(crate) fn resolve_pair(
+    root: &Path,
+    source: &Session,
+    target: &Session,
+    choice: &str,
+    st: &mut state::State,
+) -> Result<()> {
+    let guard = std::fs::File::create(ctx().state_dir.join("multiharness.lock"))?;
+    guard.try_lock().map_err(|e| Error(e.to_string()))?;
+    let mut links = read()?;
+    let id = format!("{}/{}", source.key(), target.harness);
+    let link = links
+        .copies
+        .get(&id)
+        .ok_or_else(|| Error("Linked copy missing".into()))?;
+    if link.target != target.key() {
+        return Err(Error("Linked copy changed while confirming".into()));
+    }
+    if agents::in_use_by_agent_now(source) || agents::in_use_by_agent_now(target) {
+        return Err(Error("Close both agents before repairing".into()));
+    }
+    let mut source = source.clone();
+    let before = harness::get(target.harness).local_turns(target)?.0;
+    let b = hashes(&before);
+    if choice == "repair" && b != link.b {
+        return Err(Error(
+            "The linked copy has its own changes; choose merge or keep local instead".into(),
+        ));
+    }
+    if source.harness == "codex"
+        && source
+            .src
+            .as_ref()
+            .is_some_and(|p| crate::codex::completed_end(p).ok().flatten().is_some())
+    {
+        return Err(Error("Finish the current source turn before repairing".into()));
+    }
+    if let Some(remote) = store::stored_sessions(root)
+        .into_iter()
+        .find(|r| r.key() == source.key())
+        && matches!(st.status(Some(&source), Some(&remote)), "pull" | "conflict" | "unknown")
+    {
+        return Err(Error(
+            "Sync or resolve the native source before repairing its linked copies".into(),
+        ));
+    }
+    if choice == "merge" {
+        if !b.starts_with(&link.b) {
+            return Err(Error(
+                "Edited target history cannot be merged automatically; both copies were kept".into(),
+            ));
+        }
+        let delta = &before[link.b.len()..];
+        if !delta.is_empty() {
+            append(&mut source, delta)?;
+        }
+    }
+    let (turns, model) = harness::get(source.harness).local_turns(&source)?;
+    let content = crate::integrity::fresh(&source)?;
+    let copy = harness::get(target.harness).write(
+        &turns::fit(turns.clone(), harness::get(source.harness).label(), model.as_deref()),
+        &source.path,
+        &source.title,
+        model.as_deref(),
+    )?;
+    if crate::integrity::fresh(&source)? != content {
+        return Err(Error(
+            "Source changed during repair; all native copies were kept".into(),
+        ));
+    }
+    crate::catalog::detach(&source.key(), &target.key())?;
+    links.retired.push(target.key());
+    links.copies.insert(
+        id,
+        Link {
+            source: source.key(),
+            target: copy.key(),
+            a: hashes(&turns),
+            b: hashes(&harness::get(copy.harness).local_turns(&copy)?.0),
+            epoch: epoch(&source),
+        },
+    );
+    save(&links)?;
+    if let Some(remote) = store::stored_sessions(root)
+        .into_iter()
+        .find(|r| r.key() == source.key())
+    {
+        store::push_one(
+            root,
+            remote.project.as_deref().unwrap_or(store::GENERAL),
+            &source,
+            crate::git::git_info(&source.path),
+            st,
+            &HashMap::new(),
+        )?;
+    }
+    Ok(())
+}
 pub fn linked_keys() -> Vec<String> {
     read()
         .map(|l| l.copies.into_values().map(|l| l.target).collect())
@@ -309,7 +430,7 @@ fn run_locked(root: &Path, args: &crate::commands::Args, config: &serde_json::Va
         .flat_map(|r| {
             let targets: Vec<_> = profile::harnesses_in(config, &r.key())
                 .into_iter()
-                .filter(|n| *n != r.harness)
+                .filter(|n| *n != r.harness && args.target.as_deref().is_none_or(|target| target == *n))
                 .collect();
             if targets.is_empty() {
                 Vec::new()
@@ -369,7 +490,7 @@ fn run_locked(root: &Path, args: &crate::commands::Args, config: &serde_json::Va
         }
         let targets: Vec<_> = profile::harnesses_in(config, &key)
             .into_iter()
-            .filter(|n| *n != r.harness)
+            .filter(|n| *n != r.harness && args.target.as_deref().is_none_or(|target| target == *n))
             .collect();
         if targets.is_empty() {
             continue;
@@ -885,7 +1006,7 @@ pub fn preview(
         }
         let targets: Vec<_> = profile::harnesses_in(&config, &key)
             .into_iter()
-            .filter(|n| *n != r.harness)
+            .filter(|n| *n != r.harness && args.target.as_deref().is_none_or(|target| target == *n))
             .collect();
         let mut source = sessions.get(&key).cloned();
         if r.meta().get("project_folder").is_some()

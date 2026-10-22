@@ -83,6 +83,20 @@ const HELP_ES: &str = "actx (agent context): mantiene tus conversaciones de Clau
 
 pub static ES: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| {
     HashMap::from([
+        ("Keep local", "Conservar local"),
+        ("Keep shared", "Conservar compartida"),
+        ("Merge both", "Mezclar ambas"),
+        ("Repair linked copy", "Reparar copia vinculada"),
+        ("Choose what to do", "Elige qué hacer"),
+        (
+            "Compare conversation histories",
+            "Comparar historiales de una conversación",
+        ),
+        (
+            "Resolve a conversation conflict",
+            "Resolver un conflicto de conversación",
+        ),
+        ("Browse recoverable conversations", "Ver conversaciones recuperables"),
         (
             "Finish the current agent turn before synchronizing",
             "Termina el turno actual del agente antes de sincronizar",

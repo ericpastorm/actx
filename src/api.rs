@@ -16,7 +16,7 @@ use std::{
 
 pub const SCHEMA_VERSION: u32 = 1;
 
-#[derive(Serialize)]
+#[derive(Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
     Ok,

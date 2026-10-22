@@ -874,10 +874,14 @@ pub fn other_branch(l: &Session, r: &Session, fix: Fix) -> Result<Vec<Turn>> {
             "can't merge between opencode 1.x and 2.x: pick this one or the other one"
         )));
     }
-    let mine: std::collections::HashSet<String> = messages_of(&serde_json::from_slice(&export(&l.id, &l.path)?)?)
-        .iter()
-        .map(msg_id)
-        .collect();
+    let mine: std::collections::HashSet<String> = messages_of(&if crate::inspection::enabled() {
+        read_export(l)?
+    } else {
+        serde_json::from_slice(&export(&l.id, &l.path)?)?
+    })
+    .iter()
+    .map(msg_id)
+    .collect();
     let exp: Value = serde_json::from_slice(&stored_export(r, fix, None)?)?;
     let theirs: Vec<Value> = messages_of(&exp)
         .into_iter()

@@ -39,6 +39,7 @@ pub struct Args {
     pub retention: Option<String>,
     pub conversation: Option<String>,
     pub keys: Option<HashSet<String>>,
+    pub target: Option<String>,
     pub print: bool,
     pub wizard: bool,
     pub json: bool,
@@ -1662,7 +1663,7 @@ fn backup_title(b: &Backup, local: &HashMap<String, Session>) -> String {
 }
 
 /// Put a backed-up conversation back. Returns its folder.
-fn restore_one(b: &Backup, current: Option<&Session>) -> crate::ctx::Result<String> {
+pub(crate) fn restore_one(b: &Backup, current: Option<&Session>) -> crate::ctx::Result<String> {
     let _loading = crate::ui::loading(&tr!("Restoring the conversation"));
     use crate::ctx::Error;
     use crate::state::{Copy, backup};
@@ -1702,8 +1703,17 @@ fn restore_one(b: &Backup, current: Option<&Session>) -> crate::ctx::Result<Stri
     if let Some(dir) = dest.parent() {
         std::fs::create_dir_all(dir)?;
     }
+    let original = std::fs::read(&dest).ok().map(|b| crate::engine::digest(&b));
     let tmp = dest.with_extension("actx-tmp");
     std::fs::copy(&b.file, &tmp)?;
+    if std::fs::read(&dest).ok().map(|b| crate::engine::digest(&b)) != original
+        || current.is_some_and(crate::agents::in_use_by_agent_now)
+    {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(Error(
+            "Destination changed during recovery; the original was kept".into(),
+        ));
+    }
     std::fs::rename(&tmp, &dest)?;
     Ok(folder)
 }
