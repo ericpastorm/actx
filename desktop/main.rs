@@ -18,7 +18,7 @@ fn main() {
     })();
     if let Err(error) = result {
         rfd::MessageDialog::new()
-            .set_title("actx")
+            .set_title("actX")
             .set_description(error.to_string())
             .set_level(rfd::MessageLevel::Error)
             .show();

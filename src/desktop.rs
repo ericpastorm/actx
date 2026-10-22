@@ -1,6 +1,6 @@
 //! Native desktop frontend. All filesystem/agent work runs in an isolated API subprocess.
 use crate::{i18n, tr};
-use eframe::egui::{self, Color32, RichText};
+use eframe::egui::{self, RichText};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeSet, VecDeque},
@@ -9,6 +9,7 @@ use std::{
     sync::mpsc,
     time::Duration,
 };
+mod theme;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Kind {
@@ -95,21 +96,7 @@ fn call_api(request: &Value, lang: &str) -> Result<Value, String> {
 }
 impl Desktop {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        let mut fonts = egui::FontDefinitions::default();
-        let data =
-            zstd::decode_all(&include_bytes!("../assets/fonts/NotoSansSC-Actx.ttf.zst")[..]).expect("bundled CJK font");
-        fonts
-            .font_data
-            .insert("actx-cjk".into(), egui::FontData::from_owned(data).into());
-        for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-            fonts.families.entry(family).or_default().push("actx-cjk".into());
-        }
-        cc.egui_ctx.set_fonts(fonts);
-        cc.egui_ctx.set_visuals(egui::Visuals::dark());
-        let mut style = (*cc.egui_ctx.global_style()).clone();
-        style.spacing.item_spacing = egui::vec2(10., 9.);
-        style.spacing.button_padding = egui::vec2(12., 7.);
-        cc.egui_ctx.set_global_style(style);
+        theme::install(&cc.egui_ctx);
         let mut app = Self {
             queue: VecDeque::new(),
             receiver: None,
@@ -356,9 +343,9 @@ impl Desktop {
     }
     fn header(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.heading(RichText::new("actx").size(28.).color(Color32::from_rgb(118, 199, 190)));
+            theme::wordmark(ui);
             if ui.available_width() > 850. {
-                ui.label(tr!("Your conversations, across tools and computers"));
+                ui.weak(tr!("Your conversations, across tools and computers"));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
@@ -375,24 +362,19 @@ impl Desktop {
                 }
             });
         });
-        ui.separator();
     }
     fn sidebar(&mut self, ui: &mut egui::Ui) {
-        ui.heading(tr!("PROJECT"));
-        ui.add_space(8.);
-        if ui.selectable_label(self.scope == "*", tr!("All projects")).clicked() {
+        theme::panel_title(ui, &tr!("PROJECT"));
+        if theme::project(ui, self.scope == "*", tr!("All projects")).clicked() {
             self.scope = "*".into();
         }
-        if ui
-            .selectable_label(self.scope == crate::store::GENERAL, tr!("General (no project)"))
-            .clicked()
-        {
+        if theme::project(ui, self.scope == crate::store::GENERAL, tr!("General (no project)")).clicked() {
             self.scope = crate::store::GENERAL.into();
             self.project = crate::store::GENERAL.into();
         }
         for p in array(&self.catalog, "projects") {
             if let Some(id) = p["collection"]["id"].as_str()
-                && ui.selectable_label(self.scope == id, id).clicked()
+                && theme::project(ui, self.scope == id, id).clicked()
             {
                 self.scope = id.into();
                 self.project = id.into();
@@ -425,14 +407,19 @@ impl Desktop {
             self.refresh();
         }
         ui.add_space(15.);
-        ui.small(tr!("Only selected conversations are shared"));
+        ui.label(
+            RichText::new(tr!("Only selected conversations are shared"))
+                .small()
+                .weak(),
+        );
         if !self.root.is_empty() {
             ui.separator();
-            ui.small(tr!("shared folder"));
-            ui.small(&self.root);
+            ui.label(RichText::new(tr!("shared folder")).small().weak());
+            ui.label(RichText::new(&self.root).small().weak());
         }
     }
     fn list(&mut self, ui: &mut egui::Ui) {
+        theme::panel_title(ui, &tr!("CONVERSATION"));
         ui.add(
             egui::TextEdit::singleline(&mut self.search)
                 .hint_text(tr!("Search conversations"))
@@ -469,20 +456,41 @@ impl Desktop {
                         .collect::<Vec<_>>()
                         .join(" · ");
                     let color = match group["state"].as_str() {
-                        Some("conflict" | "unknown") => Color32::from_rgb(245, 180, 93),
-                        Some("synced") => Color32::from_rgb(118, 199, 150),
-                        _ => Color32::LIGHT_GRAY,
+                        Some("conflict" | "unknown") => theme::WARNING,
+                        Some("synced") => theme::OK,
+                        _ => theme::MUTED,
                     };
-                    let label = format!(
-                        "{title}\n{tools}  ·  {}  ·  {}",
-                        state_label(&text(&group, "state")),
-                        crate::ui::ago(group["updated_at"].as_f64().unwrap_or(0.))
+                    let current = group["id"] == self.selected;
+                    let mut label = egui::text::LayoutJob::default();
+                    label.append(
+                        &format!("{} {title}\n", if current { ">" } else { " " }),
+                        0.,
+                        egui::TextFormat {
+                            font_id: egui::FontId::monospace(13.),
+                            color: if current { theme::TEXT } else { theme::SECONDARY },
+                            ..Default::default()
+                        },
+                    );
+                    label.append(
+                        &format!(
+                            "  {tools}  ·  {}  ·  {}",
+                            state_label(&text(&group, "state")),
+                            crate::ui::ago(group["updated_at"].as_f64().unwrap_or(0.))
+                        ),
+                        0.,
+                        egui::TextFormat {
+                            font_id: egui::FontId::monospace(11.),
+                            color,
+                            ..Default::default()
+                        },
                     );
                     if ui
                         .add_enabled(
                             !self.busy(),
-                            egui::Button::new(RichText::new(label).color(color))
-                                .selected(group["id"] == self.selected)
+                            egui::Button::new(label)
+                                .selected(current)
+                                .frame(current)
+                                .wrap()
                                 .min_size(egui::vec2(ui.available_width(), 58.)),
                         )
                         .clicked()
@@ -499,6 +507,7 @@ impl Desktop {
         }
     }
     fn detail(&mut self, ui: &mut egui::Ui) {
+        theme::panel_title(ui, &tr!("Details"));
         let Some(group) = self.group() else {
             ui.heading(tr!("Select a conversation"));
             ui.label(tr!("Use Convert without shared storage"));
@@ -596,27 +605,46 @@ impl Desktop {
                         "sync" | "delete" => group["managed"] == true,
                         _ => true,
                     };
+                    let label = if action == "delete" {
+                        RichText::new(label).color(theme::RED)
+                    } else {
+                        RichText::new(label)
+                    };
                     if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
                         self.preview(action);
                     }
                 }
             });
         });
-        ui.small(tr!("Choose the destination and review changes before applying"));
+        ui.label(
+            RichText::new(tr!("Choose the destination and review changes before applying"))
+                .small()
+                .weak(),
+        );
         ui.separator();
         ui.heading(tr!("Preview"));
         egui::ScrollArea::vertical().id_salt("messages").show(ui, |ui| {
             if self.messages.is_null() {
-                ui.label(tr!("Working"));
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.weak(tr!("Working"));
+                });
             }
             for message in array(&self.messages["data"], "messages") {
-                ui.strong(if message["role"] == "user" {
-                    tr!("You")
-                } else {
-                    tr!("Agent")
-                });
-                ui.label(text(&message, "text"));
-                ui.separator();
+                let user = message["role"] == "user";
+                egui::Frame::new()
+                    .fill(if user { theme::HOVER } else { theme::RAISED })
+                    .stroke(egui::Stroke::new(1., theme::LINE))
+                    .inner_margin(12)
+                    .show(ui, |ui| {
+                        ui.set_width((ui.available_width()).max(0.));
+                        ui.label(
+                            RichText::new(if user { tr!("You") } else { tr!("Agent") })
+                                .small()
+                                .color(if user { theme::TEXT } else { theme::MUTED }),
+                        );
+                        ui.label(text(&message, "text"));
+                    });
             }
             diagnostics(ui, &self.messages);
             if self.messages["data"]["truncated"] == true {
@@ -756,7 +784,7 @@ impl Desktop {
             ui.heading(tr!("Confirm changes"));
             ui.label(tr!("Choose the destination and review changes before applying"));
             if pending.request["action"] == "delete" {
-                ui.colored_label(Color32::from_rgb(245, 180, 93), tr!("Only saved copies are deleted"));
+                ui.colored_label(theme::WARNING, tr!("Only saved copies are deleted"));
             }
             egui::ScrollArea::vertical().max_height(380.).show(ui, |ui| {
                 operations(ui, &pending.response["data"]);
@@ -876,10 +904,7 @@ fn operations(ui: &mut egui::Ui, data: &Value) {
             ));
         }
         for req in array(&op, "requirements") {
-            ui.colored_label(
-                Color32::from_rgb(245, 180, 93),
-                requirement(req.as_str().unwrap_or_default()),
-            );
+            ui.colored_label(theme::WARNING, requirement(req.as_str().unwrap_or_default()));
         }
         ui.separator();
     }
@@ -905,39 +930,54 @@ fn diagnostics(ui: &mut egui::Ui, response: &Value) {
             "conversation_active" => tr!("This conversation is already open; close its agent first"),
             _ => text(&d, "message"),
         };
-        ui.colored_label(Color32::from_rgb(245, 180, 93), message);
+        ui.colored_label(theme::WARNING, message);
     }
 }
 impl eframe::App for Desktop {
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        [0., 0., 0., 1.]
+    }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.pump(&ctx);
-        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Num1)) {
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Num1)) {
             self.detail_view = false;
         }
-        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Num2)) {
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Num2)) {
             self.detail_view = true;
         }
         if self.running == Some(Kind::Apply) && ctx.input(|i| i.viewport().close_requested()) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.notice = tr!("Wait for the current operation before closing");
         }
-        egui::Panel::top("header").show(ui, |ui| self.header(ui));
-        egui::Panel::bottom("status").show(ui, |ui| {
-            ui.horizontal(|ui| {
-                if self.busy() {
-                    ui.spinner();
-                    ui.label(tr!("Operation in progress"));
-                } else if !self.notice.is_empty() {
-                    ui.label(&self.notice);
-                } else {
-                    ui.label(tr!("No changes were made"));
-                }
-                if self.result.is_some() && ui.button(tr!("Results")).clicked() {
-                    self.notice.clear();
-                }
+        egui::Panel::top("header")
+            .frame(
+                egui::Frame::new()
+                    .fill(theme::BACKGROUND)
+                    .inner_margin(egui::Margin::symmetric(18, 12)),
+            )
+            .show(ui, |ui| self.header(ui));
+        egui::Panel::bottom("status")
+            .frame(
+                egui::Frame::new()
+                    .fill(theme::BACKGROUND)
+                    .inner_margin(egui::Margin::symmetric(18, 10)),
+            )
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    if self.busy() {
+                        ui.spinner();
+                        ui.label(tr!("Operation in progress"));
+                    } else if !self.notice.is_empty() {
+                        ui.label(&self.notice);
+                    } else {
+                        ui.weak(tr!("No changes were made"));
+                    }
+                    if self.result.is_some() && ui.button(tr!("Results")).clicked() {
+                        self.notice.clear();
+                    }
+                });
             });
-        });
         let compact = ui.available_width() < 1000.;
         if compact {
             egui::Panel::top("navigation").show(ui, |ui| {
@@ -947,27 +987,36 @@ impl eframe::App for Desktop {
                 });
             });
             if self.detail_view {
-                egui::CentralPanel::default().show(ui, |ui| self.detail(ui));
+                egui::CentralPanel::default()
+                    .frame(theme::panel_frame())
+                    .show(ui, |ui| self.detail(ui));
             } else {
                 egui::Panel::left("projects")
-                    .default_size(165.)
-                    .min_size(140.)
-                    .max_size(220.)
+                    .frame(theme::panel_frame())
+                    .default_size(240.)
+                    .min_size(200.)
+                    .max_size(280.)
                     .show(ui, |ui| self.sidebar(ui));
-                egui::CentralPanel::default().show(ui, |ui| self.list(ui));
+                egui::CentralPanel::default()
+                    .frame(theme::panel_frame())
+                    .show(ui, |ui| self.list(ui));
             }
         } else {
             egui::Panel::left("projects")
-                .default_size(185.)
-                .min_size(150.)
-                .max_size(260.)
+                .frame(theme::panel_frame())
+                .default_size(240.)
+                .min_size(200.)
+                .max_size(280.)
                 .show(ui, |ui| self.sidebar(ui));
             egui::Panel::left("conversations")
-                .default_size(310.)
-                .min_size(220.)
+                .frame(theme::panel_frame())
+                .default_size(330.)
+                .min_size(250.)
                 .max_size(420.)
                 .show(ui, |ui| self.list(ui));
-            egui::CentralPanel::default().show(ui, |ui| self.detail(ui));
+            egui::CentralPanel::default()
+                .frame(theme::panel_frame())
+                .show(ui, |ui| self.detail(ui));
         }
         self.settings_window(&ctx);
         self.new_project_window(&ctx);
@@ -1014,13 +1063,13 @@ pub fn run() {
     crate::ui::progress_clear();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("actx")
+            .with_title("actX")
             .with_app_id("io.github.ericpastorm.actx")
             .with_inner_size([1180., 760.])
             .with_min_inner_size([920., 560.]),
         ..Default::default()
     };
-    if let Err(e) = eframe::run_native("actx", options, Box::new(|cc| Ok(Box::new(Desktop::new(cc))))) {
+    if let Err(e) = eframe::run_native("actX", options, Box::new(|cc| Ok(Box::new(Desktop::new(cc))))) {
         crate::ui::die(&e.to_string());
     }
 }

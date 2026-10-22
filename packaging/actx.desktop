@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=actx
+Name=actX
 Comment=Sync and convert your agent conversations
 Exec=actx-gui
 Terminal=false

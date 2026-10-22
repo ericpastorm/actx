@@ -1,5 +1,10 @@
 # Desktop preview
 
+The **actX** desktop follows Pneuma's terminal style: black panels, square borders,
+JetBrains Mono typography and white/gray controls. The wordmark uses a white `act`
+and a red uppercase `X`; color in the interface indicates status and destructive actions.
+A standalone vector wordmark is available in [assets/actx.svg](../assets/actx.svg).
+
 The desktop is an optional native frontend using [egui/eframe](https://docs.rs/eframe/0.37.0/eframe/)
 and [rfd](https://docs.rs/rfd/0.17.2/rfd/) folder dialogs. It shares the CLI's configuration,
 Rust services, adapters and backups. It does not install a timer or run a web server.

@@ -1,4 +1,16 @@
-# CJK fallback font
+# Desktop fonts
+
+`JetBrainsMono-Regular.ttf` and `JetBrainsMono-Bold.ttf` are the same JetBrains Mono
+400/700 fonts used by Pneuma, converted losslessly from its bundled WOFF2 files with
+fonttools (`TTFont(path); font.flavor = None; font.save(target)`). The original project
+is [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono). Copyright and SIL Open
+Font License 1.1 are in [OFL-JetBrainsMono.txt](OFL-JetBrainsMono.txt).
+They are embedded only with the `gui` feature; no system font installation is required.
+
+Regular TTF SHA-256: `10fe96579e5ee5600b3361630b2b4b31c53b95a95e27133fb1613116aeac669d`.
+Bold TTF SHA-256: `d65e239f5136a2fc035b051f2739a5cce99bac5e5ddfb85fe065d480c038e4c5`.
+
+## CJK fallback
 
 `NotoSansSC-Actx.ttf.zst` is a static weight-400 subset of Noto Sans SC under the SIL Open Font
 License 1.1. Copyright and license are in [OFL-NotoSansSC.txt](OFL-NotoSansSC.txt).
