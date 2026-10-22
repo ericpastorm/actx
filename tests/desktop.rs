@@ -126,6 +126,7 @@ fn native_window_tracks_reviewed_changes_and_keeps_its_offline_catalog() {
         .command(ACTX)
         .arg("gui")
         .env("DISPLAY", std::env::var_os("DISPLAY").unwrap())
+        .envs(std::env::var_os("XAUTHORITY").map(|value| ("XAUTHORITY", value)))
         .env("LIBGL_ALWAYS_SOFTWARE", "1")
         .env_remove("WAYLAND_DISPLAY")
         .stdout(output.try_clone().unwrap())
