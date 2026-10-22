@@ -512,5 +512,7 @@
   "Shared folder unavailable. Check its location or connection.": "共享文件夹不可用。请检查其位置或连接。",
   "Details": "详细信息",
   "Add conversations": "添加对话",
-  "Enable the target harness in Settings before resuming": "继续前，请在设置中启用目标工具"
+  "Enable the target harness in Settings before resuming": "继续前，请在设置中启用目标工具",
+  "Compacted history repaired; the previous native copy was preserved": "已修复压缩后的历史记录；保留了原来的本地副本",
+  "Finish the current agent turn before synchronizing": "请等待代理完成当前轮次后再同步"
 }

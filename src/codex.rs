@@ -394,7 +394,14 @@ pub fn push(s: &Session, tmp: &Path) -> Result<Pushed> {
         .unwrap_or_default();
     let files = json!({"session": session, "name": src.file_name().unwrap_or_default().to_string_lossy(), "dir": dir});
     let updated = epoch(src);
-    let (file, seen) = complete_lines(src)?;
+    let (mut file, mut seen) = complete_lines(src)?;
+    if let Some(end) = completed_end(src)? {
+        if end == 0 {
+            return Err(crate::ctx::Error("The first agent turn is still in progress".into()));
+        }
+        file.set_limit(end);
+        seen = end;
+    }
     let weight = write_compressed(&tmp.join(&session), file)?;
     Ok(Pushed {
         files,
@@ -403,6 +410,34 @@ pub fn push(s: &Session, tmp: &Path) -> Result<Pushed> {
         seen,
         preview: render(&messages(&chunks(src)?.1), "codex"),
     })
+}
+
+/// Native task boundaries are authoritative. Imported/older rollouts without them keep
+/// their complete-line behavior. Never publish a partially generated native task.
+pub(crate) fn completed_end(path: &Path) -> Result<Option<u64>> {
+    let mut offset = 0;
+    let mut completed = 0;
+    let mut started = false;
+    for raw in BufReader::new(File::open(path)?).split(b'\n') {
+        let raw = raw?;
+        offset += raw.len() as u64 + 1;
+        let Ok(e) = serde_json::from_slice::<Value>(&raw) else {
+            continue;
+        };
+        if e["type"] != "event_msg" {
+            continue;
+        }
+        match e["payload"]["type"].as_str() {
+            Some("task_started") => started = true,
+            Some("task_complete") => {
+                completed = offset;
+                started = false;
+            }
+            Some("task_aborted") => started = true,
+            _ => {}
+        }
+    }
+    Ok(started.then_some(completed))
 }
 
 /// ~/.codex/sessions/<dir>, where `dir` (2026/10/16) may have been stored by a machine whose
@@ -672,5 +707,54 @@ mod tests {
                 "event_msg/task_complete",
             ]
         );
+    }
+}
+
+pub(crate) fn compaction_key(path: &Path) -> Result<Option<String>> {
+    type Cached = (u64, std::time::SystemTime, Option<String>);
+    static CACHE: OnceLock<std::sync::Mutex<HashMap<PathBuf, Cached>>> = OnceLock::new();
+    let metadata = path.metadata()?;
+    let stamp = (metadata.len(), metadata.modified()?);
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some((size, time, key)) = cache.lock().unwrap().get(path)
+        && (*size, *time) == stamp
+    {
+        return Ok(key.clone());
+    }
+    let mut key = None;
+    for raw in BufReader::new(File::open(path)?).split(b'\n') {
+        let raw = raw?;
+        if memchr::memmem::find(&raw, b"compacted").is_none() {
+            continue;
+        }
+        if let Ok(e) = serde_json::from_slice::<Value>(&raw)
+            && e["type"] == "compacted"
+        {
+            key = Some(crate::engine::digest(&raw));
+        }
+    }
+    cache
+        .lock()
+        .unwrap()
+        .insert(path.into(), (stamp.0, stamp.1, key.clone()));
+    Ok(key)
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+    #[test]
+    fn snapshot_stops_at_the_last_finished_task_and_preserves_the_live_file() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("native.jsonl");
+        let done = "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\"}}\n";
+        let live = "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\"}}\n{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[]}}\n";
+        std::fs::write(&p, format!("{done}{live}")).unwrap();
+        assert_eq!(completed_end(&p).unwrap(), Some(done.len() as u64));
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), format!("{done}{live}"));
+        std::fs::write(&p, live).unwrap();
+        assert_eq!(completed_end(&p).unwrap(), Some(0));
+        std::fs::write(&p, format!("{live}{done}")).unwrap();
+        assert_eq!(completed_end(&p).unwrap(), None);
     }
 }

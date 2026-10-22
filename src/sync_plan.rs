@@ -4,7 +4,7 @@ use crate::{
     commands::{self, Args},
     ctx::ctx,
     harness, inspection,
-    session::{Session, status},
+    session::Session,
     state::{self, State},
     store, tr, ui,
 };
@@ -16,7 +16,7 @@ pub fn native(local: &HashMap<String, Session>, remote: Vec<Session>, st: &State
         .into_iter()
         .map(|r| {
             let l = local.get(&r.key());
-            (status(l, Some(&r), st.base.get(&r.key()).copied()), r)
+            (st.status(l, Some(&r)), r)
         })
         .collect()
 }
@@ -249,6 +249,18 @@ pub fn prepare(remote: &[Session], locals: &HashMap<String, Session>, st: &State
                 _ => tr!("Local and shared copies match"),
             },
         );
+        if kind == "push"
+            && local.is_some_and(|s| {
+                s.harness == "codex"
+                    && s.src
+                        .as_ref()
+                        .is_some_and(|p| crate::codex::completed_end(p).ok().flatten().is_some())
+            })
+        {
+            op.kind = "skip";
+            op.reason_code = "turn_in_progress";
+            op.reason = tr!("Finish the current agent turn before synchronizing");
+        }
         if matches!(kind, "pull" | "new") {
             let destination = local
                 .filter(|s| Path::new(&s.path).is_dir())

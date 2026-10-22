@@ -43,6 +43,104 @@ fn confirmed(req: &Value, plan: &Value) -> Value {
 }
 
 #[test]
+fn content_baselines_detect_equal_size_edits_and_reject_stale_plans() {
+    let w = World::new();
+    let m = w.machine("fingerprints");
+    let folder = m.home.join("work");
+    std::fs::create_dir_all(&folder).unwrap();
+    let file = claude_session(
+        &m,
+        &folder,
+        &[("user", "hello"), ("assistant", "first")],
+        Some("Hashes"),
+    );
+    let key = format!("claude:{}", file.file_stem().unwrap().to_string_lossy());
+    let req = json!({"action":"add","ids":[key],"general":true});
+    let p = api(&m, req.clone());
+    assert_eq!(api(&m, confirm(&req, &p))["status"], "ok");
+    let original = std::fs::read_to_string(&file).unwrap();
+    let edited = original.replace("first", "other");
+    assert_eq!(original.len(), edited.len());
+    std::fs::write(&file, edited).unwrap();
+    let listing = api(&m, json!({"action":"list"}));
+    assert_eq!(
+        listing["data"]["conversations"][0]["copies"][0]["state"], "push",
+        "{listing}"
+    );
+    let request = json!({"action":"sync","ids":[key]});
+    let plan = api(&m, request.clone());
+    assert_eq!(plan["status"], "ok", "{plan}");
+    std::fs::write(&file, original.replace("first", "third")).unwrap();
+    let changed = api(&m, confirmed(&request, &plan));
+    assert_eq!(changed["status"], "decision_required", "{changed}");
+}
+
+#[test]
+fn a_codex_compaction_rebuilds_an_untouched_mirror_and_preserves_its_original() {
+    let line = |v: Value| format!("{v}\n");
+    let w = World::new();
+    let m = w.machine("compact");
+    let folder = m.home.join("work");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::create_dir_all(m.claude_dir()).unwrap();
+    m.actx(&[
+        "init",
+        m.store.to_str().unwrap(),
+        "--harnesses",
+        "codex,claude",
+        "--retention",
+        "never",
+    ]);
+    let sid = uuid::Uuid::new_v4().to_string();
+    let key = format!("codex:{sid}");
+    let path = m.codex_sessions().join(format!("2026/01/01/rollout-{sid}.jsonl"));
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let mut raw = line(json!({"type":"session_meta","payload":{"id":sid,"cwd":folder,"source":"cli"}}));
+    let message = |role: &str, text: &str| json!({"type":"message","role":role,"content":[{"type":if role=="user"{"input_text"}else{"output_text"},"text":text}]});
+    for (role, text) in [("user", "hello"), ("assistant", "previous response")] {
+        raw += &line(json!({"type":"response_item","timestamp":"2026-01-01T00:00:00Z","payload":message(role,text)}));
+    }
+    std::fs::write(&path, &raw).unwrap();
+    let closed = |p: &std::path::Path| {
+        std::fs::File::options()
+            .write(true)
+            .open(p)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(86400))
+            .unwrap();
+    };
+    closed(&path);
+    let req = json!({"action":"add","ids":[key],"general":true});
+    let p = api(&m, req.clone());
+    assert_eq!(api(&m, confirm(&req, &p))["status"], "ok");
+    let sync = json!({"action":"sync","ids":[key]});
+    let p = api(&m, sync.clone());
+    let r = api(&m, confirmed(&sync, &p));
+    assert_eq!(r["status"], "ok", "{r}");
+    let links = m.home.join(".local/state/actx/harness-links.json");
+    let before: Value = serde_json::from_slice(&std::fs::read(&links).unwrap()).unwrap();
+    let old = before["copies"][format!("{key}/claude")]["target"].as_str().unwrap();
+    let old_path = find(&m.claude_dir(), &format!("{}.jsonl", old.split_once(':').unwrap().1)).unwrap();
+    closed(&old_path);
+    let original = std::fs::read(&old_path).unwrap();
+    append(
+        &path,
+        &line(
+            json!({"type":"compacted","timestamp":"2026-01-02T00:00:00Z","payload":{"replacement_history":[message("user","summary"),message("assistant","current context")]}}),
+        ),
+    );
+    closed(&path);
+    let p = api(&m, sync.clone());
+    assert_eq!(p["status"], "ok", "{p}");
+    let r = api(&m, confirmed(&sync, &p));
+    assert_eq!(r["status"], "ok", "{r}");
+    let after: Value = serde_json::from_slice(&std::fs::read(&links).unwrap()).unwrap();
+    assert_ne!(after["copies"][format!("{key}/claude")]["target"], old);
+    assert_eq!(std::fs::read(&old_path).unwrap(), original);
+    assert!(after["retired"].as_array().unwrap().contains(&json!(old)));
+}
+
+#[test]
 fn services_sync_two_machines_and_convert_without_duplicates() {
     let w = World::new();
     let a = w.machine("desk");

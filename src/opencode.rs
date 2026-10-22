@@ -803,7 +803,7 @@ pub fn turns(exp: &Value) -> Vec<Turn> {
 }
 
 // Reconstruct the native export shape without starting the CLI just to inspect a conversation.
-pub(crate) fn read_turns(s: &Session) -> Result<(Vec<Turn>, Option<String>)> {
+pub(crate) fn read_export(s: &Session) -> Result<Value> {
     let con = db().ok_or_else(|| Error("Missing opencode database".into()))?;
     let transaction = con.unchecked_transaction()?;
     let mut messages = Vec::new();
@@ -839,7 +839,11 @@ pub(crate) fn read_turns(s: &Session) -> Result<(Vec<Turn>, Option<String>)> {
             messages.push(json!({"info": info, "parts": parts}));
         }
     }
-    let exp = json!({"messages": messages});
+    Ok(json!({"messages": messages}))
+}
+
+pub(crate) fn read_turns(s: &Session) -> Result<(Vec<Turn>, Option<String>)> {
+    let exp = read_export(s)?;
     Ok((turns(&exp), export_model(&exp).map(|m| m.model)))
 }
 

@@ -348,6 +348,7 @@ fn private(path: &Path) -> Result<()> {
 
 /// Write a stored conversation file to `dest` (atomically), with this machine's paths.
 pub fn install_file(r: &Session, dest: &Path, fix: Fix, work_folder: Option<&str>) -> Result<u64> {
+    let before = std::fs::read(dest).ok().map(|data| crate::engine::digest(&data));
     let tmp = dest.with_file_name(format!(
         ".{}.actx-tmp",
         dest.file_name().unwrap_or_default().to_string_lossy()
@@ -388,6 +389,11 @@ pub fn install_file(r: &Session, dest: &Path, fix: Fix, work_folder: Option<&str
         drop(out);
         private(&tmp)?;
         set_mtime(&tmp, r.meta().get("updated").and_then(Value::as_f64).unwrap_or(0.0))?;
+        if std::fs::read(dest).ok().map(|data| crate::engine::digest(&data)) != before {
+            return Err(crate::ctx::Error(
+                "Local history changed during download; the existing file was kept".into(),
+            ));
+        }
         std::fs::rename(&tmp, dest)?;
         Ok(())
     })();

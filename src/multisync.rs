@@ -3,7 +3,7 @@ use crate::{
     agents,
     ctx::{Error, Result, ctx},
     harness, profile,
-    session::{Session, status},
+    session::Session,
     state, store,
     turns::{self, Turn},
     ui,
@@ -82,12 +82,38 @@ mod tests {
         assert_eq!(updated.0[0].text, "after");
         assert!(!std::rc::Rc::ptr_eq(&first, &updated));
     }
+
+    #[test]
+    fn compaction_repairs_only_unchanged_mirrors_and_only_once_per_epoch() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(
+            &path,
+            "{\"type\":\"compacted\",\"payload\":{\"message\":\"summary\"}}\n",
+        )
+        .unwrap();
+        let mut source = Session::local("codex", "one".into(), String::new(), String::new(), 0., 0);
+        source.src = Some(path);
+        let mut link = Link {
+            source: source.key(),
+            target: "claude:two".into(),
+            a: vec![1],
+            b: vec![3],
+            epoch: None,
+        };
+        assert!(change(&link, &source, &[2], &[3]) == LinkChange::Refresh);
+        assert!(change(&link, &source, &[2], &[4]) == LinkChange::Edited);
+        link.epoch = epoch(&source);
+        assert!(change(&link, &source, &[2], &[3]) == LinkChange::Edited);
+    }
 }
 
 #[derive(Default, Serialize, Deserialize)]
 struct Links {
     #[serde(default)]
     copies: HashMap<String, Link>,
+    #[serde(default)]
+    retired: Vec<String>,
 }
 #[derive(Serialize, Deserialize)]
 struct Link {
@@ -95,6 +121,8 @@ struct Link {
     target: String,
     a: Vec<u64>,
     b: Vec<u64>,
+    #[serde(default)]
+    epoch: Option<String>,
 }
 #[derive(PartialEq, Eq)]
 enum LinkChange {
@@ -104,6 +132,24 @@ enum LinkChange {
     ToTarget,
     ToSource,
     Baselines,
+    Refresh,
+}
+fn epoch(source: &Session) -> Option<String> {
+    if source.harness != "codex" {
+        return None;
+    }
+    crate::codex::compaction_key(source.src.as_ref()?).ok().flatten()
+}
+fn change(link: &Link, source: &Session, a: &[u64], b: &[u64]) -> LinkChange {
+    let change = link_change(link, a, b);
+    if change == LinkChange::Edited
+        && b == link.b
+        && let Some(epoch) = epoch(source)
+        && Some(&epoch) != link.epoch.as_ref()
+    {
+        return LinkChange::Refresh;
+    }
+    change
 }
 fn link_change(link: &Link, a: &[u64], b: &[u64]) -> LinkChange {
     if a == link.a && b == link.b {
@@ -338,10 +384,7 @@ fn run_locked(root: &Path, args: &crate::commands::Args, config: &serde_json::Va
             };
             source.path = folder;
         }
-        if matches!(
-            status(Some(&source), Some(&r), st.base.get(&key).copied()),
-            "pull" | "conflict"
-        ) {
+        if matches!(st.status(Some(&source), Some(&r)), "pull" | "conflict") {
             continue;
         }
         if agents::in_use(&source) || agents::in_use_by_agent_now(&source) {
@@ -361,6 +404,17 @@ fn run_locked(root: &Path, args: &crate::commands::Args, config: &serde_json::Va
             continue;
         }
         let original_weight = source.weight;
+        if source.harness == "codex"
+            && source
+                .src
+                .as_ref()
+                .is_some_and(|p| crate::codex::completed_end(p).ok().flatten().is_some())
+        {
+            if !args.auto {
+                ui::warn("Source turn is still in progress; linked copies deferred");
+            }
+            continue;
+        }
         // Bound memory to one conversation family, even for a large shared library.
         let mut histories = Histories::default();
         // A late target can contribute new turns to the base. Visit the others again so they
@@ -392,8 +446,51 @@ fn run_locked(root: &Path, args: &crate::commands::Args, config: &serde_json::Va
                         let mirror_history = histories.get(&mirror)?;
                         let (b_turns, _) = mirror_history.as_ref();
                         let b = hashes(b_turns);
-                        let change = link_change(link, &a, &b);
+                        let change = change(link, &source, &a, &b);
                         match change {
+                            LinkChange::Refresh => {
+                                if agents::in_use(&mirror) || agents::in_use_by_agent_now(&mirror) {
+                                    return Err(Error(
+                                        "Destination is active; compacted history repair deferred".into(),
+                                    ));
+                                }
+                                let before = crate::integrity::fresh(&source)?;
+                                let retired = mirror.key();
+                                let copy = harness::get(target).write(
+                                    &turns::fit(
+                                        a_turns.clone(),
+                                        harness::get(source.harness).label(),
+                                        model.as_deref(),
+                                    ),
+                                    &source.path,
+                                    &source.title,
+                                    model.as_deref(),
+                                )?;
+                                if crate::integrity::fresh(&source)? != before {
+                                    return Err(Error(
+                                        "Source changed during repair; both native copies were kept".into(),
+                                    ));
+                                }
+                                let b = hashes(&histories.get(&copy)?.0);
+                                crate::catalog::detach(&key, &retired)?;
+                                links.retired.push(retired);
+                                links.copies.insert(
+                                    id.clone(),
+                                    Link {
+                                        source: key.clone(),
+                                        target: copy.key(),
+                                        a,
+                                        b,
+                                        epoch: epoch(&source),
+                                    },
+                                );
+                                sessions.insert(copy.key(), copy);
+                                save(&links)?;
+                                ui::ok(&crate::tr!(
+                                    "Compacted history repaired; the previous native copy was preserved"
+                                ));
+                                return Ok(());
+                            }
                             LinkChange::Unchanged => return Ok(()),
                             LinkChange::Edited => {
                                 return Err(Error(
@@ -424,6 +521,7 @@ fn run_locked(root: &Path, args: &crate::commands::Args, config: &serde_json::Va
                                 target: mirror.key(),
                                 a,
                                 b,
+                                epoch: epoch(&source),
                             },
                         );
                         sessions.insert(mirror.key(), mirror);
@@ -469,6 +567,7 @@ fn run_locked(root: &Path, args: &crate::commands::Args, config: &serde_json::Va
                                     target: copy.key(),
                                     a,
                                     b: hashes(b_turns),
+                                    epoch: epoch(&source),
                                 },
                             );
                             save(&links)?;
@@ -489,6 +588,7 @@ fn run_locked(root: &Path, args: &crate::commands::Args, config: &serde_json::Va
                                 target: copy.key(),
                                 a,
                                 b,
+                                epoch: epoch(&source),
                             },
                         );
                         sessions.insert(copy.key(), copy);
@@ -545,9 +645,7 @@ pub fn prune(root: &Path, args: &crate::commands::Args) {
         }
         let key = r.key();
         if let Some(l) = local.get(&key)
-            && (l.updated >= cutoff
-                || agents::in_use(l)
-                || !matches!(status(Some(l), Some(&r), st.base.get(&key).copied()), "synced"))
+            && (l.updated >= cutoff || agents::in_use(l) || !matches!(st.status(Some(l), Some(&r)), "synced"))
         {
             continue;
         }
@@ -711,7 +809,16 @@ pub fn views(local: &HashMap<String, Session>) -> Vec<LinkView> {
                         "push"
                     }
                 }
-                (Some(a), Some(b)) if !a.starts_with(&l.a) || !b.starts_with(&l.b) => "conflict",
+                (Some(a), Some(b)) if !a.starts_with(&l.a) || !b.starts_with(&l.b) => {
+                    if local
+                        .get(&l.source)
+                        .is_some_and(|s| change(&l, s, a, b) == LinkChange::Refresh)
+                    {
+                        "pull"
+                    } else {
+                        "conflict"
+                    }
+                }
                 (Some(a), Some(b)) => match (a != &l.a, b != &l.b) {
                     (false, false) => "synced",
                     (true, false) => "pull",
@@ -805,10 +912,7 @@ pub fn preview(
                         tr!("Create or update linked copies after downloading the source and choosing its folder"),
                     ));
                 };
-                if matches!(
-                    status(Some(source), Some(r), st.base.get(&key).copied()),
-                    "pull" | "conflict"
-                ) {
+                if matches!(st.status(Some(source), Some(r)), "pull" | "conflict") {
                     return Ok((
                         "check",
                         "source_sync_required",
@@ -845,12 +949,26 @@ pub fn preview(
                     };
                     let mirror_history = histories.get(mirror)?;
                     let b = hashes(&mirror_history.0);
-                    let (kind, delta, destination) = match link_change(link, &a, &b) {
+                    let (kind, delta, destination) = match change(link, source, &a, &b) {
                         LinkChange::Unchanged => {
                             return Ok((
                                 "synced",
                                 "linked_copies_match",
                                 tr!("Linked histories match their saved baselines"),
+                            ));
+                        }
+                        LinkChange::Refresh => {
+                            if agents::in_use(mirror) {
+                                return Ok((
+                                    "skip",
+                                    "destination_active",
+                                    tr!("Destination conversation open or recently active; update deferred"),
+                                ));
+                            }
+                            return Ok((
+                                "linked_refresh",
+                                "source_compacted",
+                                tr!("Compacted history repaired; the previous native copy was preserved"),
                             ));
                         }
                         LinkChange::Edited => {
@@ -994,9 +1112,7 @@ pub fn preview(
             let local = sessions.get(&key);
             if changing.contains(&key)
                 || local.is_some_and(|s| {
-                    s.updated >= cutoff
-                        || agents::in_use(s)
-                        || status(Some(s), Some(r), st.base.get(&key).copied()) != "synced"
+                    s.updated >= cutoff || agents::in_use(s) || st.status(Some(s), Some(r)) != "synced"
                 })
             {
                 op.kind = "check";

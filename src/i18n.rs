@@ -84,6 +84,14 @@ const HELP_ES: &str = "actx (agent context): mantiene tus conversaciones de Clau
 pub static ES: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| {
     HashMap::from([
         (
+            "Finish the current agent turn before synchronizing",
+            "Termina el turno actual del agente antes de sincronizar",
+        ),
+        (
+            "Compacted history repaired; the previous native copy was preserved",
+            "Historial compactado reparado; la copia nativa anterior se ha conservado",
+        ),
+        (
             "Enable the target harness in Settings before resuming",
             "Activa el harness de destino en Configuración antes de retomar",
         ),
@@ -1517,8 +1525,16 @@ mod tests {
         };
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut seen = 0;
-        for file in std::fs::read_dir(src).unwrap() {
-            let text = std::fs::read_to_string(file.unwrap().path()).unwrap();
+        let mut files = vec![src];
+        while let Some(file) = files.pop() {
+            if file.is_dir() {
+                files.extend(std::fs::read_dir(file).unwrap().map(|e| e.unwrap().path()));
+                continue;
+            }
+            if file.extension().and_then(|s| s.to_str()) != Some("rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(file).unwrap();
             let text: String = text
                 .lines()
                 .filter(|l| !l.trim_start().starts_with("//"))

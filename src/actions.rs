@@ -5,7 +5,7 @@ use crate::{
     ctx::{Result, ctx},
     harness, inspection,
     lock::{LockError, SharedLock},
-    session::{Session, status},
+    session::Session,
     state::{self, State},
     store, ui,
 };
@@ -130,8 +130,14 @@ pub(crate) fn error(command: &'static str, code: &'static str, message: impl Int
     Response::error(command, Diagnostic::new(code, message))
 }
 pub(crate) fn revision(s: &Session, remote: Option<&Session>) -> String {
-    // This is an optimistic concurrency token, not a claim of full content fingerprinting.
     let mut bytes = format!("{}:{}:{}:{}", s.key(), s.weight, s.updated.to_bits(), s.path).into_bytes();
+    match crate::integrity::fresh(s) {
+        Ok(hash) => bytes.extend_from_slice(hash.as_bytes()),
+        Err(e) => {
+            bytes.extend_from_slice(e.to_string().as_bytes());
+            crate::inspection::record_error(e.to_string());
+        }
+    }
     if let Some(src) = &s.src {
         stamp(src, &mut bytes);
     }
@@ -251,7 +257,7 @@ pub(crate) fn prepare(req: &Request) -> std::result::Result<Prepared, Diagnostic
         if matches!(req.action, Action::Add)
             && remote
                 .get(id)
-                .is_some_and(|r| matches!(status(Some(s), Some(r), st.base.get(id).copied()), "pull" | "conflict"))
+                .is_some_and(|r| matches!(st.status(Some(s), Some(r)), "pull" | "conflict"))
         {
             requirements.push("resolve_conflict");
         }

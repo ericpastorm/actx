@@ -2,7 +2,7 @@
 use crate::{
     ctx::{Result, ctx},
     harness, multisync, profile,
-    session::{Session, status},
+    session::Session,
     state, store, tr,
     ui::{self, Row},
 };
@@ -42,6 +42,21 @@ pub fn remember(source: &str, target: &str) -> Result<()> {
     let tmp = ctx().state_dir.join(format!("groups-{}.tmp", std::process::id()));
     std::fs::write(&tmp, serde_json::to_vec_pretty(&map)?)?;
     std::fs::rename(tmp, ctx().state_dir.join("conversation-groups.json"))?;
+    Ok(())
+}
+/// Retiring an unchanged conversion keeps its native data but removes its old group alias.
+pub fn detach(source: &str, target: &str) -> Result<()> {
+    std::fs::create_dir_all(&ctx().state_dir)?;
+    let lock = std::fs::File::create(ctx().state_dir.join("conversation-groups.lock"))?;
+    lock.lock()?;
+    let mut map = aliases();
+    if root(&map, target) == root(&map, source) {
+        map.remove(target);
+        let mut tmp = tempfile::NamedTempFile::new_in(&ctx().state_dir)?;
+        serde_json::to_writer_pretty(tmp.as_file_mut(), &map)?;
+        tmp.persist(ctx().state_dir.join("conversation-groups.json"))
+            .map_err(|e| crate::ctx::Error(e.to_string()))?;
+    }
     Ok(())
 }
 #[derive(Clone)]
@@ -262,7 +277,7 @@ impl Catalog {
                 remote: None,
                 state: "new",
             });
-            c.state = status(c.local.as_ref(), Some(&r), st.base.get(&r.key()).copied());
+            c.state = st.status(c.local.as_ref(), Some(&r));
             c.remote = Some(r);
         }
         let registered: HashSet<_> = views.iter().map(|v| v.target.clone()).collect();

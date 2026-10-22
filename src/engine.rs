@@ -248,6 +248,24 @@ pub fn sync(req: &Request) -> Response<Value> {
             json!({"session_id":op.session_id,"success":result.is_ok(),"message":result.err().map(|e|e.to_string())}),
         );
     }
+    for op in p
+        .operations
+        .iter()
+        .filter(|o| o.kind == "synced" && o.target_harness.is_none())
+    {
+        if let (Some(local), Some(remote)) = (
+            p.local.get(&op.session_id),
+            p.remote.iter().find(|r| r.key() == op.session_id),
+        ) {
+            p.state
+                .base
+                .entry(op.session_id.clone())
+                .or_insert((local.weight, remote.weight));
+            if let Err(e) = p.state.checkpoint(local, remote) {
+                diagnostics.push(Diagnostic::new("checkpoint_failed", e.to_string()));
+            }
+        }
+    }
     if let Err(e) = state::save(&mut p.state) {
         diagnostics.push(Diagnostic::new("state_save_failed", e.to_string()));
     }

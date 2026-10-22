@@ -288,6 +288,7 @@ pub fn push_one(
     remote: &HashMap<String, Session>,
 ) -> Result<Option<String>> {
     let _loading = crate::ui::loading(&tr!("Saving {title}", title = s.title));
+    let before = crate::integrity::fresh(s)?;
     let parent = root.join(project).join(s.harness);
     let dest = parent.join(&s.id);
     let pid = std::process::id();
@@ -297,6 +298,12 @@ pub fn push_one(
     std::fs::create_dir_all(&tmp)?;
     let result = (|| -> Result<(u64, u64)> {
         let pushed = crate::harness::get(s.harness).push(s, &tmp)?;
+        if crate::integrity::fresh(s)? != before {
+            return Err(crate::ctx::Error(
+                "Conversation changed while preparing the upload; retry after its turn finishes".into(),
+            ));
+        }
+        let content_hash = crate::integrity::records(s.harness, open_read(&tmp.join(jstr(&pushed.files, "session")))?)?;
         let identity = crate::catalog::identity(&s.key());
         let identity = if identity == s.key() {
             remote
@@ -313,16 +320,39 @@ pub fn push_one(
             "v": 2, "harness": s.harness, "id": s.id, "title": s.title,
             "path": s.path, "rel": crate::paths::rel_home(&s.path), "home": ctx().home_str(),
             "host": ctx().host, "pushed_at": now(), "updated": pushed.updated, "weight": pushed.weight,
-            "files": pushed.files, "git": if project == GENERAL { None } else { git },
+            "files": pushed.files, "git": if project == GENERAL { None } else { git }, "content_hash": content_hash,
         });
         std::fs::write(tmp.join("meta.json"), serde_json::to_string_pretty(&meta)?)?;
         std::fs::write(tmp.join("preview.txt"), &pushed.preview)?;
         if dest.exists() {
             std::fs::rename(&dest, &old)?;
         }
-        std::fs::rename(&tmp, &dest)?;
+        if let Err(e) = std::fs::rename(&tmp, &dest) {
+            if old.exists() && !dest.exists() {
+                let _ = std::fs::rename(&old, &dest);
+            }
+            return Err(e.into());
+        }
         let _ = std::fs::remove_dir_all(&old);
-        Ok((pushed.seen, pushed.weight))
+        let weights = (pushed.seen, pushed.weight);
+        st.content.insert(
+            s.key(),
+            crate::integrity::Baseline {
+                local: if s.harness == "opencode" {
+                    before.clone()
+                } else {
+                    content_hash.clone()
+                },
+                remote: content_hash,
+                stamp: if pushed.seen == s.weight {
+                    crate::integrity::stamp(s)
+                } else {
+                    String::new()
+                },
+                weights,
+            },
+        );
+        Ok(weights)
     })();
     let _ = std::fs::remove_dir_all(&tmp);
     st.base.insert(s.key(), result?);

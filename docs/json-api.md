@@ -180,3 +180,10 @@ exhaustive enum. Breaking structural changes will increment `schema_version`. Th
 
 New statuses: `decision_required` (exit 5) and `cancelled` (exit 0). Existing list/preview statuses
 and the older profile JSON format retain their behavior.
+
+Content baselines are stored alongside legacy size baselines. New uploads include a versioned
+content fingerprint; local fingerprints ignore auxiliary Claude/Codex records. Native task boundaries
+keep unfinished Codex turns out of published snapshots. Old state remains readable and gains content
+baselines on a successful sync; changes predating that first baseline cannot be inferred retroactively.
+A new Codex compaction can replace an unchanged linked conversion while preserving the old native
+copy as a retired local conversation. Independent target edits remain conflicts.

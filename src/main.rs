@@ -21,6 +21,7 @@ mod git;
 mod harness;
 mod i18n;
 mod inspection;
+mod integrity;
 mod lock;
 mod merge;
 mod multisync;

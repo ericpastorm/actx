@@ -18,6 +18,8 @@ pub struct State {
     pub base: BTreeMap<String, (u64, u64)>,
     /// origin repo ("git:<first commit>") or path ("path:<path>") → folder picked on this machine
     pub folders: BTreeMap<String, String>,
+    pub content: BTreeMap<String, crate::integrity::Baseline>,
+    read_content: BTreeMap<String, crate::integrity::Baseline>,
     /// as read, so that saving writes only what this run changed (another run may have saved meanwhile)
     read_base: BTreeMap<String, (u64, u64)>,
     read_folders: BTreeMap<String, String>,
@@ -46,6 +48,11 @@ fn read_file(file: &Path) -> State {
             }
         }
     }
+    st.content = raw
+        .get("content")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    st.read_content = st.content.clone();
     st.read_base = st.base.clone();
     st.read_folders = st.folders.clone();
     st
@@ -89,11 +96,13 @@ pub fn save(st: &mut State) -> Result<()> {
     let mut now = read_file(&ctx().state_file());
     apply_changes(&st.read_base, &st.base, &mut now.base);
     apply_changes(&st.read_folders, &st.folders, &mut now.folders);
+    apply_changes(&st.read_content, &st.content, &mut now.content);
     let base: serde_json::Map<String, Value> = now.base.iter().map(|(k, (a, b))| (k.clone(), json!([a, b]))).collect();
-    let data = json!({"base": base, "folders": now.folders});
+    let data = json!({"base": base, "folders": now.folders, "content": now.content});
     let tmp = ctx().state_dir.join(format!("state.tmp-{}", std::process::id()));
     std::fs::write(&tmp, serde_json::to_string_pretty(&data)?)?;
     std::fs::rename(tmp, ctx().state_file())?;
+    now.read_content = now.content.clone();
     now.read_base = now.base.clone();
     now.read_folders = now.folders.clone();
     *st = now;
@@ -230,6 +239,43 @@ pub fn backups() -> Vec<Backup> {
     }
     out.sort_by(|a, b| b.at.total_cmp(&a.at));
     out
+}
+
+impl State {
+    pub fn status(&self, local: Option<&Session>, remote: Option<&Session>) -> &'static str {
+        if let (Some(l), Some(r)) = (local, remote)
+            && let Some(b) = self
+                .content
+                .get(&r.key())
+                .filter(|b| Some(&b.weights) == self.base.get(&r.key()))
+        {
+            let here = if crate::integrity::stamp(l) == b.stamp {
+                Ok(b.local.clone())
+            } else {
+                crate::integrity::local(l)
+            };
+            let there = crate::integrity::fresh(r);
+            return match (here, there) {
+                (Ok(h), Ok(t)) => match (h != b.local, t != b.remote) {
+                    (false, false) => "synced",
+                    (true, false) => "push",
+                    (false, true) => "pull",
+                    (true, true) => "conflict",
+                },
+                _ => "unknown",
+            };
+        }
+        crate::session::status(local, remote, remote.and_then(|r| self.base.get(&r.key()).copied()))
+    }
+    pub fn checkpoint(&mut self, local: &Session, remote: &Session) -> Result<()> {
+        let weights = *self
+            .base
+            .get(&remote.key())
+            .ok_or_else(|| crate::ctx::Error("Missing sync baseline".into()))?;
+        self.content
+            .insert(remote.key(), crate::integrity::capture(local, remote, weights)?);
+        Ok(())
+    }
 }
 
 #[cfg(test)]

@@ -16,7 +16,7 @@ use crate::harness::{self, all_local};
 use crate::i18n;
 use crate::lock::{Holder, LockError, SharedLock};
 use crate::paths::short;
-use crate::session::{Session, badge, status};
+use crate::session::{Session, badge};
 use crate::state::{self, Backup, State};
 use crate::store::{
     GENERAL, collection_label, find_project, install_kind, modified, project_dirs, push_one, pushed_at, shared_binary,
@@ -487,9 +487,7 @@ pub fn add(args: Args) {
         .iter()
         .map(|s| {
             let tag = match remote.get(&s.key()) {
-                Some(r) if r.project.as_deref() == Some(name.as_str()) => {
-                    badge(status(Some(s), Some(r), st.base.get(&s.key()).copied()))
-                }
+                Some(r) if r.project.as_deref() == Some(name.as_str()) => badge(st.status(Some(s), Some(r))),
                 Some(r) => paint(
                     "35",
                     &clip(&pad(&tr!("in {project}", project = r.project_label()), 12), 12),
@@ -534,10 +532,7 @@ pub fn add(args: Args) {
     let mut todo = Vec::new();
     for s in chosen {
         if let Some(r) = remote.get(&s.key())
-            && matches!(
-                status(Some(s), Some(r), st.base.get(&s.key()).copied()),
-                "pull" | "conflict"
-            )
+            && matches!(st.status(Some(s), Some(r)), "pull" | "conflict")
         {
             let question = tr!(
                 "«{title}» has changes in the shared folder (from {host}) that aren't here. Overwrite them?",
@@ -861,7 +856,10 @@ pub fn sync(mut args: Args) {
         if state == "synced" {
             in_sync += 1;
             let l = l.expect("synced means it's here");
-            st.base.entry(r.key()).or_insert((l.weight, r.weight)).0 = l.weight; // as this version measures it
+            st.base.entry(r.key()).or_insert((l.weight, r.weight)).0 = l.weight;
+            if let Err(e) = st.checkpoint(l, &r) {
+                warn(&e.to_string());
+            } // as this version measures it
         } else {
             pending
                 .entry(r.project.clone().unwrap_or_default())
@@ -1342,6 +1340,12 @@ pub(crate) fn install_one(
     let fix = fixer_for(r.meta(), folder);
     let weight = harness::get(r.harness).install(r, local, folder, fix.as_ref())?;
     st.base.insert(r.key(), (weight, r.weight));
+    if let Some(installed) = harness::local_keys(&std::collections::HashSet::from([r.key()]))
+        .into_iter()
+        .find(|s| s.key() == r.key())
+    {
+        st.checkpoint(&installed, r)?;
+    }
     if r.is_general() {
         st.folders.insert(format!("session:{}", r.key()), folder.to_string());
     }
