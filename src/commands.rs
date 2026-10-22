@@ -250,7 +250,7 @@ fn store_candidates() -> (Vec<String>, Vec<String>) {
 
 pub fn init(args: Args) {
     if let Some(lang) = &args.lang {
-        i18n::set_spanish(lang == "es");
+        i18n::set_language(lang);
     }
     let folder = match args.folder {
         Some(f) => f,
@@ -312,8 +312,8 @@ pub fn init(args: Args) {
     let root = crate::paths::canonical(&root).unwrap_or(root);
     let mut config = ctx().config.clone();
     config["root"] = json!(root.to_string_lossy());
-    if let Some(lang) = &args.lang {
-        config["lang"] = json!(lang);
+    if args.lang.is_some() {
+        config["lang"] = json!(i18n::code());
     }
     if let Err(e) = crate::profile::configure(
         &mut config,
@@ -637,7 +637,7 @@ fn pick_sync_projects(pending: &BTreeMap<String, Vec<Pending>>, args: &Args) -> 
     order.sort_by(|a, b| is_here(b).cmp(&is_here(a)).then(newest(b).total_cmp(&newest(a))));
     let width = order
         .iter()
-        .map(|p| collection_label(p).chars().count())
+        .map(|p| crate::ui::visible_width(&collection_label(p)))
         .max()
         .unwrap_or(0);
     let rows: Vec<Row> = order

@@ -1,25 +1,63 @@
-//! Interface text: English is the source, Spanish translations below. `tr!` picks the language.
+//! English source text, Spanish and Simplified Chinese catalogs. `tr!` picks the language.
 
 use std::collections::HashMap;
 use std::sync::LazyLock;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 
-static SPANISH: AtomicBool = AtomicBool::new(false);
-
-pub fn set_spanish(on: bool) {
-    SPANISH.store(on, Ordering::Relaxed)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Language {
+    En,
+    Es,
+    ZhCn,
 }
-
-pub fn spanish() -> bool {
-    SPANISH.load(Ordering::Relaxed)
+static LANGUAGE: AtomicU8 = AtomicU8::new(0);
+pub fn parse(code: &str) -> Language {
+    let code = code.to_lowercase().replace('_', "-");
+    let code = code
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .split('@')
+        .next()
+        .unwrap_or_default();
+    if code == "es" || code.starts_with("es-") {
+        Language::Es
+    } else if code == "zh" || code == "zh-cn" || code == "zh-sg" || code.starts_with("zh-hans") {
+        Language::ZhCn
+    } else {
+        Language::En
+    }
 }
+pub fn set_language(code: &str) {
+    LANGUAGE.store(parse(code) as u8, Ordering::Relaxed);
+}
+pub fn language() -> Language {
+    match LANGUAGE.load(Ordering::Relaxed) {
+        1 => Language::Es,
+        2 => Language::ZhCn,
+        _ => Language::En,
+    }
+}
+pub fn code() -> &'static str {
+    match language() {
+        Language::En => "en",
+        Language::Es => "es",
+        Language::ZhCn => "zh-CN",
+    }
+}
+pub static ZH_CN: LazyLock<HashMap<String, String>> =
+    LazyLock::new(|| serde_json::from_str(include_str!("zh_cn.json")).expect("valid Chinese catalog"));
 
 /// `text` in the user's language, with `{name}` placeholders filled in.
 pub fn translate(text: &str, args: &[(&str, String)]) -> String {
-    let mut out = if spanish() {
-        ES.get(text).copied().unwrap_or(text)
-    } else {
-        text
+    let mut out = match language() {
+        Language::En => text,
+        Language::Es => ES.get(text).copied().unwrap_or(text),
+        Language::ZhCn => ZH_CN
+            .get(if text == HELP { "__help__" } else { text })
+            .map(String::as_str)
+            .unwrap_or(text),
     }
     .to_string();
     for (name, value) in args {
@@ -39,9 +77,9 @@ macro_rules! tr {
     };
 }
 
-pub const HELP: &str = "actx (agent context): keep your Claude Code, opencode and Codex conversations in sync across\nmachines, grouped into projects, through any shared folder (a NAS, Syncthing, ...).\n\n  actx setup [folder]  guided setup: shared folder, harnesses and retention\n  actx init [folder]   choose only the shared folder\n  actx profile        show your profile (use profile setup to configure it)\n  actx browse         compact conversation browser (also: plain actx)\n  actx resume         sync a conversation and choose where to open it\n  actx mk <project>    bind this project folder and choose conversations\n  actx add [project]   save conversations from this project (or General)\n  actx delete [project] delete selected saved conversations; keep local originals\n  actx sync [project]  push what you continued here and pull what's new (pick projects; --all)\n  actx sync --dry-run  preview operations without changing data\n  actx ls [project]    compact conversation list and harness states\n  actx rm <project>    delete a project and its saved copies; keep local originals\n  actx cv [project]    copy a conversation into another tool (Claude Code, opencode, Codex, Antigravity)\n  actx clean           review unused local conversations and quarantine them safely\n  actx clean purge     permanently delete chosen quarantine entries\n  actx auto [on|off]   sync by itself: when a conversation starts or ends, and every 10 min\n  actx restore         put back a conversation from a backup\n  actx doctor          check the shared folder, the tools and automatic sync\n  actx update          install the newest actx found in the shared folder\n\nConversations don't depend on folder paths. When pulling one, actx looks for its repo on this\nmachine by the first commit (other paths, clones and worktrees all work); otherwise it tries\nthe same path; otherwise it asks once and remembers. Run it inside the project and it goes\nthere. Paths inside the conversation are rewritten to this machine's.\n\nGeneral conversations ask for a destination folder on each machine and remember it per conversation.\nUse --general with sync, ls, cv or delete to select only General.\n\nIf you continued a conversation on two machines, sync lets you merge them: you keep this one\nplus a summary of what was done on the other, and the other version is kept separately.\n\nPickers: type to filter, TAB marks several, Ctrl-A all, Enter confirms, Esc quits.\nLanguage: English or Spanish, from your locale; set ACTX_LANG=en|es or `actx init --lang`.\n";
+pub const HELP: &str = "actx (agent context): keep your Claude Code, opencode and Codex conversations in sync across\nmachines, grouped into projects, through any shared folder (a NAS, Syncthing, ...).\n\n  actx setup [folder]  guided setup: shared folder, harnesses and retention\n  actx init [folder]   choose only the shared folder\n  actx profile        show your profile (use profile setup to configure it)\n  actx browse         compact conversation browser (also: plain actx)\n  actx resume         sync a conversation and choose where to open it\n  actx mk <project>    bind this project folder and choose conversations\n  actx add [project]   save conversations from this project (or General)\n  actx delete [project] delete selected saved conversations; keep local originals\n  actx sync [project]  push what you continued here and pull what's new (pick projects; --all)\n  actx sync --dry-run  preview operations without changing data\n  actx ls [project]    compact conversation list and harness states\n  actx rm <project>    delete a project and its saved copies; keep local originals\n  actx cv [project]    copy a conversation into another tool (Claude Code, opencode, Codex, Antigravity)\n  actx clean           review unused local conversations and quarantine them safely\n  actx clean purge     permanently delete chosen quarantine entries\n  actx auto [on|off]   sync by itself: when a conversation starts or ends, and every 10 min\n  actx restore         put back a conversation from a backup\n  actx doctor          check the shared folder, the tools and automatic sync\n  actx update          install the newest actx found in the shared folder\n\nConversations don't depend on folder paths. When pulling one, actx looks for its repo on this\nmachine by the first commit (other paths, clones and worktrees all work); otherwise it tries\nthe same path; otherwise it asks once and remembers. Run it inside the project and it goes\nthere. Paths inside the conversation are rewritten to this machine's.\n\nGeneral conversations ask for a destination folder on each machine and remember it per conversation.\nUse --general with sync, ls, cv or delete to select only General.\n\nIf you continued a conversation on two machines, sync lets you merge them: you keep this one\nplus a summary of what was done on the other, and the other version is kept separately.\n\nPickers: type to filter, TAB marks several, Ctrl-A all, Enter confirms, Esc quits.\nLanguage: English, Spanish or Simplified Chinese, from your locale; set ACTX_LANG=en|es|zh-CN or `actx init --lang`.\n";
 
-const HELP_ES: &str = "actx (agent context): mantiene tus conversaciones de Claude Code, opencode y Codex al día\nentre tus PCs, agrupadas en proyectos, a través de cualquier carpeta compartida (un NAS, Syncthing...).\n\n  actx setup [carpeta]  asistente: carpeta compartida, harnesses y retención\n  actx init [carpeta]   elige solo la carpeta compartida\n  actx profile         muestra tu perfil (profile setup para configurarlo)\n  actx browse          explorador compacto (también: actx a secas)\n  actx resume          sincroniza una conversación y elige dónde abrirla\n  actx mk <proyecto>    vincula esta carpeta y elige conversaciones\n  actx add [proyecto]   guarda conversaciones del proyecto actual (o en General)\n  actx delete [proyecto] borra conversaciones guardadas; conserva originales locales\n  actx sync [proyecto]  sube lo que has seguido aquí y baja lo nuevo (eliges proyectos; --all)\n  actx sync --dry-run   previsualiza las operaciones sin modificar datos\n  actx ls [proyecto]    lista compacta de conversaciones y sus harnesses\n  actx rm <proyecto>    borra un proyecto y sus copias guardadas; conserva originales locales\n  actx cv [proyecto]    copia una conversación a otro programa (Claude Code, opencode, Codex, Antigravity)\n  actx clean            revisa conversaciones locales sin usar y las pone a salvo en cuarentena\n  actx clean purge      borra definitivamente las entradas elegidas de la cuarentena\n  actx auto [on|off]    sincroniza solo: al abrir o cerrar una conversación y cada 10 min\n  actx restore          recupera una conversación de una copia de seguridad\n  actx doctor           comprueba la carpeta compartida, los programas y el modo auto\n  actx update           instala la última versión de actx que haya en la carpeta compartida\n\nLas conversaciones no dependen de la carpeta. Al bajar una, actx busca su repo en este PC por\nel primer commit (vale con otras rutas, clones y worktrees); si no, prueba la misma ruta; y si\ntampoco, te pregunta una vez y se acuerda. Si lo lanzas dentro del proyecto, va ahí. Las rutas\ndentro de la conversación se cambian a las de este PC.\n\nLas conversaciones de General preguntan la carpeta de destino en cada PC y la recuerdan por conversación.\nUsa --general con sync, ls, cv o delete para seleccionar solo General.\n\nSi seguiste una conversación en dos PCs, sync te deja mezclarlas: sigues con la de aquí más un\nresumen de lo hecho en el otro, y la otra versión queda aparte.\n\nSelectores: escribe para filtrar, TAB marca varias, Ctrl-A todas, Enter confirma, Esc sale.\nIdioma: inglés o español, según tu sistema; o ACTX_LANG=en|es, o `actx init --lang`.\n";
+const HELP_ES: &str = "actx (agent context): mantiene tus conversaciones de Claude Code, opencode y Codex al día\nentre tus PCs, agrupadas en proyectos, a través de cualquier carpeta compartida (un NAS, Syncthing...).\n\n  actx setup [carpeta]  asistente: carpeta compartida, harnesses y retención\n  actx init [carpeta]   elige solo la carpeta compartida\n  actx profile         muestra tu perfil (profile setup para configurarlo)\n  actx browse          explorador compacto (también: actx a secas)\n  actx resume          sincroniza una conversación y elige dónde abrirla\n  actx mk <proyecto>    vincula esta carpeta y elige conversaciones\n  actx add [proyecto]   guarda conversaciones del proyecto actual (o en General)\n  actx delete [proyecto] borra conversaciones guardadas; conserva originales locales\n  actx sync [proyecto]  sube lo que has seguido aquí y baja lo nuevo (eliges proyectos; --all)\n  actx sync --dry-run   previsualiza las operaciones sin modificar datos\n  actx ls [proyecto]    lista compacta de conversaciones y sus harnesses\n  actx rm <proyecto>    borra un proyecto y sus copias guardadas; conserva originales locales\n  actx cv [proyecto]    copia una conversación a otro programa (Claude Code, opencode, Codex, Antigravity)\n  actx clean            revisa conversaciones locales sin usar y las pone a salvo en cuarentena\n  actx clean purge      borra definitivamente las entradas elegidas de la cuarentena\n  actx auto [on|off]    sincroniza solo: al abrir o cerrar una conversación y cada 10 min\n  actx restore          recupera una conversación de una copia de seguridad\n  actx doctor           comprueba la carpeta compartida, los programas y el modo auto\n  actx update           instala la última versión de actx que haya en la carpeta compartida\n\nLas conversaciones no dependen de la carpeta. Al bajar una, actx busca su repo en este PC por\nel primer commit (vale con otras rutas, clones y worktrees); si no, prueba la misma ruta; y si\ntampoco, te pregunta una vez y se acuerda. Si lo lanzas dentro del proyecto, va ahí. Las rutas\ndentro de la conversación se cambian a las de este PC.\n\nLas conversaciones de General preguntan la carpeta de destino en cada PC y la recuerdan por conversación.\nUsa --general con sync, ls, cv o delete para seleccionar solo General.\n\nSi seguiste una conversación en dos PCs, sync te deja mezclarlas: sigues con la de aquí más un\nresumen de lo hecho en el otro, y la otra versión queda aparte.\n\nSelectores: escribe para filtrar, TAB marca varias, Ctrl-A todas, Enter confirma, Esc sale.\nIdioma: inglés, español o chino simplificado, según tu sistema; o ACTX_LANG=en|es|zh-CN, o `actx init --lang`.\n";
 
 pub static ES: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| {
     HashMap::from([
@@ -1355,6 +1393,30 @@ pub static ES: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn chinese_catalog_preserves_all_placeholders_and_locale_variants() {
+        let placeholder = regex::Regex::new(r"\{(\w+)\}").unwrap();
+        let names = |s: &str| {
+            placeholder
+                .captures_iter(s)
+                .map(|c| c[1].to_string())
+                .collect::<Vec<_>>()
+        };
+        for (key, _) in ES.iter().filter(|(k, _)| **k != HELP) {
+            let zh = ZH_CN.get(*key).unwrap_or_else(|| panic!("missing Chinese: {key}"));
+            let mut a = names(key);
+            let mut b = names(zh);
+            a.sort();
+            b.sort();
+            assert_eq!(a, b, "Chinese placeholders: {key}");
+            assert!(!zh.is_empty());
+        }
+        for locale in ["zh", "zh_CN.UTF-8", "zh-CN", "zh_Hans_CN", "zh_SG"] {
+            assert_eq!(parse(locale), Language::ZhCn);
+        }
+        assert_eq!(parse("zh_TW.UTF-8"), Language::En);
+        assert_eq!(parse("es_ES.UTF-8"), Language::Es);
+    }
 
     /// Every tr!("...") in the source has a Spanish translation, with the same placeholders.
     #[test]

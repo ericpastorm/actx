@@ -251,7 +251,7 @@ pub fn ask(question: &str, lower: bool) -> String {
 
 pub fn confirm(question: &str) -> bool {
     let answer = ask(&format!("{question} {}", tr!("[y/N]")), true);
-    matches!(answer.as_str(), "y" | "yes" | "s" | "si" | "sí")
+    matches!(answer.as_str(), "y" | "yes" | "s" | "si" | "sí" | "是" | "好" | "确认")
 }
 
 pub fn ago(ts: f64) -> String {
@@ -305,22 +305,31 @@ pub fn last_chars(s: &str, n: usize) -> &str {
     }
 }
 
-pub fn clip(title: &str, width: usize) -> String {
-    if title.chars().count() <= width {
-        title.to_string()
-    } else {
-        format!("{}…", take_chars(title, width - 1))
-    }
+pub fn visible_width(s: &str) -> usize {
+    unicode_width::UnicodeWidthStr::width(s)
 }
 
-/// Pad to `width` characters, counting characters rather than bytes.
-pub fn pad(s: &str, width: usize) -> String {
-    let len = s.chars().count();
-    if len >= width {
-        s.to_string()
-    } else {
-        format!("{s}{}", " ".repeat(width - len))
+pub fn clip(title: &str, width: usize) -> String {
+    if visible_width(title) <= width {
+        return title.to_string();
     }
+    if width == 0 {
+        return String::new();
+    }
+    let budget = width - 1;
+    let mut end = 0;
+    for (i, c) in title.char_indices() {
+        let next = i + c.len_utf8();
+        if visible_width(&title[..next]) > budget {
+            break;
+        }
+        end = next;
+    }
+    format!("{}…", &title[..end])
+}
+/// Pad by terminal columns, including wide CJK characters and combining marks.
+pub fn pad(s: &str, width: usize) -> String {
+    format!("{s}{}", " ".repeat(width.saturating_sub(visible_width(s))))
 }
 
 /// Last messages as plain text, for previews. msgs = (role, text).
@@ -569,5 +578,20 @@ pub fn show_preview(cache: &str, key: &str) {
         && let Ok(map) = serde_json::from_str::<HashMap<String, String>>(&text)
     {
         println!("{}", map.get(key).map(String::as_str).unwrap_or(""));
+    }
+}
+
+#[cfg(test)]
+mod width_tests {
+    use super::*;
+    #[test]
+    fn aligns_and_clips_cjk_by_visible_columns() {
+        assert_eq!(visible_width("中文abc"), 7);
+        assert_eq!(pad("中文", 6), "中文  ");
+        assert_eq!(clip("中文abc", 5), "中文…");
+        assert_eq!(clip("中文", 0), "");
+        assert_eq!(clip("中文", 1), "…");
+        assert_eq!(clip("e\u{301}cole", 3), "e\u{301}c…");
+        assert_eq!(visible_width(&clip("🙂中文", 4)), 3);
     }
 }

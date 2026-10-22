@@ -31,7 +31,7 @@ laptop$  claude --resume …     # carry on where you left off
   there.
 - **Safe.** Backups before overwriting (`actx restore`), atomic writes and a lock in the shared folder,
   and git warnings when the code is out of step (uncommitted changes, a different commit).
-- **One small binary.** Written in Rust; it only needs git and fzf. Linux, macOS and Windows. English and Spanish
+- **One small binary.** Written in Rust; it only needs git and fzf. Linux, macOS and Windows. English, Spanish and Simplified Chinese
   interface.
 
 ## Install
@@ -296,7 +296,7 @@ same moment.
 | Variable | Meaning |
 |---|---|
 | `ACTX_ROOT` | Shared folder (overrides the config). |
-| `ACTX_LANG` | `en` or `es` (default: from your locale). |
+| `ACTX_LANG` | `en`, `es` or `zh-CN` (default: from your locale). |
 | `ACTX_SCAN` | Where to look for repos, `:`-separated (default: your home). |
 | `ACTX_OPENCODE_ARGS` | Extra flags for opencode's export/import/delete, e.g. `--standalone` (2.x). |
 | `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `XDG_*` | Respected, like Claude Code, Codex and opencode do. |

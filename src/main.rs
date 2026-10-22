@@ -77,7 +77,7 @@ fn cli() -> Command {
                 .arg(
                     Arg::new("lang")
                         .long("lang")
-                        .value_parser(["en", "es"])
+                        .value_parser(["en", "es", "zh-CN", "zh"])
                         .help(tr!("interface language")),
                 ),
         )
@@ -297,7 +297,7 @@ fn main() {
         ui::show_preview(&argv[2], &argv[3]);
         return;
     }
-    i18n::set_spanish(language().to_lowercase().starts_with("es"));
+    i18n::set_language(&language());
     let matches = cli().get_matches();
     if matches.subcommand_name() == Some("api")
         || matches

@@ -296,7 +296,7 @@ real no puede ofrecer eso: evita sincronizar el mismo proyecto en dos PCs a la v
 | Variable | Para qué |
 |---|---|
 | `ACTX_ROOT` | Carpeta compartida (manda sobre la configuración). |
-| `ACTX_LANG` | `en` o `es` (por defecto: el idioma de tu sistema). |
+| `ACTX_LANG` | `en`, `es` o `zh-CN` (por defecto: el idioma de tu sistema). |
 | `ACTX_SCAN` | Dónde buscar repos, separados por `:` (por defecto: tu home). |
 | `ACTX_OPENCODE_ARGS` | Opciones extra para exportar/importar/borrar en opencode, p. ej. `--standalone` (2.x). |
 | `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `XDG_*` | Se respetan, igual que hacen Claude Code, Codex y opencode. |

@@ -166,3 +166,22 @@ fn rejects_unknown_fields_and_scope_mismatch_without_changes() {
     );
     assert!(!m.home.join(".local/state/actx").exists());
 }
+
+#[test]
+fn chinese_locale_help_and_json_work_without_changing_machine_codes() {
+    let w = World::new();
+    let mut m = w.machine("中文设备");
+    m.lang = "zh_CN.UTF-8".into();
+    let help = m.actx(&["--help"]);
+    assert!(help.contains("简体中文"), "{help}");
+    assert!(help.contains("actx sync"));
+    let init = m.actx(&["init", m.store.to_str().unwrap(), "--lang", "zh-CN"]);
+    assert!(init.contains("共享文件夹"), "{init}");
+    let config: Value =
+        serde_json::from_slice(&std::fs::read(m.home.join(".config/actx/config.json")).unwrap()).unwrap();
+    assert_eq!(config["lang"], "zh-CN");
+    let req = json!({"action":"list"});
+    let zh = api(&m, req.clone());
+    m.lang = "en".into();
+    assert_eq!(api(&m, req), zh);
+}

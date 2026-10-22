@@ -20,11 +20,11 @@ pub const OUT_MAX: usize = 1500;
 pub const CONV_BUDGET: usize = 400_000;
 
 pub static COPY_SUFFIX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r" \((?:from|de) (?:Claude Code|opencode|Codex|Antigravity)\)$").unwrap());
+    LazyLock::new(|| Regex::new(r" \((?:from|de|来自) (?:Claude Code|opencode|Codex|Antigravity)\)$").unwrap());
 pub static BRANCH_SUFFIX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r" \((?:branch from|rama de) [^)]*\)$").unwrap());
+    LazyLock::new(|| Regex::new(r" \((?:branch from|rama de|分支来自) [^)]*\)$").unwrap());
 static IMPORT_NOTE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^\[(?:Conversation imported from|Conversación importada de) [^\]\n]*\]\n?(?:\[(?:The first|Se han omitido) [^\]\n]*\]\n?)?\s*").unwrap()
+    Regex::new(r"^\[(?:Conversation imported from|Conversación importada de|从) [^\]\n]*\]\n?(?:\[(?:The first|Se han omitido|已省略前) [^\]\n]*\]\n?)?\s*").unwrap()
 });
 
 #[derive(Clone, Debug, PartialEq)]
@@ -214,6 +214,16 @@ pub fn fit_within(mut turns: Vec<Turn>, source_label: &str, model: Option<&str>,
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn recognizes_conversion_markers_across_languages() {
+        assert_eq!(COPY_SUFFIX.replace("标题 (来自 Claude Code)", ""), "标题");
+        assert_eq!(BRANCH_SUFFIX.replace("标题 (分支来自 laptop)", ""), "标题");
+        let note =
+            "[从 Claude Code 导入的对话。工具调用以文本显示。]\n[已省略前 2 条消息，因为超出了长度限制。]\n\nhello";
+        assert_eq!(IMPORT_NOTE.replace(note, ""), "hello");
+        let fitted = fit(vec![t("user", note, 1)], "opencode", None);
+        assert!(!fitted[0].text.contains("从 Claude Code"));
+    }
 
     fn t(who: &'static str, text: &str, ts: i64) -> Turn {
         Turn {

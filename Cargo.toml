@@ -22,6 +22,7 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.154", features = ["preserve_order"] }
 tar = "0.4.46"
 tempfile = "3.27.0"
+unicode-width = "0.2.2"
 uuid = { version = "1.28.0", features = ["v4", "v7"] }
 zstd = "0.14.2"
 
