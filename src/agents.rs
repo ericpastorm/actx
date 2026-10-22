@@ -19,6 +19,8 @@ struct Proc {
     cwd: String,
     /// files it has open (Linux only)
     files: Vec<PathBuf>,
+    interactive: bool,
+    session: Option<String>,
 }
 
 struct Running {
@@ -34,6 +36,9 @@ fn tool_of(program: &str) -> Option<&'static str> {
     let name = crate::paths::base_name(program).to_lowercase();
     let name = name.trim_start_matches('.').trim_end_matches(".js");
     let name = name.trim_end_matches(".exe").trim_end_matches(".cmd");
+    if ["codex-code-mode-host", "codex-linux-sandbox"].contains(&name) {
+        return None;
+    }
     if name == "agy" || name.starts_with("agy-") {
         return Some("antigravity");
     }
@@ -63,7 +68,7 @@ fn processes() -> Vec<Proc> {
         let dir = e.path();
         let cmdline = std::fs::read(dir.join("cmdline")).unwrap_or_default();
         let cmdline = String::from_utf8_lossy(&cmdline);
-        let args: Vec<&str> = cmdline.split('\0').take(2).collect();
+        let args: Vec<&str> = cmdline.split('\0').filter(|s| !s.is_empty()).collect();
         let Some(tool) = tool_of_command(&args) else { continue };
         let cwd = std::fs::read_link(dir.join("cwd")).unwrap_or_default();
         let files = std::fs::read_dir(dir.join("fd"))
@@ -76,6 +81,8 @@ fn processes() -> Vec<Proc> {
             pid,
             cwd: cwd.to_string_lossy().into_owned(),
             files,
+            interactive: interactive_tool(&args).is_some(),
+            session: selected_session(&args),
         });
     }
     out
@@ -132,11 +139,8 @@ fn win_args(command: &str) -> Vec<String> {
 
 /// Ignore known helper subcommands, but never mistake a prompt or option value for one.
 /// Unknown options are treated conservatively: an unrecognized process may still be writing.
-#[cfg(any(windows, test))]
-fn interactive_tool(args: &[&str]) -> Option<&'static str> {
-    let tool = tool_of_command(args)?;
-    let start = if tool_of(args[0]).is_some() { 1 } else { 2 };
-    let values: &[&str] = match tool {
+fn value_options(tool: &str) -> &'static [&'static str] {
+    match tool {
         "opencode" => &[
             "--prompt",
             "--agent",
@@ -184,7 +188,13 @@ fn interactive_tool(args: &[&str]) -> Option<&'static str> {
             "--input-format",
             "--settings",
         ],
-    };
+    }
+}
+
+fn interactive_tool(args: &[&str]) -> Option<&'static str> {
+    let tool = tool_of_command(args)?;
+    let start = if tool_of(args[0]).is_some() { 1 } else { 2 };
+    let values = value_options(tool);
     let flags: &[&str] = match tool {
         "opencode" => &["--standalone", "--auto", "--continue", "-c", "--print-logs"],
         "codex" => &[
@@ -233,6 +243,34 @@ fn interactive_tool(args: &[&str]) -> Option<&'static str> {
     Some(tool)
 }
 
+fn selected_session(args: &[&str]) -> Option<String> {
+    let tool = tool_of_command(args)?;
+    let mut i = if tool_of(args[0]).is_some() { 1 } else { 2 };
+    while let Some(&arg) = args.get(i) {
+        let session_flags: &[&str] = match tool {
+            "opencode" => &["--session", "-s"],
+            "claude" => &["--resume", "-r", "--session-id"],
+            _ => &[],
+        };
+        if session_flags.contains(&arg) || (tool == "codex" && arg == "resume") {
+            return args.get(i + 1).filter(|v| !v.starts_with('-')).map(|v| v.to_string());
+        }
+        for flag in session_flags {
+            if let Some(id) = arg.strip_prefix(&format!("{flag}=")) {
+                return Some(id.to_string());
+            }
+        }
+        if value_options(tool).contains(&arg) {
+            i += 2;
+        } else if arg == "--" || (!arg.starts_with('-') && tool != "opencode") {
+            return None;
+        } else {
+            i += 1;
+        }
+    }
+    None
+}
+
 #[cfg(windows)]
 fn processes() -> Vec<Proc> {
     // a folder per process isn't available here: such an agent counts as open in any folder
@@ -242,10 +280,12 @@ fn processes() -> Vec<Proc> {
             let all = win_args(&command);
             let args: Vec<&str> = all.iter().map(String::as_str).collect();
             Some(Proc {
-                tool: interactive_tool(&args)?,
+                tool: tool_of_command(&args)?,
                 pid,
                 cwd: String::new(),
                 files: Vec::new(),
+                interactive: interactive_tool(&args).is_some(),
+                session: selected_session(&args),
             })
         })
         .collect()
@@ -259,12 +299,14 @@ fn processes() -> Vec<Proc> {
         .lines()
         .filter_map(|l| {
             let (pid, command) = l.trim().split_once(' ')?;
-            let args: Vec<&str> = command.split_whitespace().take(2).collect();
+            let args: Vec<&str> = command.split_whitespace().collect();
             Some(Proc {
                 tool: tool_of_command(&args)?,
                 pid: pid.parse().ok()?,
                 cwd: String::new(),
                 files: Vec::new(),
+                interactive: interactive_tool(&args).is_some(),
+                session: selected_session(&args),
             })
         })
         .collect();
@@ -293,6 +335,7 @@ fn processes() -> Vec<Proc> {
 }
 
 fn scan_running() -> Running {
+    let _loading = crate::ui::loading(&crate::tr!("Checking running agents"));
     let procs = processes();
     let live: HashMap<u32, &Proc> = procs.iter().map(|p| (p.pid, p)).collect();
     let (mut claude_open, mut claude_registered) = (HashSet::new(), HashSet::new());
@@ -351,7 +394,19 @@ pub fn in_use_by_agent_now(s: &Session) -> bool {
 fn used_by(r: &Running, s: &Session) -> bool {
     // Windows can't tell which folder an agent runs in: Codex and opencode count as open in any
     let here = |p: &Proc| {
-        p.tool == s.harness && (p.cwd == s.path || (cfg!(windows) && p.cwd.is_empty() && s.harness != "claude"))
+        p.tool == s.harness
+            && p.interactive
+            && match &p.session {
+                Some(id) => id == &s.id,
+                None => {
+                    let known_rollout = p.tool == "codex"
+                        && p.files.iter().any(|f| {
+                            f.file_name()
+                                .is_some_and(|name| name.to_string_lossy().starts_with("rollout-"))
+                        });
+                    !known_rollout && (p.cwd == s.path || (cfg!(windows) && p.cwd.is_empty() && s.harness != "claude"))
+                }
+            }
     };
     match s.harness {
         // its own list says exactly which; older versions without one: any Claude in that folder
@@ -376,7 +431,7 @@ pub fn calling_agent() -> Option<u32> {
     for _ in 0..3 {
         let (ppid, args) = parent_and_args(pid)?;
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
-        if tool_of_command(&args).is_some() {
+        if interactive_tool(&args).is_some() {
             return Some(pid);
         }
         if ppid <= 1 {
@@ -395,7 +450,7 @@ fn parent_and_args(pid: u32) -> Option<(u32, Vec<String>)> {
     let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
     let args = String::from_utf8_lossy(&cmdline)
         .split('\0')
-        .take(2)
+        .filter(|s| !s.is_empty())
         .map(String::from)
         .collect();
     Some((ppid, args))
@@ -415,7 +470,7 @@ fn parent_and_args(pid: u32) -> Option<(u32, Vec<String>)> {
         .ok()?;
     let text = String::from_utf8_lossy(&out.stdout).into_owned();
     let (ppid, args) = text.trim().split_once(' ')?;
-    let args = args.split_whitespace().take(2).map(String::from).collect();
+    let args = args.split_whitespace().map(String::from).collect();
     Some((ppid.trim().parse().ok()?, args))
 }
 
@@ -435,6 +490,50 @@ pub fn summary() -> Vec<(&'static str, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn servers_only_occupy_the_rollouts_they_actually_have_open() {
+        let file = PathBuf::from("/sessions/rollout-one.jsonl");
+        let mut s = Session::local("codex", "one".into(), "t".into(), "/home/me".into(), 0.0, 1);
+        s.src = Some(file.clone());
+        let mut r = Running {
+            procs: vec![Proc {
+                tool: "codex",
+                pid: 1,
+                cwd: s.path.clone(),
+                files: vec![],
+                interactive: false,
+                session: None,
+            }],
+            claude_open: HashSet::new(),
+            claude_registered: HashSet::new(),
+            claude_lists: false,
+        };
+        assert!(!used_by(&r, &s));
+        r.procs[0].files.push(file);
+        assert!(used_by(&r, &s));
+        s.src = Some(PathBuf::from("/sessions/rollout-two.jsonl"));
+        assert!(!used_by(&r, &s));
+        r.procs[0].interactive = true;
+        assert!(!used_by(&r, &s), "an exact rollout must override the cwd fallback");
+        r.procs[0].files.clear();
+        r.procs[0].session = Some("other".into());
+        assert!(!used_by(&r, &s));
+        r.procs[0].session = Some(s.id.clone());
+        assert!(used_by(&r, &s));
+    }
+
+    #[test]
+    fn selected_session_skips_option_values_and_helpers() {
+        assert_eq!(selected_session(&["codex", "--model", "resume", "prompt"]), None);
+        assert_eq!(selected_session(&["opencode", "--prompt", "-s"]), None);
+        assert_eq!(
+            selected_session(&["codex", "-m", "model", "resume", "one"]),
+            Some("one".into())
+        );
+        assert_eq!(selected_session(&["opencode", "--session=one"]), Some("one".into()));
+        assert_eq!(tool_of("codex-code-mode-host"), None);
+    }
 
     #[test]
     fn recognizes_the_agents() {

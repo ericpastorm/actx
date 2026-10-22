@@ -103,7 +103,12 @@ pub fn git_label(g: &Value) -> String {
 pub fn local_repos(st: &State) -> &'static Vec<GitId> {
     static REPOS: OnceLock<Vec<GitId>> = OnceLock::new();
     REPOS.get_or_init(|| {
-        fn walk(d: &Path, depth: usize, found: &mut Vec<GitId>) {
+        let _loading = crate::ui::loading(&tr!("Finding the project on this machine"));
+        fn walk(d: &Path, depth: usize, found: &mut Vec<GitId>, seen: &mut std::collections::HashSet<PathBuf>) {
+            let Ok(real) = crate::paths::canonical(d) else { return };
+            if !seen.insert(real) {
+                return;
+            }
             let Ok(entries) = std::fs::read_dir(d) else { return };
             let entries: Vec<_> = entries.filter_map(|e| e.ok()).collect();
             if entries.iter().any(|e| e.file_name() == ".git") {
@@ -118,15 +123,16 @@ pub fn local_repos(st: &State) -> &'static Vec<GitId> {
             }
             for e in entries {
                 let name = e.file_name().to_string_lossy().into_owned();
-                let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                let is_dir = e.path().is_dir();
                 if is_dir && !name.starts_with('.') && !SKIP_DIRS.contains(&name.as_str()) {
-                    walk(&e.path(), depth - 1, found);
+                    walk(&e.path(), depth - 1, found, seen);
                 }
             }
         }
         let mut found = Vec::new();
+        let mut seen = std::collections::HashSet::new();
         for root in &ctx().scan_roots {
-            walk(root, SCAN_DEPTH, &mut found);
+            walk(root, SCAN_DEPTH, &mut found, &mut seen);
         }
         // where this machine has conversations, and where it was told to put them
         let mut used: Vec<String> = crate::harness::all_local().into_iter().map(|s| s.path).collect();
@@ -145,7 +151,7 @@ pub fn local_repos(st: &State) -> &'static Vec<GitId> {
         near.sort();
         near.dedup();
         for d in near {
-            walk(&d, 1, &mut found);
+            walk(&d, 1, &mut found, &mut seen);
         }
         found.sort_by(|a, b| a.top.cmp(&b.top));
         found.dedup_by(|a, b| a.top == b.top);
@@ -378,6 +384,9 @@ pub fn ask_local_folder(title: &str, path: &str, st: &mut State) -> Option<Strin
 
 /// Swaps the other machine's paths (its repo, or its folder, and its home) for this one's.
 pub fn fixer_for(meta: &Value, folder: &str) -> Option<PathFixer> {
+    if let Some(project) = meta.get("project_folder").filter(|p| p.is_object()) {
+        return fixer_for(project, folder);
+    }
     let home = ctx().home_str();
     match stored_git(meta).zip(git_id(folder)) {
         Some(((g, root), here)) if here.root.as_deref() == Some(root) => {

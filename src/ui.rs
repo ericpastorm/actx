@@ -3,7 +3,9 @@
 use std::collections::HashMap;
 use std::io::{IsTerminal, Read, Write};
 use std::process::Stdio;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, mpsc};
 
 use chrono::{Local, TimeZone};
 
@@ -40,24 +42,98 @@ pub fn harness_tag(h: &str) -> String {
 
 static AUTO: AtomicBool = AtomicBool::new(false);
 static PROGRESS: AtomicBool = AtomicBool::new(false);
+static LOADING_ID: AtomicU64 = AtomicU64::new(0);
+static PROGRESS_OUTPUT: Mutex<()> = Mutex::new(());
+static LOADING_STACK: Mutex<Vec<(u64, String)>> = Mutex::new(Vec::new());
+static LOOP_LOADING: Mutex<Option<Loading>> = Mutex::new(None);
+
+/// Animated while an operation blocks, including a single slow file or child process. A new
+/// phase supersedes the old one; prompts and pickers cancel it before taking over the terminal.
+pub struct Loading {
+    id: u64,
+    worker: Option<(mpsc::Sender<()>, std::thread::JoinHandle<()>)>,
+}
+pub fn loading(label: &str) -> Loading {
+    if !progress_allowed() {
+        return Loading { id: 0, worker: None };
+    }
+    let _output = PROGRESS_OUTPUT.lock().unwrap();
+    let id = LOADING_ID.fetch_add(1, Ordering::Relaxed) + 1;
+    LOADING_STACK.lock().unwrap().push((id, clip(label, 68)));
+    let (tx, rx) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        // Fast operations do not flash a loading line.
+        if rx.recv_timeout(std::time::Duration::from_millis(150)).is_ok() {
+            return;
+        }
+        let frames = ["|", "/", "-", "\\"];
+        let mut i = 0;
+        loop {
+            {
+                let _output = PROGRESS_OUTPUT.lock().unwrap();
+                let stack = LOADING_STACK.lock().unwrap();
+                if !stack.iter().any(|(entry, _)| *entry == id) {
+                    return;
+                }
+                if let Some((top, label)) = stack.last()
+                    && *top == id
+                {
+                    print!("\r\x1b[2K{} {}", frames[i % frames.len()], label);
+                    let _ = std::io::stdout().flush();
+                    PROGRESS.store(true, Ordering::Relaxed);
+                }
+            }
+            i += 1;
+            if rx.recv_timeout(std::time::Duration::from_millis(80)).is_ok() {
+                return;
+            }
+        }
+    });
+    Loading {
+        id,
+        worker: Some((tx, worker)),
+    }
+}
+impl Drop for Loading {
+    fn drop(&mut self) {
+        if let Some((stop, worker)) = self.worker.take() {
+            let _ = stop.send(());
+            let _ = worker.join();
+            let _output = PROGRESS_OUTPUT.lock().unwrap();
+            let mut stack = LOADING_STACK.lock().unwrap();
+            let active = stack.last().is_some_and(|(id, _)| *id == self.id);
+            stack.retain(|(id, _)| *id != self.id);
+            if active && PROGRESS.swap(false, Ordering::Relaxed) {
+                print!("\r\x1b[2K");
+                let _ = std::io::stdout().flush();
+            }
+        }
+    }
+}
+fn clear_progress() {
+    LOADING_STACK.lock().unwrap().clear();
+    if PROGRESS.swap(false, Ordering::Relaxed) {
+        print!("\r\x1b[2K");
+        let _ = std::io::stdout().flush();
+    }
+}
 
 /// A one-line spinner for slow loops. Only in a real terminal, never in scripts or auto runs.
 pub fn progress(index: usize, total: usize, label: &str) {
     if !progress_allowed() {
         return;
     }
-    const FRAMES: [&str; 4] = ["|", "/", "-", "\\"];
-    print!("\r{} {} {index}/{total}   ", FRAMES[index % FRAMES.len()], label);
-    let _ = std::io::stdout().flush();
-    PROGRESS.store(true, Ordering::Relaxed);
+    let previous = LOOP_LOADING.lock().unwrap().take();
+    drop(previous);
+    *LOOP_LOADING.lock().unwrap() = Some(loading(&format!("{label} {index}/{total}")));
 }
 
 /// Remove the spinner line before printing anything else.
 pub fn progress_clear() {
-    if PROGRESS.swap(false, Ordering::Relaxed) {
-        print!("\r{:78}\r", "");
-        let _ = std::io::stdout().flush();
-    }
+    let previous = LOOP_LOADING.lock().unwrap().take();
+    drop(previous);
+    let _output = PROGRESS_OUTPUT.lock().unwrap();
+    clear_progress();
 }
 
 fn progress_allowed() -> bool {

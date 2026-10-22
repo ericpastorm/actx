@@ -11,8 +11,9 @@ Trabajas en un sobremesa y un portátil. `git pull` te trae el código, pero la 
 agente (todo lo que aprendió sobre la tarea) se queda atrás. actx se la lleva:
 
 ```
-sobremesa$ actx mk tienda       # creas un proyecto vacío
-sobremesa$ actx add tienda      # eliges qué conversaciones guardar en él
+sobremesa$ cd ~/codigo/tienda
+sobremesa$ actx mk tienda       # vincula esta carpeta y eliges las conversaciones
+sobremesa$ actx add             # añade más conversaciones de este proyecto
 portátil$  actx sync            # las bajas, y subes lo que hayas seguido aquí
 portátil$  claude --resume …    # sigues donde lo dejaste
 ```
@@ -79,8 +80,8 @@ Y luego:
 
 | Comando | Qué hace |
 |---|---|
-| `actx mk <proyecto>` | Crea un proyecto vacío. |
-| `actx add [proyecto]` | Elige conversaciones locales para guardarlas en un proyecto existente. Si lo omites, se guardan en General. |
+| `actx mk <proyecto>` | Vincula la carpeta y el repositorio actuales y pregunta qué conversaciones sincronizar. |
+| `actx add [proyecto]` | Elige conversaciones del proyecto indicado o del vinculado a la carpeta actual. Fuera de un proyecto vinculado, se guardan en General. `--all` permite elegir las de otras carpetas; `--general` guarda explícitamente en General. |
 | `actx delete [proyecto]` | Elige copias compartidas para borrar, de todos los proyectos y General o solo del proyecto indicado. Conserva originales locales y proyectos, aunque queden vacíos. |
 | `actx sync --dry-run [proyecto]` | Previsualiza operaciones y decisiones pendientes sin modificar datos; admite `--all` y `--general`. |
 | `actx clean [advanced]` | Sugiere conversaciones locales sin usar (subagentes, pruebas, aperturas repetidas, muy cortas) y mueve las elegidas a una cuarentena recuperable. |
@@ -99,20 +100,29 @@ Y luego:
 
 Selectores: escribe para filtrar, <kbd>Tab</kbd> marca varias, <kbd>Ctrl</kbd>+<kbd>A</kbd> todas, <kbd>Enter</kbd> confirma.
 
-`mk` ahora solo crea proyectos: para guardar conversaciones, usa `add <proyecto>`.
-`delete` quita conversaciones concretas; `rm` borra el proyecto completo.
-Los proyectos que ya tenías guardados siguen funcionando sin migración.
+Ejecuta `mk` dentro de la carpeta del proyecto. actx recuerda su repositorio y carpeta local,
+te ofrece sus conversaciones (también las que mencionan su ruta) y guarda solo las que elijas.
+En otro equipo, `sync` encuentra el clon correspondiente aunque tenga otra ruta o nombre y crea
+las copias de los harnesses elegidos en el perfil de ese equipo. Si falta el destino o hay varias
+posibilidades, pregunta una vez y recuerda la respuesta. Sin terminal interactiva, `mk` crea el
+proyecto sin seleccionar conversaciones. Si lo creas desde tu carpeta personal, espera a las
+conversaciones que añadas para asociar la carpeta de trabajo.
+
+La vista normal lee solo las conversaciones mantenidas. `--all` abre el inventario local completo.
+Las operaciones que tardan muestran una animación de carga en terminales interactivas.
+`delete` quita conversaciones concretas; `rm` borra el proyecto completo. Los proyectos existentes
+siguen funcionando; ejecuta `mk <proyecto>` en su carpeta para guardar una vinculación explícita.
 
 ### Conversaciones generales
 
-`actx add` permite guardar conversaciones sin crear un proyecto de actx ni un repositorio Git.
+`actx add --general` permite guardar conversaciones sin crear un proyecto de actx ni un repositorio Git.
 Al sincronizar en otro equipo, actx pregunta la carpeta de destino de cada conversación nueva de
 General. Puedes elegir una carpeta existente o **otra carpeta** e introducir cualquier ruta.
 El destino se recuerda por conversación y equipo, aunque varias procedan de la misma carpeta.
 Si cancelas, queda pendiente; si la carpeta recordada desaparece, vuelve a preguntar.
 
 ```sh
-actx add                     # guarda conversaciones seleccionadas en General
+actx add --general           # guarda conversaciones seleccionadas en General
 actx sync --general          # descarga General y pregunta los destinos que falten
 actx ls --general            # muestra su estado
 actx delete --general        # borra copias compartidas; conserva originales locales

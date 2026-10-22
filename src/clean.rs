@@ -614,7 +614,11 @@ pub fn run(mut options: Options) {
     ui::say(&tr!(
         "Clean suggests local conversations only; shared, linked and open conversations are protected."
     ));
-    let candidates = match scan(&options) {
+    let scanned = {
+        let _loading = crate::ui::loading(&crate::tr!("Reviewing local conversations"));
+        scan(&options)
+    };
+    let candidates = match scanned {
         Ok(c) => c,
         Err(error) => {
             ui::fail(&error.to_string());

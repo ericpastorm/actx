@@ -100,6 +100,7 @@ fn digest(mut source: impl Read) -> Result<u64> {
     Ok(hash)
 }
 fn compressed(dir: &Path, path: &Path) -> Result<u64> {
+    let _loading = crate::ui::loading(&crate::tr!("Saving the recovery copy"));
     let target = dir.join("payload.zst");
     store::write_compressed(&target, std::fs::File::open(path)?)?;
     // Windows requires write access to flush a file's buffers.
@@ -143,6 +144,7 @@ fn unchanged(c: &Candidate) -> Result<()> {
     Ok(())
 }
 pub fn apply(selected: &[&Candidate]) -> Result<()> {
+    let _loading = crate::ui::loading(&tr!("Reviewing local conversations"));
     let _lock = lock()?;
     let mut count = 0;
     // One scan for the whole batch; each candidate is then rechecked against the shared
@@ -361,6 +363,7 @@ pub fn purge(id: Option<&str>) {
     };
     let (mut removed, mut failed) = (0, 0);
     for (dir, entry) in chosen {
+        let _loading = crate::ui::loading(&tr!("Deleting {title}", title = entry.title));
         let current = std::fs::read(dir.join("entry.json"))
             .ok()
             .and_then(|data| serde_json::from_slice::<Entry>(&data).ok());
@@ -388,6 +391,7 @@ pub fn purge(id: Option<&str>) {
 }
 
 pub fn restore(id: Option<&str>) {
+    let _loading = crate::ui::loading(&crate::tr!("Restoring the conversation"));
     let all = entries();
     if all.is_empty() {
         ui::say(&tr!("Quarantine is empty"));
@@ -423,6 +427,7 @@ pub fn restore(id: Option<&str>) {
         return;
     }
     let result = (|| -> Result<()> {
+        let _loading = crate::ui::loading(&crate::tr!("Restoring the conversation"));
         let _lock = lock()?;
         let saved: Entry = serde_json::from_slice(&std::fs::read(dir.join("entry.json"))?)?;
         if saved.status == "restored" {

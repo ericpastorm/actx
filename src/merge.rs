@@ -37,6 +37,7 @@ fn branch_summary(turns: &[Turn], host: &str) -> String {
 }
 
 pub fn merge_one(root: &Path, l: &mut Session, r: &Session, st: &mut State) -> Result<()> {
+    let _loading = crate::ui::loading(&crate::tr!("Saving {title}", title = l.title));
     let h = harness::get(l.harness);
     // This runs after taking the shared lock. Refresh rather than reuse an earlier process list,
     // and stop before creating a branch, making a backup, or changing either conversation.

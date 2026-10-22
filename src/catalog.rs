@@ -64,6 +64,7 @@ pub struct Conversation {
     pub title: String,
     pub copies: Vec<Copy>,
     pub updated: f64,
+    pub managed: bool,
 }
 impl Conversation {
     pub fn selection_key(&self) -> String {
@@ -115,7 +116,7 @@ impl Conversation {
                     "↑" => "push",
                     "↓" => "pull",
                     _ =>
-                        if self.copies.iter().any(|c| c.remote.is_some() || c.state == "synced") {
+                        if self.managed {
                             "synced"
                         } else {
                             "local"
@@ -202,14 +203,30 @@ pub struct Catalog {
 }
 impl Catalog {
     pub fn load() -> Self {
-        let locals: HashMap<_, _> = harness::CONVERTS
-            .iter()
-            .flat_map(|n| harness::get(n).local())
-            .map(|s| (s.key(), s))
-            .collect();
+        Self::load_for(false)
+    }
+    pub fn load_all() -> Self {
+        Self::load_for(true)
+    }
+    pub fn load_for(all: bool) -> Self {
+        let _loading = ui::loading(&if all {
+            tr!("Finding local conversations")
+        } else {
+            tr!("Loading synced conversations")
+        });
         let remotes = store::store_root(true)
             .map(|p| store::stored_sessions(&p))
             .unwrap_or_default();
+        let locals = if all {
+            harness::CONVERTS.iter().flat_map(|n| harness::get(n).local()).collect()
+        } else {
+            let mut keys: HashSet<_> = remotes.iter().map(Session::key).collect();
+            // Keep local maintained conversations available when the shared folder is offline.
+            keys.extend(state::load().base.into_keys());
+            multisync::extend_keys(&mut keys);
+            harness::local_keys(&keys)
+        };
+        let locals = locals.into_iter().map(|s| (s.key(), s)).collect();
         Self::build(locals, remotes)
     }
     fn build(locals: HashMap<String, Session>, remotes: Vec<Session>) -> Self {
@@ -268,6 +285,7 @@ impl Catalog {
                 title: s.title.clone(),
                 copies: Vec::new(),
                 updated: 0.0,
+                managed: false,
             });
             if key == id {
                 g.title = s.title.clone();
@@ -280,6 +298,7 @@ impl Catalog {
         }
         let mut groups: Vec<_> = groups.into_values().collect();
         for g in &mut groups {
+            g.managed = st.base.contains_key(&g.id) || g.copies.iter().any(|c| c.remote.is_some());
             if g.copies.iter().any(|c| c.remote.is_some()) {
                 let wanted = profile::harnesses(&g.id);
                 for c in &mut g.copies {
@@ -308,7 +327,7 @@ impl Catalog {
         self.groups
             .iter()
             .filter(|g| {
-                (args.all || g.copies.iter().any(|c| c.remote.is_some()))
+                (args.all || g.managed)
                     && (!args.general
                         || g.copies
                             .iter()
@@ -324,13 +343,6 @@ impl Catalog {
             .collect()
     }
 
-    /// Conversations actx is not syncing (no shared copy).
-    pub fn unmanaged(&self) -> usize {
-        self.groups
-            .iter()
-            .filter(|g| !g.copies.iter().any(|c| c.remote.is_some()))
-            .count()
-    }
     /// Replace physical picker rows with compact rows, preserving candidate eligibility/order.
     pub fn compact(&self, rows: Vec<Row>) -> (Vec<Row>, HashMap<String, String>) {
         let allowed: HashSet<_> = rows.iter().map(|r| r.key.clone()).collect();

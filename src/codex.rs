@@ -74,6 +74,7 @@ fn register(sid: &str) -> Result<()> {
     clean_request(sid, "thread/read").map(|_| ())
 }
 pub(crate) fn clean_request(sid: &str, method: &str) -> Result<Value> {
+    let _loading = crate::ui::loading(&tr!("Updating the Codex conversation index"));
     if !crate::ctx::which("codex") {
         return Err(crate::ctx::Error(
             "Codex CLI is required to archive or recover a conversation".into(),
@@ -219,12 +220,15 @@ fn rollouts() -> Vec<PathBuf> {
 }
 
 pub fn local() -> Vec<Session> {
-    local_impl(false)
+    local_impl(false, None)
 }
 pub fn clean_local() -> Vec<Session> {
-    local_impl(true)
+    local_impl(true, None)
 }
-fn local_impl(include_subagents: bool) -> Vec<Session> {
+pub fn local_keys(keys: &std::collections::HashSet<String>) -> Vec<Session> {
+    local_impl(false, Some(keys))
+}
+fn local_impl(include_subagents: bool, keys: Option<&std::collections::HashSet<String>>) -> Vec<Session> {
     let titles = titles();
     let mut out = Vec::new();
     for f in rollouts() {
@@ -232,6 +236,9 @@ fn local_impl(include_subagents: bool) -> Vec<Session> {
         let Some(id) = ROLLOUT_ID.captures(&name).map(|c| c[1].to_string()) else {
             continue;
         };
+        if keys.is_some_and(|keys| !keys.contains(&format!("codex:{id}"))) {
+            continue;
+        }
         let meta = session_meta(&f);
         if !meta.is_object() {
             continue;
@@ -406,7 +413,7 @@ fn sessions_dir(dir: &str) -> PathBuf {
     p
 }
 
-pub fn install(r: &Session, local: Option<&Session>, _folder: &str, fix: Fix) -> Result<u64> {
+pub fn install(r: &Session, local: Option<&Session>, folder: &str, fix: Fix) -> Result<u64> {
     let files = &r.meta()["files"];
     let dir = sessions_dir(jstr(files, "dir"));
     std::fs::create_dir_all(&dir)?;
@@ -415,7 +422,7 @@ pub fn install(r: &Session, local: Option<&Session>, _folder: &str, fix: Fix) ->
     if let (Some(l), Some(src)) = (local, &local_src) {
         backup(l, Copy::File(src), "pull")?;
     }
-    let size = crate::claude::install_file(r, &dest, fix)?;
+    let size = crate::claude::install_file(r, &dest, fix, Some(folder))?;
     if let Some(src) = local_src.filter(|s| *s != dest) {
         let _ = std::fs::remove_file(src);
     }

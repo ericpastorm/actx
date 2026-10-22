@@ -170,6 +170,9 @@ fn index() -> HashMap<String, (String, String, f64, u64)> {
 }
 
 pub fn local() -> Vec<Session> {
+    local_keys(None)
+}
+pub fn local_keys(keys: Option<&std::collections::HashSet<String>>) -> Vec<Session> {
     let index = index();
     let mut out = Vec::new();
     for e in std::fs::read_dir(home().join("conversations"))
@@ -182,6 +185,9 @@ pub fn local() -> Vec<Session> {
             continue;
         }
         let id = path.file_stem().unwrap_or_default().to_string_lossy().into_owned();
+        if keys.is_some_and(|keys| !keys.contains(&format!("antigravity:{id}"))) {
+            continue;
+        }
         let (title, mut folder, updated, steps) = index.get(&id).cloned().unwrap_or_default();
         let Ok(con) = open_ro(&path) else { continue };
         let count: i64 = con

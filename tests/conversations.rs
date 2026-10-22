@@ -53,6 +53,30 @@ fn place(m: &Machine, folder: &Path) -> String {
 }
 
 #[test]
+fn a_project_started_in_home_needs_a_real_destination_on_another_machine() {
+    let w = World::new();
+    let a = w.machine("desk");
+    let b = w.machine("laptop");
+    let (_, id) = conversation(&a, &a.home, "Started outside the repo");
+    save(&a, "Work", &id);
+    b.actx(&["sync", "Work", "--auto"]);
+    assert!(find(&b.claude_dir(), &format!("{id}.jsonl")).is_none());
+    let folder = b.home.join("actual-project");
+    std::fs::create_dir_all(&folder).unwrap();
+    let out = b.actx_with(
+        &["sync", "Work"],
+        Opts {
+            pick: Some(&["::other"]),
+            answer: Some(folder.to_str().unwrap()),
+            ..Default::default()
+        },
+    );
+    assert!(out.contains('↓'), "{out}");
+    assert_eq!(claude_transcript(&b, &id).2, [folder.to_string_lossy()]);
+    assert!(b.actx(&["sync", "Work", "--auto"]).is_empty());
+}
+
+#[test]
 fn mk_creates_only_a_project_and_add_requires_an_existing_project() {
     let w = World::new();
     let a = w.machine("desk");

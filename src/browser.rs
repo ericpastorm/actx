@@ -19,7 +19,7 @@ fn scoped<'a>(catalog: &'a Catalog, args: &Args) -> Vec<&'a Conversation> {
     catalog.scoped(args)
 }
 pub fn list(args: &Args) {
-    let catalog = Catalog::load();
+    let catalog = Catalog::load_for(args.all);
     let groups = scoped(&catalog, args);
     println!("{}", ui::bold(&crate::catalog::header()));
     for g in &groups {
@@ -41,18 +41,6 @@ pub fn list(args: &Args) {
     if groups.is_empty() {
         println!("{}", tr!("No conversations in this view"));
     }
-    if !args.all {
-        let hidden = catalog.unmanaged();
-        if hidden > 0 {
-            println!(
-                "{}",
-                ui::dim(&tr!(
-                    "{n} local conversations actx is not syncing are hidden; use --all to see them",
-                    n = hidden
-                ))
-            );
-        }
-    }
     if groups.iter().any(|g| {
         g.copies
             .iter()
@@ -68,7 +56,7 @@ pub fn browse(args: Args) {
         return;
     }
     loop {
-        let catalog = Catalog::load();
+        let catalog = Catalog::load_for(args.all);
         let groups = scoped(&catalog, &args);
         let rows: Vec<_> = groups.iter().map(|g| g.row()).collect();
         if rows.is_empty() {
@@ -109,7 +97,7 @@ pub fn browse(args: Args) {
 }
 
 pub fn resume(args: Args) {
-    let catalog = Catalog::load();
+    let catalog = Catalog::load_for(args.all);
     let rows: Vec<_> = scoped(&catalog, &args).iter().map(|g| g.row()).collect();
     if let Some(key) = ui::fzf(&rows, &tr!("Choose a conversation to open"), false, true).first()
         && let Some(g) = catalog.find(key)
@@ -192,7 +180,7 @@ fn open(group: &Conversation, print: bool) {
     {
         return;
     }
-    let refreshed = Catalog::load();
+    let refreshed = Catalog::load_for(shared.is_empty());
     let Some(group) = refreshed.find(&group.id) else {
         ui::warn(&tr!("Conversation no longer available"));
         return;

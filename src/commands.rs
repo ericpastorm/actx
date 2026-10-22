@@ -406,13 +406,38 @@ pub fn mk(args: Args) {
         }
         ok(&tr!("Project {name} created", name = bold(&name)));
     }
-    println!("{}", tr!("Next: {cmd}", cmd = bold(&format!("actx add {name}"))));
+    let here = cwd();
+    let folder = git_id(&here).map(|g| g.top).unwrap_or(here);
+    let mut st = state::load();
+    let bound = folder != ctx().home_str();
+    if bound {
+        if let Err(e) = crate::project::bind(&root, &name, &folder, &mut st) {
+            die(&e.to_string());
+        }
+        save(&mut st);
+        ok(&tr!("Work folder: {path}", path = short(&folder)));
+    }
+    drop(_lock);
+    if bound && (interactive() || ctx().pick.is_some()) {
+        add(Args {
+            project: Some(name),
+            ..Default::default()
+        });
+    } else {
+        println!("{}", tr!("Next: {cmd}", cmd = bold(&format!("actx add {name}"))));
+    }
 }
 
 /// Add local conversations to an existing project, or to General when no project is named.
 pub fn add(args: Args) {
     let root = store_root(false).expect("a shared folder");
-    let name = match args.project {
+    let mut st = state::load();
+    let requested = args.project.or_else(|| {
+        (!args.general)
+            .then(|| crate::project::current(&root, &st, &cwd()))
+            .flatten()
+    });
+    let name = match requested {
         Some(wanted) => find_project(&root, &wanted)
             .map(|p| p.file_name().unwrap_or_default().to_string_lossy().into_owned())
             .unwrap_or_else(|| {
@@ -425,10 +450,29 @@ pub fn add(args: Args) {
         None => GENERAL.to_string(),
     };
     let remote: HashMap<String, Session> = stored_sessions(&root).into_iter().map(|s| (s.key(), s)).collect();
-    let mut st = state::load();
+    let folder = if name == GENERAL {
+        None
+    } else {
+        crate::project::folder(&root, &name, &st)
+    };
     let linked = crate::multisync::linked_keys();
     let mut ranked = all_local();
     ranked.retain(|s| !linked.contains(&s.key()));
+    if !args.all
+        && let Some(folder) = &folder
+    {
+        ranked.retain(|s| crate::project::candidate(folder, s));
+    }
+    if ranked.is_empty() && folder.is_some() && !args.all {
+        println!(
+            "{}",
+            tr!(
+                "No conversations found in this project folder; use actx add {name} --all to choose from other folders",
+                name = name
+            )
+        );
+        return;
+    }
     if ranked.is_empty() {
         die(&tr!(
             "No Claude Code, opencode or Codex conversations found on this machine"
@@ -474,7 +518,7 @@ pub fn add(args: Args) {
             }
         })
         .collect();
-    let (rows, group_keys) = crate::catalog::Catalog::load().compact(rows);
+    let (rows, group_keys) = crate::catalog::Catalog::load_all().compact(rows);
     let header = tr!(
         "{name} · TAB marks several · Enter saves",
         name = collection_label(&name)
@@ -511,6 +555,20 @@ pub fn add(args: Args) {
     if name != GENERAL && find_project(&root, &name).is_none() {
         warn(&tr!("Project {name} doesn't exist", name = name));
         return;
+    }
+    if name != GENERAL && !crate::project::has_binding(&root, &name) {
+        let folders: std::collections::BTreeSet<_> = todo
+            .iter()
+            .map(|s| git_id(&s.path).map(|g| g.top).unwrap_or_else(|| s.path.clone()))
+            .filter(|p| !p.is_empty() && p != &ctx().home_str())
+            .collect();
+        if folders.len() == 1
+            && let Some(folder) = folders.first()
+            && let Err(e) = crate::project::bind(&root, &name, folder, &mut st)
+        {
+            fail(&e.to_string());
+            return;
+        }
     }
     let now = crate::store::pushed_now(&root);
     for s in todo {
@@ -692,12 +750,24 @@ fn may_replace(l: &Session, args: &Args) -> bool {
 /// General conversations have an explicit destination per conversation on this machine.
 /// Never infer it from the sender's cwd, Git repo, or another conversation's chosen folder.
 pub(crate) fn session_folder(r: &Session, st: &mut State, prompt: bool) -> Option<String> {
-    if !r.is_general() {
-        return resolve_folder(r.meta(), st).or_else(|| prompt.then(|| ask_folder(r.meta(), st)).flatten());
+    if !r.is_general()
+        && let Some(root) = crate::store::store_root(true)
+        && let Some(name) = r.project.as_deref()
+        && crate::project::has_binding(&root, name)
+    {
+        return crate::project::placement(&root, r, st, prompt);
     }
     let key = format!("session:{}", r.key());
     if let Some(folder) = st.folders.get(&key).filter(|p| Path::new(p).is_dir()) {
         return Some(folder.clone());
+    }
+    let meta = r.meta();
+    // A project label does not make a conversation started in $HOME belong to that repo.
+    // Ask for its work folder rather than silently installing every harness in $HOME.
+    let home_project =
+        !r.is_general() && !meta.get("git").is_some_and(Value::is_object) && jstr(meta, "path") == jstr(meta, "home");
+    if !r.is_general() && !home_project {
+        return resolve_folder(meta, st).or_else(|| prompt.then(|| ask_folder(meta, st)).flatten());
     }
     if !prompt {
         return None;
@@ -710,7 +780,7 @@ pub(crate) fn session_folder(r: &Session, st: &mut State, prompt: bool) -> Optio
     Some(folder)
 }
 
-pub fn sync(args: Args) {
+pub fn sync(mut args: Args) {
     if args.dry_run {
         crate::sync_plan::preview(&args);
         return;
@@ -730,6 +800,9 @@ pub fn sync(args: Args) {
     } else {
         store_root(false).expect("a shared folder")
     };
+    if !auto && !args.all && !args.general && args.project.is_none() {
+        args.project = crate::project::current(&root, &state::load(), &cwd());
+    }
     let explicit = auto || args.all || args.general || args.project.is_some();
     if explicit {
         crate::multisync::run(&root, &args);
@@ -739,6 +812,13 @@ pub fn sync(args: Args) {
         scopes: if explicit { vec![args.clone()] } else { Vec::new() },
     };
     let mut remote = stored_sessions(&root);
+    remote.retain(|r| {
+        (!args.general || r.is_general())
+            && args
+                .project
+                .as_ref()
+                .is_none_or(|p| r.project.as_ref().is_some_and(|name| name.eq_ignore_ascii_case(p)))
+    });
     if let Some(keys) = &args.keys {
         remote.retain(|r| keys.contains(&r.key()));
     }
@@ -755,7 +835,15 @@ pub fn sync(args: Args) {
         return;
     }
     let mut st = state::load();
-    let local = local_index();
+    let local = {
+        let _loading = crate::ui::loading(&tr!("Loading synced conversations"));
+        let mut keys: HashSet<_> = remote.iter().map(Session::key).collect();
+        crate::multisync::extend_keys(&mut keys);
+        harness::local_keys(&keys)
+            .into_iter()
+            .map(|s| (s.key(), s))
+            .collect::<HashMap<_, _>>()
+    };
     remote.sort_by(|a, b| a.project.cmp(&b.project).then(b.updated.total_cmp(&a.updated)));
     let mut pending: BTreeMap<String, Vec<Pending>> = BTreeMap::new();
     let mut in_sync = 0;
@@ -1051,6 +1139,7 @@ pub fn rm(args: Args) {
         st.base.remove(key);
         st.folders.remove(&format!("session:{key}"));
     }
+    st.folders.remove(&crate::project::key(&pname));
     save(&mut st);
     ok(&tr!("Project {name} deleted", name = pname));
 }
@@ -1185,6 +1274,7 @@ fn pick_target(chosen: &[&Session]) -> Option<&'static str> {
 
 /// Create a copy of s in another tool and return it. The original is left untouched.
 fn convert_one(s: &Session, target: &str, st: &mut State) -> crate::ctx::Result<Session> {
+    let _loading = crate::ui::loading(&tr!("Syncing {title} to {tool}", title = s.title, tool = target));
     use crate::ctx::Error;
     let source = harness::get(s.harness);
     let (folder, (turns, model)) = if let Some(meta) = &s.meta {
@@ -1254,7 +1344,7 @@ pub fn cv(args: Args) {
             .filter(|(k, _)| !have.contains(*k))
             .map(|(_, r)| r.clone()),
     );
-    let catalog = crate::catalog::Catalog::load();
+    let catalog = crate::catalog::Catalog::load_all();
     let scope = args.general.then_some(GENERAL.to_string()).or(args.project);
     if let Some(name) = &scope {
         let name = name.to_lowercase();
@@ -1549,6 +1639,7 @@ fn backup_title(b: &Backup, local: &HashMap<String, Session>) -> String {
 
 /// Put a backed-up conversation back. Returns its folder.
 fn restore_one(b: &Backup, current: Option<&Session>) -> crate::ctx::Result<String> {
+    let _loading = crate::ui::loading(&tr!("Restoring the conversation"));
     use crate::ctx::Error;
     use crate::state::{Copy, backup};
     if let Some(c) = current

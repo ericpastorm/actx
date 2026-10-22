@@ -22,6 +22,7 @@ mod opencode;
 mod paths;
 mod pb;
 mod profile;
+mod project;
 mod quarantine;
 mod session;
 mod state;
@@ -129,12 +130,17 @@ fn cli() -> Command {
                 ),
         ))
         .subcommand(clean::command())
-        .subcommand(Command::new("mk").about(tr!("create an empty project")).arg(project()))
+        .subcommand(
+            Command::new("mk")
+                .about(tr!("create a project here and choose conversations"))
+                .arg(project()),
+        )
         .subcommand(
             Command::new("add")
                 .about(tr!("save conversations in a project, or in General when omitted"))
                 .arg(project())
-                .arg(general()),
+                .arg(general())
+                .arg(show_all()),
         )
         .subcommand(
             Command::new("delete")
@@ -277,6 +283,15 @@ fn main() {
     i18n::set_spanish(language().to_lowercase().starts_with("es"));
     let matches = cli().get_matches();
     let get = |m: &clap::ArgMatches, name: &str| m.try_get_one::<String>(name).ok().flatten().cloned();
+    let _loading = if matches.subcommand_name() != Some("hook")
+        && !matches
+            .subcommand()
+            .is_some_and(|(name, m)| name == "sync" && m.get_flag("auto"))
+    {
+        Some(ui::loading(&tr!("Working")))
+    } else {
+        None
+    };
     match matches.subcommand() {
         Some((name @ ("init" | "setup"), m)) => commands::init(Args {
             wizard: name == "setup",
@@ -299,6 +314,7 @@ fn main() {
             ..Default::default()
         }),
         Some(("add", m)) => commands::add(Args {
+            all: m.get_flag("all"),
             project: get(m, "project"),
             general: m.get_flag("general"),
             ..Default::default()

@@ -14,6 +14,7 @@ pub struct Ctx {
     pub config_file: PathBuf,
     pub config: Value,
     pub state_dir: PathBuf,
+    pub cache_dir: PathBuf,
     pub claude_projects: PathBuf,
     pub opencode_db: PathBuf,
     pub codex_home: PathBuf,
@@ -67,6 +68,7 @@ impl Ctx {
             config_file,
             config,
             state_dir: xdg("XDG_STATE_HOME", ".local/state").join("actx"),
+            cache_dir: xdg("XDG_CACHE_HOME", ".cache").join("actx"),
             claude_projects: env("CLAUDE_CONFIG_DIR")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| home.join(".claude"))

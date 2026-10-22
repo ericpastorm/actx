@@ -220,6 +220,9 @@ fn epoch(t: std::time::SystemTime) -> f64 {
 }
 
 pub fn local() -> Vec<Session> {
+    local_keys(None)
+}
+pub fn local_keys(keys: Option<&std::collections::HashSet<String>>) -> Vec<Session> {
     let mut out = Vec::new();
     let Ok(dirs) = std::fs::read_dir(&ctx().claude_projects) else {
         return out;
@@ -231,6 +234,10 @@ pub fn local() -> Vec<Session> {
         let Ok(files) = std::fs::read_dir(&pdir) else { continue };
         for f in files.filter_map(|e| e.ok()).map(|e| e.path()) {
             if f.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                continue;
+            }
+            let id = f.file_stem().unwrap_or_default().to_string_lossy().into_owned();
+            if keys.is_some_and(|keys| !keys.contains(&format!("claude:{id}"))) {
                 continue;
             }
             let (Ok(meta), Ok((head, tail))) = (f.metadata(), chunks(&f)) else {
@@ -340,7 +347,7 @@ fn private(path: &Path) -> Result<()> {
 }
 
 /// Write a stored conversation file to `dest` (atomically), with this machine's paths.
-pub fn install_file(r: &Session, dest: &Path, fix: Fix) -> Result<u64> {
+pub fn install_file(r: &Session, dest: &Path, fix: Fix, work_folder: Option<&str>) -> Result<u64> {
     let tmp = dest.with_file_name(format!(
         ".{}.actx-tmp",
         dest.file_name().unwrap_or_default().to_string_lossy()
@@ -348,14 +355,31 @@ pub fn install_file(r: &Session, dest: &Path, fix: Fix) -> Result<u64> {
     let result = (|| -> Result<()> {
         let mut out = io::BufWriter::new(File::create(&tmp)?);
         let mut reader = open_read(&r.stored_file(None))?;
-        match fix {
-            None => {
+        let origin = serde_json::to_vec(&r.meta()["path"])?;
+        let origin: Value = serde_json::from_slice(&apply(fix, &origin))?;
+        match (fix, work_folder) {
+            (None, None) => {
                 io::copy(&mut reader, &mut out)?;
             }
-            Some(_) => {
+            _ => {
                 let mut line = Vec::new();
                 while io::BufRead::read_until(&mut reader, b'\n', &mut line)? > 0 {
-                    out.write_all(&apply(fix, &line))?;
+                    let mut data = apply(fix, &line);
+                    if let Some(folder) = work_folder
+                        && memchr::memmem::find(&data, b"\"cwd\"").is_some()
+                        && let Ok(mut entry) = serde_json::from_slice::<Value>(&data)
+                    {
+                        if r.harness == "codex"
+                            && matches!(crate::ctx::jstr(&entry, "type"), "session_meta" | "turn_context")
+                        {
+                            entry["payload"]["cwd"] = serde_json::json!(folder);
+                            data = jsonl(&entry).into_bytes();
+                        } else if r.harness == "claude" && entry.get("cwd").is_some_and(|cwd| cwd == &origin) {
+                            entry["cwd"] = serde_json::json!(folder);
+                            data = jsonl(&entry).into_bytes();
+                        }
+                    }
+                    out.write_all(&data)?;
                     line.clear();
                 }
             }
@@ -373,6 +397,7 @@ pub fn install_file(r: &Session, dest: &Path, fix: Fix) -> Result<u64> {
 }
 
 pub fn install(r: &Session, local: Option<&Session>, folder: &str, fix: Fix) -> Result<u64> {
+    let _loading = crate::ui::loading(&crate::tr!("Installing {title}", title = r.title));
     let tdir = ctx().claude_projects.join(encode_claude(folder));
     std::fs::create_dir_all(&tdir)?;
     let dest = tdir.join(format!("{}.jsonl", r.id));
@@ -380,7 +405,13 @@ pub fn install(r: &Session, local: Option<&Session>, folder: &str, fix: Fix) -> 
     if let (Some(l), Some(src)) = (local, &local_src) {
         backup(l, Copy::File(src), "pull")?;
     }
-    install_file(r, &dest, fix)?;
+    let project = r.meta().get("project_folder");
+    let outside = project.is_some_and(|project| {
+        let source = crate::paths::slashed(crate::ctx::jstr(r.meta(), "path"));
+        let project = crate::paths::slashed(crate::ctx::jstr(project, "path"));
+        source != project && !source.starts_with(&format!("{project}/"))
+    });
+    install_file(r, &dest, fix, outside.then_some(folder))?;
     if let Some(src) = local_src.filter(|s| *s != dest) {
         let _ = std::fs::remove_file(src); // it lived under another folder; it has a backup
     }

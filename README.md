@@ -10,8 +10,9 @@ You work on a desktop and a laptop. `git pull` brings the code, but the conversa
 agent (everything it learned about the task) stays behind. actx brings it along:
 
 ```
-desktop$ actx mk shop          # create an empty project
-desktop$ actx add shop         # pick the conversations to save in it
+desktop$ cd ~/code/shop
+desktop$ actx mk shop          # bind this folder and pick conversations to sync
+desktop$ actx add              # add more conversations from this project
 laptop$  actx sync             # pull them, and push whatever you continued here
 laptop$  claude --resume …     # carry on where you left off
 ```
@@ -78,8 +79,8 @@ Then:
 
 | Command | What it does |
 |---|---|
-| `actx mk <project>` | Create an empty project. |
-| `actx add [project]` | Pick local conversations to save in an existing project. Without a project, save them in General. |
+| `actx mk <project>` | Bind the current work folder and repository, then choose its conversations interactively. |
+| `actx add [project]` | Pick conversations from the named project or the project of the current folder. Outside a bound project, save in General. `--all` also offers conversations from other folders; `--general` explicitly saves to General. |
 | `actx delete [project]` | Pick shared copies to delete, across all projects and General or only the named project. Keeps local originals and projects, even when empty. |
 | `actx sync --dry-run [project]` | Preview operations and pending decisions without modifying data; supports `--all` and `--general`. |
 | `actx clean [advanced]` | Suggest unused local conversations (subagents, tests, repeated openings, very short ones) and move the ones you pick to recoverable quarantine. |
@@ -98,13 +99,22 @@ Then:
 
 Pickers: type to filter, <kbd>Tab</kbd> marks several, <kbd>Ctrl</kbd>+<kbd>A</kbd> all, <kbd>Enter</kbd> confirms.
 
-`mk` now only creates projects; use `add <project>` where you previously used `mk` to save
-conversations. Use `delete` to remove individual shared copies; `rm` now deletes a whole project.
-Existing saved projects keep working without migration.
+Run `mk` inside the project folder. actx remembers its Git identity and local folder; it offers
+conversations from that repository (including sessions that mention its path), and saves only
+what you select. On another machine, `sync` finds the matching clone even when its path or folder
+name differs, then creates the harness copies selected in that machine's profile. If the destination
+is ambiguous or missing, it asks once and remembers the answer. Running `mk` without a terminal
+creates the project without selecting conversations. Creating it from your home folder leaves
+placement to the conversations you add, rather than binding all your projects to home.
+
+The normal browser reads only maintained conversations. Use `--all` for the full local inventory.
+Blocking operations show an animated loading indicator in interactive terminals.
+`delete` removes selected shared conversations; `rm` removes the whole actx project. Existing
+projects remain usable; run `mk <project>` inside their work folder to record an explicit binding.
 
 ### General conversations
 
-Run `actx add` to save selected conversations without creating an actx project or a Git repository.
+Run `actx add --general` to save selected conversations without creating an actx project or a Git repository.
 On another machine, `actx sync` asks for a destination folder for each new General conversation.
 Choose an existing folder (including **other folder** to type any path); actx remembers it separately
 for each conversation on that machine, even when several came from the same original folder.
@@ -113,7 +123,7 @@ Cancel to leave it pending. If a remembered folder no longer exists, sync asks a
 Use `--general` with `sync`, `ls`, `cv` or `delete` to select only General. For example:
 
 ```sh
-actx add                     # save selected local conversations in General
+actx add --general           # save selected local conversations in General
 actx sync --general          # download General conversations; choose destinations when needed
 actx ls --general            # see their state
 actx delete --general        # select shared copies to remove; keep local originals

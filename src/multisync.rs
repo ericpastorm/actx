@@ -35,6 +35,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn browser_cache_is_invalidated_by_native_file_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let line =
+            |text: &str| format!("{{\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":\"{text}\"}}}}\n");
+        std::fs::write(&path, line("before")).unwrap();
+        let mut s = Session::local("claude", "one".into(), String::new(), String::new(), 0.0, 0);
+        s.src = Some(path.clone());
+        let mut cache = ViewCache::default();
+        let mut dirty = false;
+        let first = cache.get(&s, &mut dirty).unwrap();
+        assert!(dirty);
+        dirty = false;
+        assert_eq!(cache.get(&s, &mut dirty).unwrap(), first);
+        assert!(!dirty);
+        std::fs::write(&path, line("edited")).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(2))
+            .unwrap();
+        assert_ne!(cache.get(&s, &mut dirty).unwrap(), first);
+        assert!(dirty);
+        std::fs::remove_file(path).unwrap();
+        assert!(cache.get(&s, &mut dirty).is_none());
+    }
+
+    #[test]
     fn histories_reuse_reads_but_refresh_after_a_write() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("session.jsonl");
@@ -139,6 +168,21 @@ pub fn linked_family() -> Vec<String> {
         .map(|l| l.copies.into_values().flat_map(|l| [l.source, l.target]).collect())
         .unwrap_or_default()
 }
+pub fn extend_keys(keys: &mut std::collections::HashSet<String>) {
+    let Ok(links) = read() else { return };
+    loop {
+        let before = keys.len();
+        for link in links.copies.values() {
+            if keys.contains(&link.source) || keys.contains(&link.target) {
+                keys.insert(link.source.clone());
+                keys.insert(link.target.clone());
+            }
+        }
+        if keys.len() == before {
+            break;
+        }
+    }
+}
 fn append(s: &mut Session, delta: &[Turn]) -> Result<()> {
     // Never manufacture replies or silently flatten an incomplete turn.
     if !delta.len().is_multiple_of(2) || delta.chunks(2).any(|p| p[0].who != "user" || p[1].who != "assistant") {
@@ -193,6 +237,7 @@ pub fn run(root: &Path, args: &crate::commands::Args) {
 fn run_inner(root: &Path, args: &crate::commands::Args, config: &serde_json::Value) -> Result<()> {
     std::fs::create_dir_all(&ctx().state_dir)?;
     let guard = std::fs::File::create(ctx().state_dir.join("multiharness.lock"))?;
+    let _loading = ui::loading(&crate::tr!("Syncing linked harnesses"));
     guard.lock()?;
     let Some(_shared) = crate::commands::lock_store(root) else {
         return Ok(());
@@ -218,12 +263,33 @@ fn run_inner(root: &Path, args: &crate::commands::Args, config: &serde_json::Val
     if needed.is_empty() {
         return Ok(());
     }
-    let mut sessions: HashMap<_, _> = needed
+    let aliases = crate::catalog::aliases();
+    let mut keys: std::collections::HashSet<_> = stored
+        .iter()
+        .filter(|r| scoped(r, args))
+        .flat_map(|r| {
+            [
+                r.key(),
+                r.meta()
+                    .get("conversation_id")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+            ]
+        })
+        .collect();
+    extend_keys(&mut keys);
+    let converted: Vec<_> = aliases
+        .keys()
+        .filter(|key| keys.contains(&crate::catalog::root(&aliases, key)))
+        .cloned()
+        .collect();
+    keys.extend(converted);
+    let mut sessions: HashMap<_, _> = harness::local_keys(&keys)
         .into_iter()
-        .flat_map(|n| harness::get(n).local())
+        .filter(|s| needed.contains(s.harness))
         .map(|s| (s.key(), s))
         .collect();
-    let aliases = crate::catalog::aliases();
     let family_ids: HashMap<_, _> = stored
         .iter()
         .map(|r| {
@@ -254,6 +320,12 @@ fn run_inner(root: &Path, args: &crate::commands::Args, config: &serde_json::Val
         let Some(mut source) = sessions.get(&key).cloned() else {
             continue;
         };
+        if r.meta().get("project_folder").is_some() {
+            let Some(folder) = crate::commands::session_folder(&r, &mut st, !args.auto) else {
+                continue;
+            };
+            source.path = folder;
+        }
         if matches!(
             status(Some(&source), Some(&r), st.base.get(&key).copied()),
             "pull" | "conflict"
@@ -286,6 +358,11 @@ fn run_inner(root: &Path, args: &crate::commands::Args, config: &serde_json::Val
             for target in targets.iter().copied() {
                 let id = format!("{key}/{target}");
                 let result = (|| -> Result<()> {
+                    let _loading = ui::loading(&crate::tr!(
+                        "Syncing {title} to {tool}",
+                        title = source.title,
+                        tool = target
+                    ));
                     let history = histories.get(&source)?;
                     let (a_turns, model) = history.as_ref();
                     let a = hashes(a_turns);
@@ -493,6 +570,76 @@ pub struct LinkView {
     pub target: String,
     pub state: &'static str,
 }
+
+#[derive(Serialize, Deserialize)]
+struct CachedHashes {
+    stamp: String,
+    hashes: Vec<u64>,
+}
+
+// Only the browser uses this disposable cache. Sync still reads the native history before
+// writing. File size + nanosecond mtime (and SQLite's WAL) invalidate edits of existing messages.
+#[derive(Default, Serialize, Deserialize)]
+struct ViewCache(HashMap<String, CachedHashes>);
+impl ViewCache {
+    fn stamp(s: &Session) -> Option<String> {
+        let paths = match &s.src {
+            Some(path) => vec![path.clone()],
+            None if s.harness == "opencode" => vec![ctx().opencode_db.clone()],
+            _ => return None,
+        };
+        let mut stamp = format!("{}:{}:{}", s.path, s.updated.to_bits(), s.weight);
+        for path in paths {
+            for suffix in ["", "-wal", "-journal"] {
+                let mut name = path.as_os_str().to_os_string();
+                name.push(suffix);
+                let name = std::path::PathBuf::from(name);
+                match std::fs::metadata(&name) {
+                    Ok(meta) => {
+                        let modified = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?;
+                        stamp.push_str(&format!(":{}:{}:{}", name.display(), meta.len(), modified.as_nanos()));
+                    }
+                    Err(e) if suffix.is_empty() || e.kind() != std::io::ErrorKind::NotFound => return None,
+                    _ => stamp.push_str(":missing"),
+                }
+            }
+        }
+        Some(stamp)
+    }
+    fn get(&mut self, s: &Session, dirty: &mut bool) -> Option<Vec<u64>> {
+        let stamp = Self::stamp(s)?;
+        if let Some(entry) = self.0.get(&s.key()).filter(|entry| entry.stamp == stamp) {
+            return Some(entry.hashes.clone());
+        }
+        let history = if s.harness == "opencode" {
+            crate::opencode::read_turns(s)
+        } else {
+            harness::get(s.harness).local_turns(s)
+        }
+        .ok()?;
+        if Self::stamp(s).as_ref() != Some(&stamp) {
+            return None; // changed while reading: never cache or report a partial history as synced
+        }
+        let hashes = hashes(&history.0);
+        self.0.insert(
+            s.key(),
+            CachedHashes {
+                stamp,
+                hashes: hashes.clone(),
+            },
+        );
+        *dirty = true;
+        Some(hashes)
+    }
+    fn save(&self, path: &Path) -> Result<()> {
+        std::fs::create_dir_all(&ctx().cache_dir)?;
+        let mut tmp = tempfile::NamedTempFile::new_in(&ctx().cache_dir)?;
+        serde_json::to_writer(tmp.as_file_mut(), self)?;
+        tmp.persist(path).map_err(|e| Error(e.to_string()))?;
+        Ok(())
+    }
+}
+
 pub fn views(local: &HashMap<String, Session>) -> Vec<LinkView> {
     let links = match read() {
         Ok(l) => l,
@@ -506,6 +653,12 @@ pub fn views(local: &HashMap<String, Session>) -> Vec<LinkView> {
             .split_once(':')
             .is_some_and(|(tool, _)| profile::harnesses(&l.source).contains(&tool))
     };
+    let cache_file = ctx().cache_dir.join("linked-history-v1.json");
+    let mut disk: ViewCache = std::fs::read(&cache_file)
+        .ok()
+        .and_then(|data| serde_json::from_slice(&data).ok())
+        .unwrap_or_default();
+    let mut dirty = false;
     let mut cache = HashMap::new();
     for key in links
         .copies
@@ -513,12 +666,12 @@ pub fn views(local: &HashMap<String, Session>) -> Vec<LinkView> {
         .filter(|l| active(l))
         .flat_map(|l| [&l.source, &l.target])
     {
-        cache.entry(key.clone()).or_insert_with(|| {
-            local
-                .get(key)
-                .and_then(|s| harness::get(s.harness).local_turns(s).ok())
-                .map(|t| hashes(&t.0))
-        });
+        cache
+            .entry(key.clone())
+            .or_insert_with(|| local.get(key).and_then(|s| disk.get(s, &mut dirty)));
+    }
+    if dirty && !crate::inspection::enabled() {
+        let _ = disk.save(&cache_file);
     }
     links
         .copies

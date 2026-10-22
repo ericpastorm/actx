@@ -58,7 +58,19 @@ pub fn syncs(name: &str) -> bool {
 }
 
 pub fn all_local() -> Vec<Session> {
+    let _loading = crate::ui::loading(&crate::tr!("Finding local conversations"));
     NAMES.iter().flat_map(|n| get(n).local()).collect()
+}
+
+/// Only read the histories actx maintains. Discovery of unrelated sessions is an explicit action.
+pub fn local_keys(keys: &std::collections::HashSet<String>) -> Vec<Session> {
+    let mut sessions = crate::claude::local_keys(Some(keys));
+    sessions.extend(crate::codex::local_keys(keys));
+    sessions.extend(crate::opencode::local_keys(keys));
+    if keys.iter().any(|k| k.starts_with("antigravity:")) {
+        sessions.extend(crate::antigravity::local_keys(Some(keys)));
+    }
+    sessions
 }
 
 fn shell_path(folder: &str) -> String {

@@ -115,6 +115,7 @@ pub fn reachable_root(timeout: std::time::Duration) -> Option<PathBuf> {
 }
 
 pub fn store_root(optional: bool) -> Option<PathBuf> {
+    let _loading = crate::ui::loading(&tr!("Connecting to the shared folder"));
     let Some(root) = configured_root() else {
         if optional {
             return None;
@@ -222,9 +223,17 @@ pub fn stored_sessions(root: &Path) -> Vec<Session> {
     let mut out = Vec::new();
     for project in collection_dirs(root) {
         let pname = project_name(&project);
+        let context = std::fs::read(project.join(".project.json"))
+            .ok()
+            .and_then(|data| serde_json::from_slice::<Value>(&data).ok());
         for tool in names(&project).into_iter().filter(|n| !n.starts_with('.')) {
             for id in names(&project.join(&tool)).into_iter().filter(|n| !n.starts_with('.')) {
-                out.extend(stored_session(project.join(&tool).join(&id), &pname));
+                if let Some(mut s) = stored_session(project.join(&tool).join(&id), &pname) {
+                    if let (Some(context), Some(meta)) = (&context, s.meta.as_mut()) {
+                        meta["project_folder"] = context.clone();
+                    }
+                    out.push(s);
+                }
             }
         }
     }
@@ -270,6 +279,7 @@ pub fn push_one(
     st: &mut State,
     remote: &HashMap<String, Session>,
 ) -> Result<Option<String>> {
+    let _loading = crate::ui::loading(&tr!("Saving {title}", title = s.title));
     let parent = root.join(project).join(s.harness);
     let dest = parent.join(&s.id);
     let pid = std::process::id();
@@ -321,6 +331,7 @@ pub fn push_one(
 }
 
 pub fn remove_stored(r: &Session) -> Result<()> {
+    let _loading = crate::ui::loading(&tr!("Deleting {title}", title = r.title));
     std::fs::remove_dir_all(r.store_dir())?;
     if let Some(parent) = r.store_dir().parent() {
         let _ = std::fs::remove_dir(parent); // the tool's folder, if it's now empty
@@ -398,6 +409,7 @@ fn leave_bridge(root: &Path) {
 }
 
 fn share_binary(root: &Path, kind: &str) {
+    let _loading = crate::ui::loading(&tr!("Updating the shared actx binary"));
     let shared = shared_binary(root);
     let me = &ctx().self_path;
     let len = |p: &Path| std::fs::metadata(p).map(|m| m.len()).ok();
