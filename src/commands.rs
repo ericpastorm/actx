@@ -2004,6 +2004,25 @@ pub fn doctor() {
             days = state::KEEP_BACKUP_DAYS
         ),
     );
+    match crate::publication::entries() {
+        Ok(entries)
+            if entries
+                .iter()
+                .any(|e| e["pending"] == true && e["status"] != "in_progress") =>
+        {
+            warn(&tr!(
+                "Interrupted publications: {n}",
+                n = entries
+                    .iter()
+                    .filter(|e| e["pending"] == true && e["status"] != "in_progress")
+                    .count()
+            ));
+            problems += 1;
+            println!("{}", tr!("Review shared recovery with actx recoveries"));
+        }
+        Err(e) => warn(&e.to_string()),
+        _ => {}
+    }
     println!();
     if problems == 0 {
         ok(&tr!("All good"));

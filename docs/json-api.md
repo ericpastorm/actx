@@ -261,3 +261,33 @@ Canceling analysis stops its read-only subprocess. Canceling cleanup signals a c
 between conversations, preserving any completed moves in quarantine and reporting their results.
 Closing a read-only desktop job also cancels its subprocess. A write confirmation can be canceled
 without creating quarantine entries or changing histories.
+
+## Interrupted shared publications
+
+`recoveries` also lists `publication:<opaque-id>` entries for recognized `.tmp-*`/`.old-*`
+directories, including legacy PID names. Rows distinguish staged/previous versions, incomplete
+payloads and active shared writers. `can_restore` means the entry can be reviewed; full payload
+validation takes place in the restore preview. `pending` distinguishes interrupted work from a
+previous version intentionally retained after a successful recovery. Local backup/quarantine
+entries remain accessible if shared storage is unavailable; the response marks that partial read.
+
+Use `restore` with the publication ID to preview its source, destination and recent messages.
+Applying requires `expected.restore`, then rechecks both candidate and current shared bytes under
+the local action/shared-folder locks. It validates metadata identity, relative payload paths,
+compressed JSON and attachments, plus recorded fingerprints/checksums where available. Incomplete,
+changed, linked-file or actively written candidates are retained and refused. Recovery changes
+only the shared publication; local native histories are preserved.
+
+When the destination is absent, the candidate becomes its shared copy. When it exists, confirmation
+explicitly states that its current version will be retained as another recoverable publication.
+The previous version can subsequently be restored through the same reviewed operation.
+`actx recoveries`, `actx restore --backup <id>`, the desktop Recovery window and Diagnostics expose
+this workflow; `actx doctor` reports pending publications.
+
+New uploads use unique transaction names and a synced `.publish-<uuid>.json` journal. Staged files
+are synced before the shared swap; lock ownership and staged checksums are checked again before
+publishing. Failure after moving the previous destination attempts to put it back. Failed stages
+and alternative versions are never deleted by reusing a PID-based temporary name. Normal successful
+uploads remove only their own completed temporary/previous data. Unknown remnants and incomplete
+unrecoverable fragments are left in place for inspection; journals without remaining data are not
+listed as recoverable conversations. Directory sync is used where the platform supports it.

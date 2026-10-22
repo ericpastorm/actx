@@ -772,3 +772,161 @@ fn discovery_reuses_a_local_index_without_writes_and_notices_new_edited_and_remo
     assert_eq!(api(&m, request)["data"]["candidates"].as_array().unwrap().len(), 1);
     assert_eq!(std::fs::read(&cache).unwrap(), bytes);
 }
+
+fn copy_stored_fixture(source: &std::path::Path, destination: &std::path::Path) {
+    std::fs::create_dir_all(destination).unwrap();
+    for entry in std::fs::read_dir(source).unwrap() {
+        let entry = entry.unwrap();
+        assert!(entry.file_type().unwrap().is_file());
+        std::fs::copy(entry.path(), destination.join(entry.file_name())).unwrap();
+    }
+}
+
+#[test]
+fn interrupted_shared_publications_restore_missing_targets_and_preserve_replaced_versions() {
+    let w = World::new();
+    let m = w.machine("publication-recovery");
+    let folder = m.home.join("project");
+    std::fs::create_dir_all(&folder).unwrap();
+    let source = claude_session(
+        &m,
+        &folder,
+        &[("user", "first"), ("assistant", "first answer")],
+        Some("Recovered history"),
+    );
+    let sid = source.file_stem().unwrap().to_string_lossy().to_string();
+    let key = format!("claude:{sid}");
+    let add = json!({"action":"add","ids":[key],"general":true});
+    let p = api(&m, add.clone());
+    assert_eq!(api(&m, confirm(&add, &p))["status"], "ok");
+    let parent = m.store.join("_general/claude");
+    let destination = parent.join(&sid);
+    let legacy = parent.join(format!(".old-{sid}-888888"));
+    let first_meta: Value = serde_json::from_slice(&std::fs::read(destination.join("meta.json")).unwrap()).unwrap();
+    std::fs::rename(&destination, &legacy).unwrap();
+    let recovery = api(&m, json!({"action":"recoveries"}));
+    let entry = recovery["data"]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["kind"] == "publication")
+        .unwrap();
+    let restore = json!({"action":"restore","backup":entry["id"]});
+    let plan = api(&m, restore.clone());
+    assert_eq!(plan["status"], "ok", "{plan}");
+    assert!(legacy.exists() && !destination.exists());
+    let mut cancel = confirmed(&restore, &plan);
+    cancel["cancel"] = json!(true);
+    assert_eq!(api(&m, cancel)["status"], "cancelled");
+    assert!(legacy.exists());
+    let r = api(&m, confirmed(&restore, &plan));
+    assert_eq!(r["status"], "ok", "{r}");
+    assert!(destination.exists() && !legacy.exists());
+    copy_stored_fixture(&destination, &legacy);
+    claude_continue(&source, &[("user", "second"), ("assistant", "second answer")], None);
+    let original = std::fs::read(&source).unwrap();
+    let p = api(&m, add.clone());
+    assert_eq!(api(&m, confirm(&add, &p))["status"], "ok");
+    let staged = parent.join(format!(".tmp-{sid}-888888"));
+    copy_stored_fixture(&destination, &staged);
+    let second_meta: Value = serde_json::from_slice(&std::fs::read(staged.join("meta.json")).unwrap()).unwrap();
+    assert_ne!(first_meta["content_hash"], second_meta["content_hash"]);
+    std::fs::remove_dir_all(&destination).unwrap();
+    std::fs::rename(&legacy, &destination).unwrap();
+    let recovery = api(&m, json!({"action":"recoveries"}));
+    let entry = recovery["data"]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["kind"] == "publication" && r["status"] == "staged_version")
+        .unwrap();
+    let restore = json!({"action":"restore","backup":entry["id"]});
+    let stale = api(&m, restore.clone());
+    let mut edited = second_meta.clone();
+    edited["title"] = json!("Reviewed alternative");
+    std::fs::write(staged.join("meta.json"), edited.to_string()).unwrap();
+    assert_ne!(api(&m, confirmed(&restore, &stale))["status"], "ok");
+    assert!(staged.exists());
+    let fresh = api(&m, restore.clone());
+    assert_eq!(fresh["data"]["replaces_shared"], true);
+    assert!(
+        fresh["data"]["recovery_preview"]["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["text"] == "second answer")
+    );
+    let r = api(&m, confirmed(&restore, &fresh));
+    assert_eq!(r["status"], "ok", "{r}");
+    let published: Value = serde_json::from_slice(&std::fs::read(destination.join("meta.json")).unwrap()).unwrap();
+    assert_eq!(published["content_hash"], second_meta["content_hash"]);
+    let recovery = api(&m, json!({"action":"recoveries"}));
+    let previous = recovery["data"]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["kind"] == "publication" && r["status"] == "previous_shared_version")
+        .unwrap();
+    let restore = json!({"action":"restore","backup":previous["id"]});
+    let plan = api(&m, restore.clone());
+    let r = api(&m, confirmed(&restore, &plan));
+    assert_eq!(r["status"], "ok", "{r}");
+    let published: Value = serde_json::from_slice(&std::fs::read(destination.join("meta.json")).unwrap()).unwrap();
+    assert_eq!(published["content_hash"], first_meta["content_hash"]);
+    assert_eq!(std::fs::read(&source).unwrap(), original);
+}
+
+#[test]
+fn publication_recovery_defers_active_writers_and_rejects_incomplete_or_unsafe_payloads() {
+    let w = World::new();
+    let m = w.machine("publication-guards");
+    let folder = m.home.join("work");
+    std::fs::create_dir_all(&folder).unwrap();
+    let source = claude_session(
+        &m,
+        &folder,
+        &[("user", "history"), ("assistant", "answer")],
+        Some("Keep"),
+    );
+    let sid = source.file_stem().unwrap().to_string_lossy().to_string();
+    let add = json!({"action":"add","ids":[format!("claude:{sid}")],"general":true});
+    let p = api(&m, add.clone());
+    assert_eq!(api(&m, confirm(&add, &p))["status"], "ok");
+    let parent = m.store.join("_general/claude");
+    let destination = parent.join(&sid);
+    let staged = parent.join(format!(".tmp-{sid}-888888"));
+    copy_stored_fixture(&destination, &staged);
+    let untouched = std::fs::read(destination.join("meta.json")).unwrap();
+    let lock = json!({"host":m.name,"pid":std::process::id(),"at":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64(),"since":0,"token":"fixture"});
+    std::fs::write(m.store.join(".lock"), lock.to_string()).unwrap();
+    let r = api(&m, json!({"action":"recoveries"}));
+    let entry = r["data"]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["kind"] == "publication")
+        .unwrap();
+    assert_eq!(entry["can_restore"], false);
+    assert_eq!(entry["status"], "in_progress");
+    let restore = json!({"action":"restore","backup":entry["id"]});
+    assert_eq!(api(&m, restore.clone())["status"], "error");
+    std::fs::remove_file(m.store.join(".lock")).unwrap();
+    let meta: Value = serde_json::from_slice(&untouched).unwrap();
+    let payload = staged.join(meta["files"]["session"].as_str().unwrap());
+    std::fs::write(&payload, b"truncated stream").unwrap();
+    assert_eq!(api(&m, restore.clone())["status"], "error");
+    let mut unsafe_meta = meta.clone();
+    unsafe_meta["files"]["session"] = json!("../outside.zst");
+    std::fs::write(staged.join("meta.json"), unsafe_meta.to_string()).unwrap();
+    let r = api(&m, json!({"action":"recoveries"}));
+    let entry = r["data"]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["kind"] == "publication")
+        .unwrap();
+    assert_eq!(entry["can_restore"], false);
+    assert_eq!(api(&m, restore)["status"], "error");
+    assert_eq!(std::fs::read(destination.join("meta.json")).unwrap(), untouched);
+    assert!(source.exists() && staged.exists());
+}

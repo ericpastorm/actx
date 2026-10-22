@@ -32,6 +32,7 @@ struct Job {
 }
 struct Completed {
     generation: u64,
+    epoch: String,
     kind: Kind,
     request: Value,
     result: Result<Value, String>,
@@ -88,6 +89,7 @@ struct Desktop {
     comparison: Option<Value>,
     comparison_request: Value,
     recoveries: Option<Value>,
+    recovery_request: Value,
     diagnostic_data: Option<Value>,
     adoption_editor: Option<AdoptionEditor>,
 }
@@ -148,6 +150,7 @@ impl Desktop {
             comparison: None,
             comparison_request: Value::Null,
             recoveries: None,
+            recovery_request: json!({"action":"recoveries"}),
             diagnostic_data: None,
             adoption_editor: None,
         };
@@ -158,10 +161,18 @@ impl Desktop {
     fn enqueue(&mut self, kind: Kind, request: Value) {
         let generation = match kind {
             Kind::Catalog => {
+                if let Some(control) = &self.catalog_control {
+                    control.cancel();
+                }
                 self.catalog_generation += 1;
                 self.catalog_generation
             }
             Kind::Messages => {
+                if self.running == Some(Kind::Messages)
+                    && let Some(control) = &self.control
+                {
+                    control.cancel();
+                }
                 self.messages_generation += 1;
                 self.messages_generation
             }
@@ -227,6 +238,7 @@ impl Desktop {
         let control = Arc::new(jobs::Control::default());
         let worker_control = control.clone();
         std::thread::spawn(move || {
+            let epoch = gui_index::epoch();
             let index = (job.kind == Kind::Catalog && gui_index::normal(&job.request)).then(gui_index::Index::current);
             let mut result = if matches!(job.kind, Kind::RootFolder | Kind::WorkFolder) {
                 Ok(rfd::FileDialog::new()
@@ -246,6 +258,7 @@ impl Desktop {
                 kind: job.kind,
                 request: job.request,
                 generation: job.generation,
+                epoch,
                 result,
             });
             worker_control.finished.store(true, Ordering::Relaxed);
@@ -335,6 +348,12 @@ impl Desktop {
         {
             return;
         }
+        // A failed read still belongs to the inputs seen when it started. Keep that
+        // observation so a write during the query triggers another check as well.
+        if done.kind == Kind::Catalog {
+            self.observed_epoch = done.epoch.clone();
+            self.next_probe = Instant::now();
+        }
         let response = match done.result {
             Ok(r) => r,
             Err(e) => {
@@ -392,9 +411,10 @@ impl Desktop {
                 }
                 self.catalog = response["data"].clone();
                 if complete {
-                    self.catalog_cached = false;
+                    self.catalog_cached = done.epoch != gui_index::epoch();
                     self.catalog_checked_at = Some(gui_index::now());
-                    self.observed_epoch = gui_index::epoch();
+                    self.observed_epoch = done.epoch;
+                    self.next_probe = Instant::now();
                     if self.notice == tr!("Catalog check failed; showing the last known data") {
                         self.notice.clear();
                     }
@@ -430,8 +450,9 @@ impl Desktop {
                 }
             }
             Kind::Recoveries => {
-                if response["status"] == "ok" {
+                if matches!(response["status"].as_str(), Some("ok" | "incomplete")) && response["data"].is_object() {
                     self.recoveries = Some(response["data"].clone());
+                    self.recovery_request = done.request;
                 } else {
                     self.result = Some(response);
                 }
@@ -446,6 +467,8 @@ impl Desktop {
                     }
                 } else if response["status"] != "cancelled" {
                     self.result = Some(response);
+                } else {
+                    self.notice = tr!("Operation cancelled");
                 }
             }
             Kind::Diagnostics => {
@@ -467,6 +490,12 @@ impl Desktop {
             Kind::Apply => {
                 self.notice = if response["status"] == "ok" {
                     tr!("Action finished")
+                } else if response["status"] == "cancelled" {
+                    if done.request["action"] == "cleanup" {
+                        tr!("Cleanup stopped; completed moves remain recoverable")
+                    } else {
+                        tr!("Operation cancelled")
+                    }
                 } else {
                     tr!("Action needs attention")
                 };
@@ -1137,6 +1166,12 @@ impl Desktop {
             if pending.request["action"] == "delete" || pending.request["action"] == "delete_project" {
                 ui.colored_label(theme::WARNING, tr!("Only saved copies are deleted"));
             }
+            if pending.response["data"]["replaces_shared"] == true {
+                ui.colored_label(
+                    theme::WARNING,
+                    tr!("The current shared version will be preserved as another recovery entry"),
+                );
+            }
             if pending.request["action"] == "cleanup" {
                 ui.colored_label(
                     theme::WARNING,
@@ -1281,6 +1316,18 @@ impl Desktop {
                 ui.label(tr!(
                     "Choose a backup or quarantined conversation to review its recovery"
                 ));
+                if ui
+                    .add_enabled(!self.busy(), egui::Button::new(tr!("Refresh")))
+                    .clicked()
+                {
+                    self.enqueue(Kind::Recoveries, self.recovery_request.clone());
+                }
+                if data["publication_error"].is_string() {
+                    ui.colored_label(
+                        theme::WARNING,
+                        tr!("Shared recovery unavailable; local backups remain available"),
+                    );
+                }
                 let entries = array(&data, "entries");
                 if entries.is_empty() {
                     ui.weak(tr!("No recoverable conversations"));
@@ -1290,7 +1337,13 @@ impl Desktop {
                     .max_height(480.)
                     .show(ui, |ui| {
                         for entry in entries {
-                            let kind = if entry["kind"] == "quarantine" {
+                            let kind = if entry["kind"] == "publication" {
+                                format!(
+                                    "{} · {}",
+                                    tr!("Shared publication"),
+                                    crate::publication::status_label(entry["status"].as_str().unwrap_or_default())
+                                )
+                            } else if entry["kind"] == "quarantine" {
                                 tr!("Quarantine")
                             } else {
                                 tr!("Backup")
@@ -1308,7 +1361,7 @@ impl Desktop {
                             );
                             if ui
                                 .add_enabled(
-                                    !self.busy(),
+                                    !self.busy() && entry["can_restore"] != false,
                                     egui::Button::new(label)
                                         .wrap()
                                         .min_size(egui::vec2(ui.available_width(), 52.)),
@@ -1316,6 +1369,20 @@ impl Desktop {
                                 .clicked()
                             {
                                 self.enqueue(Kind::Preview, json!({"action":"restore","backup":entry["id"]}));
+                            }
+                            if entry["kind"] == "publication" {
+                                ui.weak(match entry["status"].as_str() {
+                                    Some("in_progress") => {
+                                        tr!("A shared-folder writer is active; recovery is deferred")
+                                    }
+                                    Some("incomplete") => {
+                                        tr!("Incomplete publication; its remaining files are preserved")
+                                    }
+                                    _ => tr!("Review the shared recovery; local histories stay unchanged"),
+                                });
+                                if let Some(detail) = entry["detail"].as_str() {
+                                    ui.small(detail);
+                                }
                             }
                         }
                     });
@@ -1405,6 +1472,9 @@ impl Desktop {
                 }
                 ui.separator();
                 ui.strong(tr!("Automatic sync"));
+                if let Some(count) = data["interrupted_publications"].as_u64() {
+                    ui.label(tr!("Interrupted publications: {n}", n = count));
+                }
                 for part in array(&data["automatic"], "parts") {
                     ui.label(format!(
                         "{} {}",
@@ -1496,6 +1566,7 @@ fn operations(ui: &mut egui::Ui, data: &Value) {
             "create_project" => tr!("Create project"),
             "delete_project" => tr!("Delete project"),
             "restore" => tr!("Recovery"),
+            "restore_publication" => tr!("Restore shared publication"),
             "resolve" => crate::recovery::choice_label(op["resolution"].as_str().unwrap_or_default()),
             "automatic" => {
                 if op["enabled"] == true {
@@ -1524,6 +1595,9 @@ fn operations(ui: &mut egui::Ui, data: &Value) {
             "{label} · {}",
             op["title"].as_str().or(op["session_id"].as_str()).unwrap_or_default()
         ));
+        if let Some(source) = op["source"].as_str() {
+            ui.label(format!("{}: {source}", tr!("Source")));
+        }
         if let Some(destination) = op["destination"].as_str() {
             ui.label(format!("{}: {destination}", tr!("Destination")));
         }
@@ -1558,6 +1632,15 @@ fn operations(ui: &mut egui::Ui, data: &Value) {
             ui.colored_label(theme::WARNING, requirement(req.as_str().unwrap_or_default()));
         }
         ui.separator();
+    }
+    if data["recovery_preview"].is_object() {
+        ui.strong(tr!("Recovery preview"));
+        for message in array(&data["recovery_preview"], "messages") {
+            ui.label(format!("{}: {}", text(&message, "role"), text(&message, "text")));
+        }
+        if data["recovery_preview"]["truncated"] == true {
+            ui.weak(tr!("Preview shortened; the complete original is preserved"));
+        }
     }
     for candidate in array(data, "candidate_operations") {
         ui.label(format!(
@@ -1639,18 +1722,22 @@ impl eframe::App for Desktop {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         [0., 0., 0., 1.]
     }
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // eframe skips drawing hidden windows, but still runs their logic.
+        // Worker completions, cancellations and catalog checks must keep running.
+        self.pump(ctx);
+        if self.running == Some(Kind::Apply) && ctx.input(|i| i.viewport().close_requested()) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.notice = tr!("Wait for the current operation before closing");
+        }
+    }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        self.pump(&ctx);
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Num1)) {
             self.detail_view = false;
         }
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Num2)) {
             self.detail_view = true;
-        }
-        if self.running == Some(Kind::Apply) && ctx.input(|i| i.viewport().close_requested()) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.notice = tr!("Wait for the current operation before closing");
         }
         egui::Panel::top("header")
             .frame(
@@ -1684,13 +1771,16 @@ impl eframe::App for Desktop {
                         if let Some(label) = progress["label"].as_str() {
                             ui.label(format!("{} {}/{}", label, progress["done"], progress["total"]));
                         }
-                        if self.running_request["action"]
-                            .as_str()
-                            .is_some_and(|s| s.starts_with("cleanup"))
+                        if self.running_request["action"].is_string()
+                            && (self.running_request["apply"] != true || self.running_request["action"] == "cleanup")
                             && ui.button(tr!("Cancel")).clicked()
                         {
                             control.cancel();
-                            self.notice = tr!("Stopping after the current conversation");
+                            self.notice = if self.running_request["apply"] == true {
+                                tr!("Stopping after the current conversation")
+                            } else {
+                                tr!("Operation cancelled")
+                            };
                         }
                     }
                     if self.catalog_cached {
@@ -1761,6 +1851,8 @@ impl eframe::App for Desktop {
                     let response = self.result.as_ref().unwrap();
                     ui.heading(if response["status"] == "ok" {
                         tr!("Action finished")
+                    } else if response["status"] == "cancelled" {
+                        tr!("Operation cancelled")
                     } else {
                         tr!("Action needs attention")
                     });
@@ -1815,6 +1907,7 @@ mod tests {
         Completed {
             kind: Kind::Catalog,
             generation: app.catalog_generation,
+            epoch: gui_index::epoch(),
             request: json!({"action":"list","all":false}),
             result: Ok(result),
         }
@@ -1880,10 +1973,53 @@ mod tests {
         app.complete(Completed {
             kind: Kind::Messages,
             generation: old_generation,
+            epoch: gui_index::epoch(),
             request: json!({"ids":["claude:one"]}),
             result: Ok(json!({"data":{"messages":[{"text":"stale"}]}})),
         });
         assert!(app.messages.is_null());
+    }
+    #[test]
+    fn a_write_after_the_catalog_query_is_not_lost_when_its_reply_arrives_late() {
+        let mut app = Desktop::initial(None);
+        let mut reply = completion(&app, json!({"status":"ok","data":catalog()}));
+        reply.epoch = "observation-before-the-write".into();
+        app.complete(reply);
+        assert!(app.catalog_cached);
+        assert_eq!(app.observed_epoch, "observation-before-the-write");
+        assert!(app.next_probe <= Instant::now());
+    }
+    #[test]
+    fn failed_catalog_queries_do_not_consume_notifications_for_newer_writes() {
+        for failed in [Err("changed while reading".into()), Ok(json!({"status":"incomplete"}))] {
+            let mut app = Desktop::initial(None);
+            app.catalog = catalog();
+            app.queue.clear();
+            let mut reply = completion(&app, Value::Null);
+            reply.epoch = "query-started-before-new-write".into();
+            reply.result = failed;
+            app.complete(reply);
+            assert_eq!(app.observed_epoch, "query-started-before-new-write");
+            assert!(app.next_probe <= Instant::now());
+            assert_eq!(app.catalog, catalog());
+        }
+    }
+    #[test]
+    fn hidden_window_processes_worker_results_without_drawing() {
+        let mut app = Desktop::initial(None);
+        app.queue.clear();
+        let (tx, rx) = mpsc::channel();
+        tx.send(completion(&app, json!({"status":"ok","data":catalog()})))
+            .unwrap();
+        app.catalog_receiver = Some(rx);
+        let ctx = egui::Context::default();
+        let mut frame = eframe::Frame::_new_kittest();
+        let mut input = egui::RawInput::default();
+        input.viewports.get_mut(&egui::ViewportId::ROOT).unwrap().minimized = Some(true);
+        let _ = ctx.run_logic(&input, |ctx| eframe::App::logic(&mut app, ctx, &mut frame));
+        assert!(app.catalog_receiver.is_none());
+        assert_eq!(app.catalog, catalog());
+        assert!(!app.catalog_cached);
     }
     #[test]
     fn returning_from_full_inventory_never_displays_it_as_the_normal_catalog() {

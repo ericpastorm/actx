@@ -248,10 +248,11 @@ fn diagnostics() -> Response<Value> {
         .iter()
         .map(|h| json!({"tool":h,"installed":harness::get(h).installed(),"native_sync":harness::syncs(h)}))
         .collect();
+    let publications = crate::publication::entries();
     actions::response(
         "diagnostics",
         Status::Ok,
-        json!({"host":crate::ctx::ctx().host,"shared_folder":store::configured_root(),"shared_available":store::store_root(true).is_some(),"tools":checks,"automatic":crate::auto::status_data(),"conflicts":catalog.groups.iter().filter(|g|g.copies.iter().any(|c|matches!(c.state,"conflict"|"unknown"))).count(),"recovery_entries":state::backups().len()+crate::quarantine::recovery_entries().len()}),
+        json!({"host":crate::ctx::ctx().host,"shared_folder":store::configured_root(),"shared_available":store::store_root(true).is_some(),"tools":checks,"automatic":crate::auto::status_data(),"conflicts":catalog.groups.iter().filter(|g|g.copies.iter().any(|c|matches!(c.state,"conflict"|"unknown"))).count(),"recovery_entries":state::backups().len()+crate::quarantine::recovery_entries().len(),"interrupted_publications":publications.as_ref().map(|entries|entries.iter().filter(|e|e["pending"]==true&&e["status"]!="in_progress").count()).ok(),"publication_error":publications.err().map(|e|e.to_string())}),
         inspection::errors()
             .into_iter()
             .map(|e| Diagnostic::new("inspection_failed", e))

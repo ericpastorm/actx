@@ -61,6 +61,7 @@ use system dialogs. Optional GUI dependencies are not needed to build or run the
    Rule activation applies on future syncs, and deleted conversations remain excluded until manually added.
 
 Discovery, history reads and actions run in isolated API subprocesses, outside the UI thread.
+Task handling and local catalog checks continue when the window is hidden or minimized.
 A spinner stays active while they work. Confirmations include current revisions and are checked
 again under locks before writes. Closing during an apply is deferred until it completes.
 Canceling a confirmation performs no writes.
@@ -126,3 +127,18 @@ Project candidate listing reuses one catalog, including repository/path-mention 
 opencode is not opened for a managed-key query containing no opencode conversations. Unchanged
 opencode metadata can be reused without copying its database for each query; changed databases
 continue to use isolated read snapshots.
+
+## Interrupted publication recovery
+
+**Recovery** includes shared publication remnants alongside local backups and quarantine. It labels
+previous/staged versions, incomplete remnants and active writers, and can refresh the scoped list.
+Reviewing a recoverable entry validates its payload and shows recent messages. Applying can restore
+a missing shared copy or replace it while preserving the current shared version as a new recovery
+entry. Native local histories are kept. Incomplete entries remain visible with their reason and
+are never silently deleted. **Diagnostics** and `actx doctor` report pending shared publications.
+
+Inspection jobs have cancellable subprocesses and private scratch directories. Superseded message
+or catalog reads are stopped; cancelled SQLite inspections have their scratch files removed by the
+parent. Cleanup cancellation finishes its current durable move and reports completed/quarantined
+items before stopping. Ordinary publication/recovery writes finish their reviewed operation rather
+than being killed mid-swap.

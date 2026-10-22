@@ -83,6 +83,44 @@ const HELP_ES: &str = "actx (agent context): mantiene tus conversaciones de Clau
 
 pub static ES: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| {
     HashMap::from([
+        ("Shared publication", "Publicación compartida"),
+        ("Interrupted publications: {n}", "Publicaciones interrumpidas: {n}"),
+        (
+            "Review shared recovery with actx recoveries",
+            "Revisa la recuperación compartida con actx recoveries",
+        ),
+        (
+            "Cleanup stopped; completed moves remain recoverable",
+            "Limpieza detenida; los movimientos completados se pueden recuperar",
+        ),
+        (
+            "The current shared version will be preserved as another recovery entry",
+            "La versión compartida actual se conservará como otra entrada de recuperación",
+        ),
+        (
+            "Shared recovery unavailable; local backups remain available",
+            "La recuperación compartida no está disponible; las copias locales siguen disponibles",
+        ),
+        ("Interrupted publication", "Publicación interrumpida"),
+        (
+            "A shared-folder writer is active; recovery is deferred",
+            "Hay una escritura activa en la carpeta compartida; la recuperación queda pendiente",
+        ),
+        (
+            "Incomplete publication; its remaining files are preserved",
+            "Publicación incompleta; se conservan los archivos que quedan",
+        ),
+        (
+            "Review the shared recovery; local histories stay unchanged",
+            "Revisa la recuperación compartida; los historiales locales se conservan",
+        ),
+        ("Restore shared publication", "Recuperar publicación compartida"),
+        ("Previous shared version", "Versión compartida anterior"),
+        ("Staged shared version", "Versión compartida preparada"),
+        ("Shared writer active", "Escritura compartida activa"),
+        ("Incomplete publication", "Publicación incompleta"),
+        ("Source", "Origen"),
+        ("Recovery preview", "Vista previa de recuperación"),
         ("Clean local conversations", "Limpiar conversaciones locales"),
         ("Analyze local conversations", "Analizar conversaciones locales"),
         ("Move selected to quarantine", "Mover las seleccionadas a cuarentena"),

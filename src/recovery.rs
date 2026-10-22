@@ -237,6 +237,13 @@ fn entries(req: &Request) -> Value {
     }
     let mut all:Vec<_>=state::backups().into_iter().map(|b|json!({"id":backup_id(&b),"kind":"backup","session_id":format!("{}:{}",b.harness,b.id),"title":b.title,"folder":b.path,"at":b.at})).collect();
     all.extend(crate::quarantine::recovery_entries());
+    let publication_error = match crate::publication::entries() {
+        Ok(entries) => {
+            all.extend(entries);
+            None
+        }
+        Err(e) => Some(e.to_string()),
+    };
     all.retain(|b| ids.is_empty() || b["session_id"].as_str().is_some_and(|id| ids.contains(id)));
     all.sort_by(|a, b| {
         b["at"]
@@ -244,12 +251,15 @@ fn entries(req: &Request) -> Value {
             .partial_cmp(&a["at"].as_f64())
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-    json!({"entries":all})
+    json!({"entries":all,"publication_error":publication_error})
 }
 fn restore(req: &Request) -> Response<Value> {
     let Some(id) = req.backup.as_deref() else {
         return error("restore", "selection_required", "Choose a recovery entry");
     };
+    if id.starts_with("publication:") {
+        return crate::publication::restore(req);
+    }
     let backup = state::backups().into_iter().find(|b| backup_id(b) == id);
     let quarantine = id.strip_prefix("quarantine:");
     let (session_id, revision, destination) = if let Some(b) = &backup {
@@ -323,7 +333,24 @@ fn restore(req: &Request) -> Response<Value> {
 pub fn run(req: &Request) -> Response<Value> {
     let _quiet = ui::Silence::new();
     match req.action {
-        Action::Recoveries => actions::response("recoveries", Status::Ok, entries(req), vec![]),
+        Action::Recoveries => {
+            let data = entries(req);
+            let diagnostics = data["publication_error"]
+                .as_str()
+                .map(|e| crate::api::Diagnostic::new("shared_recovery_unavailable", e))
+                .into_iter()
+                .collect::<Vec<_>>();
+            actions::response(
+                "recoveries",
+                if diagnostics.is_empty() {
+                    Status::Ok
+                } else {
+                    Status::Incomplete
+                },
+                data,
+                diagnostics,
+            )
+        }
         Action::Restore => restore(req),
         Action::Resolve => resolve(req),
         _ => match compare(req) {
@@ -366,6 +393,9 @@ pub fn cli(command: &str, id: Option<&str>, target: Option<&str>, choice: Option
     }
     if command == "recoveries" {
         let r = run(&req);
+        for diagnostic in &r.diagnostics {
+            ui::warn(&diagnostic.message);
+        }
         let items = r.data.unwrap_or_default();
         let rows: Vec<_> = items["entries"]
             .as_array()
@@ -374,10 +404,18 @@ pub fn cli(command: &str, id: Option<&str>, target: Option<&str>, choice: Option
             .map(|e| ui::Row {
                 key: e["id"].as_str().unwrap_or_default().into(),
                 line: format!(
-                    "{} · {} · {}",
+                    "{} · {} · {}{}",
                     e["kind"].as_str().unwrap_or_default(),
                     e["title"].as_str().unwrap_or_default(),
-                    ui::ago(e["at"].as_f64().unwrap_or_default())
+                    ui::ago(e["at"].as_f64().unwrap_or_default()),
+                    if e["kind"] == "publication" {
+                        format!(
+                            " · {}",
+                            crate::publication::status_label(e["status"].as_str().unwrap_or_default())
+                        )
+                    } else {
+                        String::new()
+                    }
                 ),
                 preview: format!("{}\n{}", e["session_id"], e["folder"]),
             })
@@ -447,6 +485,29 @@ pub fn cli(command: &str, id: Option<&str>, target: Option<&str>, choice: Option
             ui::warn(&d.message);
         }
         return;
+    }
+    if command == "restore"
+        && let Some(data) = &preview.data
+    {
+        if data["replaces_shared"] == true {
+            ui::warn(&tr!(
+                "The current shared version will be preserved as another recovery entry"
+            ));
+        }
+        for message in data["recovery_preview"]["messages"].as_array().into_iter().flatten() {
+            println!(
+                "{}: {}",
+                message["role"].as_str().unwrap_or_default(),
+                message["text"].as_str().unwrap_or_default()
+            );
+        }
+        for op in data["operations"].as_array().into_iter().flatten() {
+            println!(
+                "{} → {}",
+                op["source"].as_str().unwrap_or_default(),
+                op["destination"].as_str().unwrap_or_default()
+            );
+        }
     }
     if !ui::confirm(&tr!("Apply")) {
         return;

@@ -34,6 +34,7 @@ mod paths;
 mod pb;
 mod profile;
 mod project;
+mod publication;
 mod quarantine;
 mod recovery;
 mod session;

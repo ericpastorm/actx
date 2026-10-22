@@ -37,6 +37,13 @@ pub(super) fn call_api(
     let cancel = temp.path().join("cancel");
     let mut cmd = std::process::Command::new(std::env::current_exe().map_err(|e| e.to_string())?);
     crate::ctx::hide_window(&mut cmd);
+    // A cancelled inspection may be killed before Rust drops its SQLite snapshots.
+    // Keep its scratch files under this job's parent-owned disposable directory.
+    if request["apply"] != true {
+        cmd.env("TMPDIR", temp.path())
+            .env("TMP", temp.path())
+            .env("TEMP", temp.path());
+    }
     let mut child = cmd
         .arg("api")
         .env("ACTX_LANG", lang)

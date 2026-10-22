@@ -82,6 +82,18 @@ fn stale(path: &Path, v: Option<&Value>) -> bool {
     }
 }
 
+/// Publication writers must still own the shared lease immediately before swapping files.
+pub(crate) fn owned(root: &Path) -> bool {
+    read(&root.join(".lock")).is_some_and(|v| {
+        jstr(&v, "host") == ctx().host
+            && v["pid"].as_u64() == Some(u64::from(std::process::id()))
+            && now() - v["at"].as_f64().unwrap_or(0.) <= STALE_SECS
+    })
+}
+pub(crate) fn busy_other(root: &Path) -> bool {
+    let path = root.join(".lock");
+    path.exists() && !owned(root) && !stale(&path, read(&path).as_ref())
+}
 impl SharedLock {
     /// Take the shared folder's lock, waiting up to `wait` for whoever has it. `waiting` is called
     /// once if we have to wait.

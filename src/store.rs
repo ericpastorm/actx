@@ -288,14 +288,11 @@ pub fn push_one(
     remote: &HashMap<String, Session>,
 ) -> Result<Option<String>> {
     let _loading = crate::ui::loading(&tr!("Saving {title}", title = s.title));
+    let baseline_stamp = crate::integrity::stamp(s);
     let before = crate::integrity::fresh(s)?;
-    let parent = root.join(project).join(s.harness);
-    let dest = parent.join(&s.id);
-    let pid = std::process::id();
-    let tmp = parent.join(format!(".tmp-{}-{pid}", s.id));
-    let old = parent.join(format!(".old-{}-{pid}", s.id));
-    let _ = std::fs::remove_dir_all(&tmp);
-    std::fs::create_dir_all(&tmp)?;
+    let mut transaction = crate::publication::Transaction::begin(root, project, s.harness, &s.id)?;
+    let tmp = transaction.temporary();
+    std::fs::create_dir(&tmp)?;
     let result = (|| -> Result<(u64, u64)> {
         let pushed = crate::harness::get(s.harness).push(s, &tmp)?;
         if crate::integrity::fresh(s)? != before {
@@ -324,17 +321,8 @@ pub fn push_one(
         });
         std::fs::write(tmp.join("meta.json"), serde_json::to_string_pretty(&meta)?)?;
         std::fs::write(tmp.join("preview.txt"), &pushed.preview)?;
-        if dest.exists() {
-            std::fs::rename(&dest, &old)?;
-        }
-        if let Err(e) = std::fs::rename(&tmp, &dest) {
-            if old.exists() && !dest.exists() {
-                let _ = std::fs::rename(&old, &dest);
-            }
-            return Err(e.into());
-        }
-        let _ = std::fs::remove_dir_all(&old);
-        crate::gui_index::invalidate();
+        transaction.ready()?;
+        transaction.publish(false)?;
         let weights = (pushed.seen, pushed.weight);
         st.content.insert(
             s.key(),
@@ -346,7 +334,7 @@ pub fn push_one(
                 },
                 remote: content_hash,
                 stamp: if pushed.seen == s.weight {
-                    crate::integrity::stamp(s)
+                    baseline_stamp.clone()
                 } else {
                     String::new()
                 },
@@ -355,7 +343,6 @@ pub fn push_one(
         );
         Ok(weights)
     })();
-    let _ = std::fs::remove_dir_all(&tmp);
     st.base.insert(s.key(), result?);
     if project == GENERAL && Path::new(&s.path).is_dir() {
         st.folders.insert(format!("session:{}", s.key()), s.path.clone());

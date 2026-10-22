@@ -567,5 +567,22 @@
   "Move selected to quarantine": "将所选会话移至隔离区",
   "Stopping after the current conversation": "将在当前会话处理完毕后停止",
   "Selected local conversations move to recoverable quarantine": "所选本地会话将移至可恢复的隔离区",
-  "Operation cancelled": "操作已取消"
+  "Operation cancelled": "操作已取消",
+  "The current shared version will be preserved as another recovery entry": "当前共享版本将保留为另一条恢复记录",
+  "Shared recovery unavailable; local backups remain available": "共享恢复不可用；本地备份仍可使用",
+  "Interrupted publication": "发布中断",
+  "A shared-folder writer is active; recovery is deferred": "共享文件夹正在写入；恢复已推迟",
+  "Incomplete publication; its remaining files are preserved": "发布不完整；剩余文件已保留",
+  "Review the shared recovery; local histories stay unchanged": "请检查共享恢复；本地历史记录保持不变",
+  "Restore shared publication": "恢复共享发布",
+  "Previous shared version": "先前的共享版本",
+  "Staged shared version": "已暂存的共享版本",
+  "Shared writer active": "共享写入正在进行",
+  "Incomplete publication": "发布不完整",
+  "Source": "来源",
+  "Recovery preview": "恢复预览",
+  "Interrupted publications: {n}": "中断的发布：{n}",
+  "Review shared recovery with actx recoveries": "使用 actx recoveries 检查共享恢复",
+  "Cleanup stopped; completed moves remain recoverable": "清理已停止；已完成的移动仍可恢复",
+  "Shared publication": "共享发布"
 }
