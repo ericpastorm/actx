@@ -1,5 +1,31 @@
 # JSON interface, version 1
 
+## Explicit actions
+
+`actx api` reads one JSON request from stdin (at most 1 MiB) and returns the same versioned
+envelope. `action` can be `list`, `preview`, `add` or `delete`. For writes, `ids` is an explicit
+array of physical `harness:id` values; there is no implicit "select everything". Add accepts
+`project` or `general`, and an optional existing `folder` for binding an unbound project.
+Delete can be narrowed by `project` or `general`. Original local transcripts and project folders
+are preserved when deleting saved copies. Antigravity native shared sync is unsupported.
+
+```sh
+echo '{"action":"add","ids":["claude:YOUR-ID"],"general":true}' | actx api
+```
+
+By default, actions return `applied: false`, `operations` and `results`, without writing files.
+Each operation includes a `revision`. To execute, resend the request with `apply: true` and
+`expected: {"claude:YOUR-ID": "REVISION-FROM-PREVIEW"}` for every selected copy. Execution
+takes the shared lock and prepares the selection again before comparing revisions. These
+tokens detect changes in native sizes/timestamps and shared metadata; they are not durable
+content hashes or executable saved plans. Shared conflicts block add instead of overwriting.
+`cancel: true` returns `status: cancelled`, exit 0, without inspecting or changing data.
+
+Missing/stale confirmations return `status: decision_required`, exit 5, with current operations.
+Busy folders return `shared_folder_busy` promptly, without blocking a frontend. Partial writes
+or state-save failures return `incomplete` with per-copy results; successful copies are not rolled
+back. The caller must refresh after any applied action. No binaries are published by this API.
+
 ```sh
 actx ls --json
 actx ls myproject --json

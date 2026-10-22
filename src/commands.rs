@@ -19,8 +19,8 @@ use crate::paths::short;
 use crate::session::{Session, badge, status};
 use crate::state::{self, Backup, State};
 use crate::store::{
-    GENERAL, collection_label, find_project, install_kind, modified, project_dirs, push_one, pushed_at, remove_stored,
-    shared_binary, store_root, stored_sessions, sync_self,
+    GENERAL, collection_label, find_project, install_kind, modified, project_dirs, push_one, pushed_at, shared_binary,
+    store_root, stored_sessions, sync_self,
 };
 use crate::tr;
 use crate::turns::{COPY_SUFFIX, fit};
@@ -575,19 +575,22 @@ pub fn add(args: Args) {
         if moved_on(&now, &s.key(), remote.get(&s.key()).map(pushed_at), &s.title) {
             continue;
         }
-        match push_one(&root, &name, s, git_info(&s.path), &mut st, &remote) {
-            Ok(moved) => {
-                let note = moved
-                    .map(|p| {
-                        dim(&format!(
-                            "  {}",
-                            tr!("(moved from {project})", project = collection_label(&p))
-                        ))
-                    })
-                    .unwrap_or_default();
-                ok(&format!("{} {}{note}", harness_tag(s.harness), s.title));
-            }
-            Err(e) => fail(&format!("{}: {e}", s.title)),
+        let result = crate::actions::save_selected(&root, &name, &[s], &mut st, &remote).remove(0);
+        if result.success {
+            let note = remote
+                .get(&s.key())
+                .and_then(|r| r.project.as_deref())
+                .filter(|p| *p != name)
+                .map(|p| {
+                    dim(&format!(
+                        "  {}",
+                        tr!("(moved from {project})", project = collection_label(p))
+                    ))
+                })
+                .unwrap_or_default();
+            ok(&format!("{} {}{note}", harness_tag(s.harness), s.title));
+        } else {
+            fail(&format!("{}: {}", s.title, result.message.unwrap_or_default()));
         }
     }
     save(&mut st);
@@ -1237,13 +1240,11 @@ pub(crate) fn delete_saved(root: &Path, chosen: &[&Session]) {
         {
             continue;
         }
-        match remove_stored(r) {
-            Ok(()) => {
-                st.base.remove(&r.key());
-                st.folders.remove(&format!("session:{}", r.key()));
-                removed += 1;
-            }
-            Err(e) => fail(&format!("{}: {e}", r.title)),
+        let result = crate::actions::delete_selected(&[r], &mut st).remove(0);
+        if result.success {
+            removed += 1;
+        } else {
+            fail(&format!("{}: {}", r.title, result.message.unwrap_or_default()));
         }
     }
     save(&mut st);

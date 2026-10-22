@@ -23,6 +23,8 @@ pub enum Status {
     Conflict,
     Incomplete,
     Error,
+    DecisionRequired,
+    Cancelled,
 }
 impl Status {
     fn exit_code(&self) -> i32 {
@@ -31,6 +33,8 @@ impl Status {
             Self::Error => 1,
             Self::Conflict => 3,
             Self::Incomplete => 4,
+            Self::DecisionRequired => 5,
+            Self::Cancelled => 0,
         }
     }
 }
@@ -41,7 +45,7 @@ pub struct Diagnostic {
     pub details: Value,
 }
 impl Diagnostic {
-    fn new(code: &'static str, message: impl Into<String>) -> Self {
+    pub(crate) fn new(code: &'static str, message: impl Into<String>) -> Self {
         Self {
             code,
             message: message.into(),
@@ -58,7 +62,7 @@ pub struct Response<T: Serialize> {
     pub diagnostics: Vec<Diagnostic>,
 }
 impl<T: Serialize> Response<T> {
-    fn error(command: &'static str, diagnostic: Diagnostic) -> Self {
+    pub(crate) fn error(command: &'static str, diagnostic: Diagnostic) -> Self {
         Self {
             schema_version: SCHEMA_VERSION,
             command,
@@ -210,7 +214,7 @@ pub struct ListData {
     pub conversations: Vec<ConversationData>,
 }
 
-fn validate_config() -> Result<(), Diagnostic> {
+pub(crate) fn validate_config() -> Result<(), Diagnostic> {
     match std::fs::read(&ctx().config_file) {
         Ok(data) if serde_json::from_slice::<Value>(&data).is_ok_and(|v| v.is_object()) => Ok(()),
         Ok(_) => Err(Diagnostic::new(

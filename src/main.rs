@@ -1,6 +1,7 @@
 //! actx (agent context): keep your Claude Code, opencode and Codex conversations in sync across
 //! machines, grouped into projects, through any shared folder (a NAS, Syncthing, ...).
 
+mod actions;
 mod agents;
 mod antigravity;
 mod api;
@@ -131,6 +132,7 @@ fn cli() -> Command {
                 ),
         ))
         .subcommand(clean::command())
+        .subcommand(Command::new("api").about("Read one structured request from stdin"))
         .subcommand(
             Command::new("mk")
                 .about(tr!("create a project here and choose conversations"))
@@ -296,9 +298,10 @@ fn main() {
     }
     i18n::set_spanish(language().to_lowercase().starts_with("es"));
     let matches = cli().get_matches();
-    if matches
-        .subcommand()
-        .is_some_and(|(_, m)| m.try_get_one::<bool>("json").ok().flatten().copied().unwrap_or(false))
+    if matches.subcommand_name() == Some("api")
+        || matches
+            .subcommand()
+            .is_some_and(|(_, m)| m.try_get_one::<bool>("json").ok().flatten().copied().unwrap_or(false))
     {
         ui::set_machine_mode();
     }
@@ -313,6 +316,7 @@ fn main() {
         None
     };
     match matches.subcommand() {
+        Some(("api", _)) => actions::stdin_request(),
         Some((name @ ("init" | "setup"), m)) => commands::init(Args {
             wizard: name == "setup",
             folder: get(m, "folder"),
