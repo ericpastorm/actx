@@ -4,7 +4,9 @@
 [opencode](https://opencode.ai) and [Codex](https://github.com/openai/codex) conversations in sync
 across your machines, grouped into projects, through any shared folder: a NAS, Syncthing, Dropbox…
 
-[Leer en español](README.es.md)
+[Leer en español](README.es.md) · [简体中文](README.zh-CN.md)
+
+[Desktop guide](docs/desktop.md) · [JSON API](docs/json-api.md) · [Changelog](CHANGELOG.md)
 
 You work on a desktop and a laptop. `git pull` brings the code, but the conversation with your
 agent (everything it learned about the task) stays behind. actx brings it along:
@@ -19,7 +21,8 @@ laptop$  claude --resume …     # carry on where you left off
 
 ## Features
 
-- **Projects you name, conversations you choose.** Only conversations you explicitly add travel, in a project or in General.
+- **Projects you name, conversations you choose.** Add conversations manually to a project or General;
+  optionally enable automatic additions with exclusions for a specific project.
 - **Path independent.** The repo can live at a different path on each machine (another clone, an
   IDE worktree…): actx finds it by its first commit and rewrites the paths inside the conversation.
 - **Two-way sync with conflict handling.** It remembers the last sync, so it knows what to push,
@@ -31,6 +34,8 @@ laptop$  claude --resume …     # carry on where you left off
   there.
 - **Safe.** Backups before overwriting (`actx restore`), atomic writes and a lock in the shared folder,
   and git warnings when the code is out of step (uncommitted changes, a different commit).
+- **Optional desktop preview.** Projects, message previews, conflict comparison, recoverable cleanup
+  and synchronization through the same services as the CLI.
 - **One small binary.** Written in Rust; it only needs git and fzf. Linux, macOS and Windows. English, Spanish and Simplified Chinese
   interface.
 
@@ -66,6 +71,22 @@ Supported tools: **Claude Code**, **opencode** 1.x and 2.x (each machine can hav
 saved with one is converted when it reaches the other), and **Codex**. **Antigravity CLI** (`agy`)
 converts to and from the others, but its conversations don't sync yet.
 
+### Desktop installation (preview)
+
+```sh
+cargo install --git https://github.com/ericpastorm/actx --features gui --locked
+actx gui
+```
+
+This installs `actx` and the double-clickable `actx-gui` launcher. Keep them together when copying
+an installation manually. The desktop includes setup, General conversations, sync, conversion,
+comparison, recovery and local cleanup. It displays the last saved catalog immediately and checks
+it in the background; messages load when you select a conversation.
+
+Native desktop behavior has been checked on Linux. Windows/macOS windows, dialogs and terminal
+launches still need hands-on validation. The current CI matrix tests the CLI on all three systems
+and does not enable the optional GUI feature. See [desktop requirements and limits](docs/desktop.md).
+
 ## Quick start
 
 On every machine, once:
@@ -84,6 +105,9 @@ Then:
 | `actx delete [project]` | Pick shared copies to delete, across all projects and General or only the named project. Keeps local originals and projects, even when empty. |
 | `actx sync --dry-run [project]` | Preview operations and pending decisions without modifying data; supports `--all` and `--general`. |
 | `actx clean [advanced]` | Suggest unused local conversations (subagents, tests, repeated openings, very short ones) and move the ones you pick to recoverable quarantine. |
+| `actx compare [harness:id]` / `actx resolve [harness:id]` | Compare local/shared histories and review a conflict resolution. `--target` compares an explicitly linked harness copy. |
+| `actx recoveries` | Browse backups, quarantine and interrupted shared publications; review a restore before applying. |
+| `actx auto-add [project]` | Inspect or configure optional project additions, harnesses and exclusions. |
 | `actx sync [project]` | Push what you continued here, pull what's new. Pick projects and General, or use `--all`. |
 | `actx` / `actx browse [project]` | Compact browser: one conversation per row, with its harnesses. Only what actx syncs; `--all` also shows local conversations. Enter opens, Alt-H configures, Delete removes. |
 | `actx ls [project]` | Print the compact list and copy states without interaction (`--all` for local conversations too). |
@@ -216,9 +240,32 @@ top marks every candidate, and **Next** continues. Selected conversations move t
 quarantine in `~/.local/state/actx/quarantine/`; they stay there until you run `clean purge`,
 which asks for confirmation. Nothing is removed automatically by age.
 
+In the desktop, **Clean local conversations** offers the same criteria with reasons and previews.
+Analyze, select entries and confirm. Cancellation stops between conversations; completed moves
+remain recoverable through **Recovery**. Advanced discovery reuses a disposable local index,
+while cleanup rechecks selected native histories before moving them.
+
 Filters: `--only agents,repeated,tests,short,old`, `--older-than DAYS`, `--max-messages N`,
 `--max-chars N`, `--min-similar N`, `--harnesses claude,codex,opencode,antigravity`,
 `--folder PATH` and `--contains TEXT`.
+
+### Automatic additions per project
+
+Manual selection remains the default. Enable a shared project rule when you want future matching
+conversations to join automatically; each machine uses its own project folder.
+
+```sh
+actx auto-add shop --on --harnesses claude,codex --exclude 'scratch/**'
+actx auto-add shop --on --json   # preview the proposed rule and candidates without saving
+actx sync --dry-run shop         # inspect additions and other pending operations
+actx auto-add shop --off         # disable discovery; keep previously saved conversations
+```
+
+Saving a rule does not immediately add conversations. Project/all syncs, including automatic sync,
+apply enabled rules. General and conversation-only syncs keep their explicit scope. Ambiguous,
+active or incomplete conversations stay pending; deleting a saved conversation excludes it from
+future automatic additions until you add it manually. Rules also support title exclusions,
+subfolder controls and optional clone matching. See [rules and exclusions](docs/json-api.md#automatic-additions-opt-in-per-project).
 
 ### Automatic sync
 
@@ -244,6 +291,28 @@ removes everything.
 Before replacing a conversation on this machine (pulling, merging, restoring), actx keeps a copy in
 `~/.local/state/actx/backups/` for 30 days. `actx restore` lists them and puts one back (the current
 version is backed up first).
+
+### Compare conflicts and recover conversations
+
+```sh
+actx compare claude:SESSION-ID                # compare local and shared histories
+actx compare claude:SESSION-ID --target codex # compare an explicitly linked copy
+actx resolve claude:SESSION-ID                # choose a resolution, review and confirm
+actx recoveries                               # choose a recoverable version
+actx restore --backup RECOVERY-ID --json       # inspect a restore without applying it
+```
+
+Comparison shows recent messages; the desktop and JSON response also include a merge preview when
+available. Resolution checks the current content again and preserves alternatives as a backup,
+branch or retired local copy. A Codex
+compaction can rebuild an unchanged linked copy while retaining the previous native history;
+independent target edits remain conflicts. Published Codex snapshots stop at complete task boundaries.
+
+Recovery combines local backups, cleanup quarantine and recognized interrupted shared publications
+(`.tmp-*` / `.old-*`). Review the version before restoring it. Replacing a shared publication keeps
+its current version as another recovery entry and preserves native local histories. Incomplete or
+actively written remnants stay in place; `actx doctor` reports pending publications. The desktop
+provides the same comparison and recovery flows. See the [recovery contract](docs/json-api.md#conflict-comparison-and-recovery).
 
 ### Converting between tools
 
@@ -321,8 +390,8 @@ private, and don't use a public sync service you wouldn't trust with your code.
   opencode 1.x and 2.x, which goes through the same conversion. Merging needs the same opencode version.
 - opencode is driven through its CLI; while you're importing a session, don't have that same session
   open in opencode.
-- Linux, macOS and Windows (all three tested in CI). On Windows, actx can't see which folder another
-  program is running in, so while Codex or opencode is running at all, it doesn't pull over their
+- The CLI has a Linux/macOS/Windows CI matrix; native GUI validation on Windows/macOS is pending.
+  On Windows, actx can't see which folder another program is running in, so while Codex or opencode is running at all, it doesn't pull over their
   conversations (Claude Code says exactly which one it has open, so it isn't affected). The hooks run
   in the shell Claude Code and Codex use there (Git Bash).
 - Windows sync apps with on-demand files (Synology Drive, OneDrive…) leave files online-only, and
@@ -339,8 +408,17 @@ The end-to-end tests build fake machines (each with its own home, Claude Code, o
 that share one folder, and run the real binary on them: syncs, merges and conversions. They steer it with
 `ACTX_HOST` (the machine's name), `ACTX_PICK` (what the pickers choose), `ACTX_ANSWER` (the reply to
 every question), `ACTX_LOCK_WAIT` (seconds to wait for the shared folder's lock) and `ACTX_HOOK_WAIT`
-(hooks wait for the sync they start). CI runs them on Linux and macOS, plus `cargo fmt --check` and
-`cargo clippy -- -D warnings`.
+(hooks wait for the sync they start). CI runs on Linux, macOS and Windows, plus
+`cargo fmt --check` and `cargo clippy --locked --all-targets -- -D warnings`.
+The workflow currently uses default CLI features. To check GUI changes locally:
+
+```sh
+cargo check --locked --features gui --all-targets
+cargo test --locked --features gui --bin actx
+```
+
+GUI feature checks do not exercise native dialogs, graphics or terminal launching. The
+[changelog](CHANGELOG.md) separates implemented behavior from pending platform validation.
 
 actx 0.3 is a Rust rewrite of the 0.1–0.2 Python script. All versions read and write the same shared
 folder and the same local state, so you can mix them while you upgrade your machines (0.4 adds the
@@ -399,20 +477,17 @@ text conversion format. Linked copies are excluded from `add` to avoid independe
 The shared base remains a Claude, Codex or opencode conversation. Antigravity supports local linked
 copies in both directions; to start from Antigravity, convert it with `cv` and add that copy first.
 Targets need an existing work folder, an installed harness and, for opencode, a configured model.
-Open or recently active sessions are deferred. Concurrent continuations, edits and compaction leave
-both versions intact and report a conflict; automatic resolution is deferred to the debugging phase.
+Open or recently active sessions are deferred. Concurrent continuations and independent edits keep
+both versions intact and report a conflict for reviewed resolution. Codex compaction can repair an
+unchanged linked target with its previous native history preserved.
 
 Retention runs during each sync, including automatic syncs already enabled with `actx auto`. It removes
 only shared copies, keeping projects and all local originals/copies. Pending changes, conflicts and
 detected activity prevent deletion. No additional timer is installed.
 
-This feature pass has basic checks; broad conflict, interruption and harness matrix validation is
-reserved for the upcoming debugging session.
+Focused regressions cover content edits, compaction, conflict recovery and interrupted publications.
+Broader native harness/platform combinations and desktop interaction still need hands-on validation.
 
 ## License
 
 [MIT](LICENSE). actx is an independent project, not affiliated with Anthropic, OpenAI or the opencode team.
-
-## Project auto-add
-
-Automatic additions are optional per project: `actx auto-add MyProject --on --exclude 'scratch/**'`. Review candidates before saving; `--off` keeps manual additions. The desktop exposes the same editor. See [rules and exclusions](docs/json-api.md#automatic-additions-opt-in-per-project).

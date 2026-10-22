@@ -5,7 +5,9 @@
 [Codex](https://github.com/openai/codex) al día entre tus PCs, agrupadas en proyectos, a través de
 cualquier carpeta compartida: un NAS, Syncthing, Dropbox…
 
-[Read in English](README.md)
+[Read in English](README.md) · [简体中文](README.zh-CN.md)
+
+[Guía de escritorio](docs/desktop.md) · [API JSON](docs/json-api.md) · [Historial de cambios](CHANGELOG.md)
 
 Trabajas en un sobremesa y un portátil. `git pull` te trae el código, pero la conversación con tu
 agente (todo lo que aprendió sobre la tarea) se queda atrás. actx se la lleva:
@@ -20,7 +22,8 @@ portátil$  claude --resume …    # sigues donde lo dejaste
 
 ## Qué hace
 
-- **Proyectos con nombre, conversaciones que eliges tú.** Solo viajan las conversaciones que añades, a un proyecto o a General.
+- **Proyectos con nombre, conversaciones que eliges tú.** Añade conversaciones a mano a un proyecto
+  o a General; también puedes activar la incorporación automática con exclusiones para un proyecto.
 - **No depende de las rutas.** El repo puede estar en otra ruta en cada PC (otro clon, un worktree de
   tu IDE…): actx lo encuentra por su primer commit y cambia las rutas dentro de la conversación.
 - **Sincroniza en los dos sentidos y gestiona conflictos.** Recuerda la última sincronización, así
@@ -33,8 +36,10 @@ portátil$  claude --resume …    # sigues donde lo dejaste
 - **Seguro.** Copias de seguridad antes de sobrescribir (`actx restore`), escrituras atómicas y un
   bloqueo en la carpeta compartida, y avisos de git cuando el código no cuadra (cambios sin commitear,
   otro commit).
-- **Un binario pequeño.** Escrito en Rust; solo necesita git y fzf. Linux, macOS y Windows. Interfaz en inglés y
-  español.
+- **GUI opcional en vista previa.** Proyectos, mensajes, comparación de conflictos, limpieza
+  recuperable y sincronización mediante los mismos servicios que la CLI.
+- **Un binario pequeño.** Escrito en Rust; solo necesita git y fzf. Linux, macOS y Windows. Interfaz en inglés,
+  español y chino simplificado.
 
 ## Instalación
 
@@ -67,6 +72,22 @@ Programas soportados: **Claude Code**, **opencode** 1.x y 2.x (cada PC puede ten
 conversación guardada con una se convierte al llegar a la otra) y **Codex**. **Antigravity CLI** (`agy`)
 se convierte desde y hacia los demás, pero sus conversaciones aún no se sincronizan.
 
+### Instalar la GUI (vista previa)
+
+```sh
+cargo install --git https://github.com/ericpastorm/actx --features gui --locked
+actx gui
+```
+
+Instala `actx` y el lanzador `actx-gui`, que puede abrirse con doble clic. Si copias la instalación
+a mano, conserva ambos juntos. La GUI incluye configuración, General, sincronización, conversión,
+comparación, recuperación y limpieza local. Muestra el último catálogo guardado y lo comprueba en
+segundo plano; carga los mensajes cuando seleccionas una conversación.
+
+Se ha comprobado el escritorio nativo en Linux. Faltan pruebas manuales de ventanas, diálogos y
+apertura de terminal en Windows/macOS. La matriz actual de CI prueba la CLI en los tres sistemas
+y no activa la GUI opcional. Consulta los [requisitos y límites de escritorio](docs/desktop.md).
+
 ## Primeros pasos
 
 En cada PC, una vez:
@@ -85,6 +106,9 @@ Y luego:
 | `actx delete [proyecto]` | Elige copias compartidas para borrar, de todos los proyectos y General o solo del proyecto indicado. Conserva originales locales y proyectos, aunque queden vacíos. |
 | `actx sync --dry-run [proyecto]` | Previsualiza operaciones y decisiones pendientes sin modificar datos; admite `--all` y `--general`. |
 | `actx clean [advanced]` | Sugiere conversaciones locales sin usar (subagentes, pruebas, aperturas repetidas, muy cortas) y mueve las elegidas a una cuarentena recuperable. |
+| `actx compare [harness:id]` / `actx resolve [harness:id]` | Compara historiales locales/compartidos y revisa una resolución. `--target` compara una copia vinculada de otro harness. |
+| `actx recoveries` | Reúne backups, cuarentena y publicaciones compartidas interrumpidas; permite revisar su restauración. |
+| `actx auto-add [proyecto]` | Consulta o configura incorporación automática, harnesses y exclusiones del proyecto. |
 | `actx sync [proyecto]` | Sube lo que has seguido aquí y baja lo nuevo. Eliges los proyectos, o `--all`. |
 | `actx` / `actx browse [proyecto]` | Navegador: una fila por conversación con sus harnesses. Solo lo que sincroniza actx; `--all` muestra también las locales. Enter abre, Alt-H configura y Supr quita. |
 | `actx ls [proyecto]` | Lista compacta sin interacción, con los estados de las copias (`--all` incluye las locales). |
@@ -216,9 +240,32 @@ de subagentes abiertos están protegidos. En la revisión, Enter marca o desmarc
 pasan a una cuarentena comprimida en `~/.local/state/actx/quarantine/`; siguen ahí hasta que
 ejecutes `clean purge`, que pide confirmación. Nada se elimina automáticamente por antigüedad.
 
+En la GUI, **Limpiar conversaciones locales** ofrece los mismos criterios, motivos y vistas previas.
+Analiza, selecciona y confirma. Cancelar detiene el trabajo entre conversaciones; los movimientos
+completados se pueden deshacer desde **Recuperación**. El descubrimiento avanzado reutiliza un índice
+local descartable; la limpieza vuelve a comprobar los historiales seleccionados antes de moverlos.
+
 Filtros: `--only agents,repeated,tests,short,old`, `--older-than DÍAS`, `--max-messages N`,
 `--max-chars N`, `--min-similar N`, `--harnesses claude,codex,opencode,antigravity`,
 `--folder RUTA` y `--contains TEXTO`.
+
+### Incorporación automática por proyecto
+
+La selección manual sigue siendo el modo predeterminado. Puedes activar una regla compartida para
+incorporar conversaciones futuras; cada equipo usa la carpeta local de ese proyecto.
+
+```sh
+actx auto-add tienda --on --harnesses claude,codex --exclude 'scratch/**'
+actx auto-add tienda --on --json # consulta la propuesta y las candidatas sin guardar
+actx sync --dry-run tienda       # revisa incorporaciones y operaciones pendientes
+actx auto-add tienda --off       # desactiva la búsqueda; conserva lo ya guardado
+```
+
+Guardar una regla no añade conversaciones inmediatamente. Se aplica al sincronizar proyectos o todo,
+incluida la sincronización automática. General y el sync de una conversación conservan su alcance
+explícito. Se posponen las conversaciones ambiguas, abiertas o incompletas. Borrar una copia compartida
+impide reincorporarla automáticamente hasta que uses `add` a mano. También puedes excluir títulos,
+limitar subcarpetas o incluir otros clones. Consulta [reglas y exclusiones](docs/json-api.md#automatic-additions-opt-in-per-project).
 
 ### Sincronización automática
 
@@ -244,6 +291,29 @@ todo.
 Antes de reemplazar una conversación en este PC (al bajar, mezclar o restaurar), actx guarda una copia en
 `~/.local/state/actx/backups/` durante 30 días. `actx restore` las lista y recupera la que elijas (antes
 guarda una copia de la actual).
+
+### Comparar conflictos y recuperar conversaciones
+
+```sh
+actx compare claude:ID-SESION                # compara local y compartida
+actx compare claude:ID-SESION --target codex # compara una copia vinculada
+actx resolve claude:ID-SESION                # elige, revisa y confirma la resolución
+actx recoveries                              # elige una versión recuperable
+actx restore --backup ID-RECUPERACION --json  # revisa la restauración sin aplicarla
+```
+
+La comparación muestra mensajes recientes; la GUI y la respuesta JSON incluyen también una vista
+previa de mezcla cuando está disponible. La resolución vuelve a comprobar el contenido y conserva
+alternativas como backup, rama o copia
+local retirada. Una compactación de Codex puede regenerar una copia vinculada intacta conservando
+el historial nativo anterior; las ediciones independientes siguen siendo conflictos. Las instantáneas
+publicadas de Codex terminan en un turno completo.
+
+La recuperación reúne backups locales, cuarentena y publicaciones compartidas interrumpidas
+reconocidas (`.tmp-*` / `.old-*`). Revisa la versión antes de restaurar. Al sustituir una publicación
+compartida, su versión actual queda como otra entrada recuperable; los historiales nativos locales
+se conservan. Los restos incompletos o en uso permanecen en su sitio; `actx doctor` informa de las
+publicaciones pendientes. La GUI ofrece los mismos flujos. Consulta el [contrato de recuperación](docs/json-api.md#conflict-comparison-and-recovery).
 
 ### Convertir entre programas
 
@@ -321,8 +391,8 @@ no confiarías tu código.
   salvo entre opencode 1.x y 2.x, que pasa por la misma conversión. Para mezclar hace falta la misma
   versión de opencode.
 - opencode se maneja con su CLI: mientras importas una sesión, no la tengas abierta en opencode.
-- Linux, macOS y Windows (los tres probados en la CI). En Windows, actx no puede ver en qué carpeta corre
-  otro programa, así que mientras Codex u opencode estén abiertos, no baja encima de sus conversaciones
+- La CLI tiene matriz de CI en Linux/macOS/Windows; falta validar la GUI nativa en Windows/macOS.
+  En Windows, actx no puede ver en qué carpeta corre otro programa, así que mientras Codex u opencode estén abiertos, no baja encima de sus conversaciones
   (Claude Code dice exactamente cuál tiene abierta, así que a él no le afecta). Los hooks se ejecutan en el
   shell que usan allí Claude Code y Codex (Git Bash).
 - Las apps de sincronización de Windows con archivos bajo demanda (Synology Drive, OneDrive…) dejan los
@@ -340,7 +410,17 @@ opencode y Codex) que comparten una carpeta, y ejecutan el binario de verdad en 
 mezclas y conversiones. Lo manejan con `ACTX_HOST` (el nombre del PC), `ACTX_PICK` (qué eligen los
 selectores), `ACTX_ANSWER` (la respuesta a cada pregunta), `ACTX_LOCK_WAIT` (segundos de espera por el
 bloqueo de la carpeta compartida) y `ACTX_HOOK_WAIT` (los hooks esperan al sync que lanzan). La CI los
-ejecuta en Linux y macOS, y además pasa `cargo fmt --check` y `cargo clippy -- -D warnings`.
+ejecuta en Linux, macOS y Windows, y además pasa `cargo fmt --check` y
+`cargo clippy --locked --all-targets -- -D warnings`. El workflow usa las opciones predeterminadas
+de CLI. Para comprobar cambios de GUI localmente:
+
+```sh
+cargo check --locked --features gui --all-targets
+cargo test --locked --features gui --bin actx
+```
+
+Estas comprobaciones no prueban diálogos nativos, gráficos ni apertura de terminales. El
+[historial de cambios](CHANGELOG.md) distingue lo implementado de la validación pendiente.
 
 actx 0.3 es una reescritura en Rust del script en Python de las versiones 0.1–0.2. Todas las versiones
 leen y escriben la misma carpeta compartida y el mismo estado local, así que puedes mezclarlas mientras
@@ -405,21 +485,18 @@ La base compartida sigue siendo de Claude, Codex u opencode; Antigravity puede s
 local de ida y vuelta. Para partir de una conversación de Antigravity, conviértela primero con `cv` y
 usa `add` sobre la copia. Las copias requieren una carpeta existente y el harness de destino instalado;
 opencode necesita un modelo configurado. Se posponen conversaciones abiertas o con actividad reciente.
-Si ambas ramas cambiaron, se editaron mensajes anteriores o se compactó el historial, actx conserva
-ambas y avisa del conflicto; esta primera entrega no resuelve esas diferencias automáticamente.
+Si ambas ramas cambiaron o tienen ediciones independientes, actx conserva ambas y avisa del conflicto
+para resolverlo con revisión. Una compactación de Codex puede reparar una copia vinculada intacta
+conservando el historial nativo anterior.
 
 La retención se aplica en cada `sync`, incluidos los automáticos que tengas activados con `actx auto`.
 Solo elimina copias de la carpeta compartida; conserva proyectos, originales y copias locales.
 Se omiten conversaciones con cambios locales pendientes, conflictos o actividad detectada.
 Elige `never` para desactivarla. No se instala un temporizador adicional.
 
-Esta entrega tiene comprobaciones básicas; la validación amplia de conflictos, interrupciones y de
-la matriz de harnesses queda para la siguiente sesión de depuración.
+Las regresiones focalizadas cubren ediciones, compactación, conflictos y publicaciones interrumpidas.
+Falta una validación manual más amplia de combinaciones de harnesses, plataformas e interacción de GUI.
 
 ## Licencia
 
 [MIT](LICENSE). actx es un proyecto independiente, sin relación con Anthropic, OpenAI ni el equipo de opencode.
-
-## Incorporación automática
-
-Es opcional por proyecto: `actx auto-add MiProyecto --on --exclude 'scratch/**'`. Revisa los candidatos antes de guardar; `--off` vuelve a la selección manual. La GUI incluye el mismo editor. Consulta [reglas y exclusiones](docs/json-api.md#automatic-additions-opt-in-per-project).

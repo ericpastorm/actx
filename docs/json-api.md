@@ -3,8 +3,19 @@
 ## Explicit actions
 
 `actx api` reads one JSON request from stdin (at most 1 MiB) and returns the same versioned
-envelope. `action` can be `list`, `preview`, `add` or `delete`. For writes, `ids` is an explicit
-array of physical `harness:id` values; there is no implicit "select everything". Add accepts
+envelope. Requests use these action names:
+
+| Area | Actions |
+| --- | --- |
+| Catalog and previews | `list`, `preview`, `candidates`, `messages` |
+| Conversations | `add`, `delete`, `sync`, `convert`, `resume` |
+| Conflicts and recovery | `compare`, `resolve`, `recoveries`, `restore` |
+| Desktop administration | `settings`, `configure`, `create_project`, `delete_project`, `diagnostics`, `automatic` |
+| Project discovery | `adoption` |
+| Local cleanup | `cleanup_scan`, `cleanup` |
+
+Add and delete require an explicit `ids` array of physical `harness:id` values;
+there is no implicit "select everything" for these actions. Add accepts
 `project` or `general`, and an optional existing `folder` for binding the project on this machine.
 Existing repository identities are validated before changing a local project binding.
 Delete can be narrowed by `project` or `general`. Original local transcripts and project folders
@@ -14,12 +25,14 @@ are preserved when deleting saved copies. Antigravity native shared sync is unsu
 echo '{"action":"add","ids":["claude:YOUR-ID"],"general":true}' | actx api
 ```
 
-By default, actions return `applied: false`, `operations` and `results`, without writing files.
+By default, add/delete previews return `applied: false`, `operations` and `results`, without writing files.
 Each operation includes a `revision`. To execute, resend the request with `apply: true` and
 `expected: {"claude:YOUR-ID": "REVISION-FROM-PREVIEW"}` for every selected copy. Execution
 takes the shared lock and prepares the selection again before comparing revisions. These
-tokens detect changes in native sizes/timestamps and shared metadata; they are not durable
-content hashes or executable saved plans. Shared conflicts block add instead of overwriting.
+tokens bind the current native content fingerprint, location, stamps and shared metadata.
+Treat them as opaque action revisions, not portable content IDs or executable saved plans.
+Other reviewed actions return a `data.expected` object to resend unchanged; their sections below
+describe the inputs they bind. Shared conflicts block add instead of overwriting.
 `cancel: true` returns `status: cancelled`, exit 0, without inspecting or changing data.
 
 Missing/stale confirmations return `status: decision_required`, exit 5, with current operations.
@@ -72,12 +85,14 @@ an explicit project or `--general` narrows the scope. JSON never opens a project
 
 Both operations are read-only: no state migration, history cache writes, locks, backups,
 conversation edits, binary updates or opencode CLI calls. SQLite reads use private temporary
-snapshots, including WAL data. Filesystem timestamps and native counts still determine native
-sync states; this API does not replace them with content fingerprints.
+snapshots, including WAL data. Native change indicators remain available; where a content baseline
+exists, states also compare versioned fingerprints to detect edits that counts alone would miss.
+Legacy state falls back to its existing indicators until a successful sync records content baselines.
 
 ## Envelope and exit codes
 
-Every response contains `schema_version: 1`, `command` (`ls` or `sync_preview`), `status`,
+Every response contains `schema_version: 1`, `command` (`ls` for `list`, `sync_preview` for
+`preview`, or the dispatched action name), `status`,
 `data` and `diagnostics`. Each diagnostic has a stable `code`, human-readable `message`
 and a `details` object. Messages can vary; consumers should branch on codes.
 
@@ -88,9 +103,12 @@ and a `details` object. Messages can vary; consumers should branch on codes.
 | 2 | — | Invalid CLI arguments; no JSON response. |
 | 3 | `conflict` | Inspection succeeded and found conflicts; `data` contains the results. |
 | 4 | `incomplete` | Partial or obsolete results; inspect diagnostics before using `data`. |
+| 5 | `decision_required` | A write needs a fresh preview, confirmation or another explicit decision. |
+| 0 | `cancelled` | A request was canceled; running cleanup can include already completed recoverable moves. |
 
-An incomplete read takes precedence over conflicts. There is no cancellation result because
-these commands are noninteractive. An unavailable configured shared folder yields an incomplete
+For `ls --json` and `sync --dry-run --json`, an incomplete read takes precedence over conflicts.
+These two read-only commands do not prompt or produce cancellation results.
+An unavailable configured shared folder yields an incomplete
 local listing; preview requires a reachable shared folder and returns an error instead.
 
 Diagnostic codes: `invalid_config`, `config_unreadable`, `project_not_found`,

@@ -43,8 +43,9 @@ use system dialogs. Optional GUI dependencies are not needed to build or run the
    and the native merge preview. Choose a resolution and review **Apply**; the alternative stays
    recoverable. Independent edits are never silently replaced. A Codex compaction with an intact
    target can repair the conversion while retaining the old native conversation.
-6. **Recovery** lists backups and quarantined conversations, with preview and confirmation.
-   Restoring a backup protects the current history; quarantine recovery does not overwrite it.
+6. **Recovery** lists backups, quarantined conversations and interrupted shared publications, with
+   preview and confirmation. Restoring a backup protects the current history; quarantine recovery
+   does not overwrite it. Replacing a shared publication retains its previous shared version.
 7. A selected project's **Delete project** reviews all shared copies and keeps local originals.
    **Settings** shows automatic-sync components and lets you enable or disable them through a
    reviewed operation. **Diagnostics** shows storage availability, installed tools and recent
@@ -108,6 +109,20 @@ services were checked with simulated machines. Windows/macOS native windows, dia
 launching and accessibility still need hands-on review. Chinese welcomes native-speaker review.
 
 Frontend sync excludes retention and binary publication. Tray icons and notifications are outside this version. See [JSON API](json-api.md).
+
+### Platform validation
+
+| Coverage | Current state |
+| --- | --- |
+| CLI tests | The repository CI matrix runs default-feature builds/tests on Linux, macOS and Windows. Check the run for the relevant commit before assuming it passed. |
+| GUI build and service regressions | Checked locally on Linux with `--features gui`; that feature is currently absent from the CI workflow. |
+| Native Linux desktop | Startup, rendering, catalog updates, hidden-window task handling and cleanup cancellation checked with isolated data. |
+| Native Windows/macOS desktop | Window behavior, folder dialogs, terminal launching and cancellation still require hands-on validation. |
+
+Code review and simulated machines do not establish native platform parity. In particular, Windows
+discovery invalidation uses file size/mtime where Unix also uses change time/inode. Publication
+payloads are flushed before swapping; directory syncing is Unix-specific. Crash recovery and cache
+invalidation still need native filesystem testing on Windows/macOS.
 
 ## Advanced discovery performance
 

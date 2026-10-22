@@ -5,6 +5,8 @@
 
 [English](README.md) · [Español](README.es.md)
 
+[桌面指南](docs/desktop.md) · [JSON API](docs/json-api.md) · [更新记录](CHANGELOG.md)
+
 ## 快速开始
 
 ```sh
@@ -38,10 +40,23 @@ actx rm myproject            # 删除整个项目及共享副本；需要确认
 
 ## 脚本和其他界面
 
-可选桌面界面：通过 `cargo build --release --features gui --locked` 编译，运行 `actx gui` 打开。
+可选桌面界面：通过以下命令安装并打开：
+
+```sh
+cargo install --git https://github.com/ericpastorm/actx --features gui --locked
+actx gui
+```
+
+也可以用 `cargo build --release --features gui --locked` 从源码编译。
+安装会提供 `actx` 和可双击的 `actx-gui` 启动器；手动复制时请将两者放在同一目录。
 支持项目、常规对话、搜索、消息预览、添加、删除、同步、转换和继续对话。
 写入前均预览并确认。窄窗口使用对话/详情标签页，Ctrl+1 / Ctrl+2 切换。
 首次打开可选择共享文件夹，也可直接使用转换功能。
+启动时先显示本地保存的目录，再在后台验证；仅在选择对话后读取消息。
+可比较冲突、将所选本地对话移入可恢复的隔离区，并恢复中断的共享发布。
+清理支持进度与取消，已完成的移动仍可恢复。
+桌面原生运行已在 Linux 上检查；Windows/macOS 的窗口、对话框和终端启动仍待实际验证。
+目前 CI 在三个系统上测试 CLI，尚未启用可选 GUI 功能。
 参见[桌面预览说明和当前限制](docs/desktop.md)。
 
 ```sh
@@ -62,4 +77,16 @@ JSON 使用独立于界面语言的标识、状态和原因码。写入操作需
 
 ## 自动添加
 
-按项目选择启用：`actx auto-add MyProject --on --exclude 'scratch/**'`。保存前可预览候选会话；`--off` 恢复手动添加。桌面界面提供相同的规则编辑器。参见[规则与排除](docs/json-api.md#automatic-additions-opt-in-per-project)。
+默认手动选择。按项目选择启用：`actx auto-add MyProject --on --exclude 'scratch/**'`。
+保存规则不会立即添加会话；下次同步项目或全部项目时生效，每台设备使用自己的项目路径。
+加上 `--json` 仅预览而不保存；`--off` 停用规则并保留已保存的会话。
+模糊匹配、正在使用或未完成的会话会被推迟。桌面界面提供相同的规则编辑器。
+参见[规则与排除](docs/json-api.md#automatic-additions-opt-in-per-project)。
+
+## 冲突与恢复
+
+`actx compare claude:SESSION-ID` 比较本地与共享历史，`actx resolve claude:SESSION-ID`
+可选择处理方式并在确认后执行。`--target codex` 用于比较已关联的目标副本。
+`actx recoveries` 列出备份、隔离区和可识别的中断发布；恢复前先审阅版本。
+恢复共享发布时会保留当前共享版本作为另一个恢复条目，本地原始对话不受影响。
+不完整或仍在写入的残留会保留；`actx doctor` 可报告待处理发布。
