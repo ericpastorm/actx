@@ -35,6 +35,13 @@ fn installed_copy(w: &World) -> (Machine, PathBuf, PathBuf) {
     std::fs::create_dir(&bin).unwrap();
     let mine = bin.join(if cfg!(windows) { "actx.exe" } else { "actx" });
     std::fs::copy(ACTX, &mine).unwrap();
+    // Windows copy preserves the build's timestamp, which may be much older than this test.
+    std::fs::File::options()
+        .write(true)
+        .open(&mine)
+        .unwrap()
+        .set_modified(SystemTime::now())
+        .unwrap();
     let shared = w
         .store()
         .join("_bin")
@@ -106,7 +113,8 @@ fn update_uploads_when_this_copy_is_newer() {
     let w = World::new();
     let (m, mine, shared) = installed_copy(&w);
     write_script(&shared, Some("0.0.1"), -600);
-    assert!(run(&m, &mine, &["update"]).contains("uploaded"));
+    let out = run(&m, &mine, &["update"]);
+    assert!(out.contains("uploaded"), "{out}");
     assert_eq!(std::fs::read(&shared).unwrap(), std::fs::read(&mine).unwrap());
 }
 

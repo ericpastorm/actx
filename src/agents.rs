@@ -117,10 +117,7 @@ fn win_processes(only: Option<u32>) -> Vec<(u32, u32, String)> {
     let script = format!(
         "Get-CimInstance Win32_Process {filter} | ForEach-Object {{ '{{0}}|{{1}}|{{2}}' -f $_.ProcessId, $_.ParentProcessId, $_.CommandLine }}"
     );
-    let out = crate::ctx::quiet("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-        .stdin(std::process::Stdio::null())
-        .output();
+    let out = crate::ctx::powershell(&script);
     String::from_utf8_lossy(&out.map(|o| o.stdout).unwrap_or_default())
         .lines()
         .filter_map(|l| {

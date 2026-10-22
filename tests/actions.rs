@@ -751,15 +751,16 @@ fn discovery_reuses_a_local_index_without_writes_and_notices_new_edited_and_remo
     let source = std::fs::read_to_string(&file).unwrap();
     let timestamp = file.metadata().unwrap().modified().unwrap();
     std::fs::write(&file, source.replace("Title A", "Title B").replace("ping", "test")).unwrap();
-    #[cfg(unix)]
     std::fs::File::options()
         .write(true)
         .open(&file)
         .unwrap()
-        .set_modified(timestamp)
+        .set_modified(if cfg!(unix) {
+            timestamp
+        } else {
+            timestamp + std::time::Duration::from_secs(1)
+        })
         .unwrap();
-    #[cfg(not(unix))]
-    let _ = timestamp;
     let edited = api(&m, request.clone());
     assert_eq!(edited["data"]["candidates"][0]["title"], "Title B", "{edited}");
     let second = claude_session(&m, &folder, &[("user", "ping"), ("assistant", "pong")], Some("New"));

@@ -10,6 +10,9 @@
   hide sessions or invalidate content fingerprints by creating WAL sidecars in the source database.
 - Fix Windows-specific compiler warnings and update native opencode fixtures for its current
   import timestamps. Scoped-sync tests verify that unselected conversations stay undownloaded.
+- Isolate PowerShell startup caches from the inspected Windows profile, prefer PowerShell 7
+  when available and retain Windows PowerShell as a fallback. Make cross-platform fixtures use
+  explicit timestamps and compare native paths. CI stops when the first test target fails.
 
 ### Codex activity, growing replies and desktop appearance
 

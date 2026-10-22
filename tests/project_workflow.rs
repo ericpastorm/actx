@@ -91,7 +91,7 @@ fn create_select_sync_and_convert_in_the_matching_clone() {
         if tool == "codex" {
             assert_eq!(codex_threads_from_state(&b)[sid].2, clone.to_string_lossy());
         } else {
-            assert_eq!(opencode_sessions(&b)[sid].1, clone.to_string_lossy());
+            assert_eq!(native(std::path::Path::new(&opencode_sessions(&b)[sid].1)), clone);
         }
     }
     let view = b.actx(&["ls"]);

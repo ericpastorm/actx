@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -167,17 +167,11 @@ fn is_store(d: &Path) -> bool {
 fn network_mounts() -> Vec<String> {
     if cfg!(windows) {
         // mapped network drives (Z:\ → \\nas\share), from PowerShell
-        let out = crate::ctx::quiet("powershell.exe")
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                "Get-PSDrive -PSProvider FileSystem | Where-Object { $_.DisplayRoot } | ForEach-Object { $_.Root }",
-            ])
-            .stdin(Stdio::null())
-            .output()
-            .map(|o| o.stdout)
-            .unwrap_or_default();
+        let out = crate::ctx::powershell(
+            "Get-PSDrive -PSProvider FileSystem | Where-Object { $_.DisplayRoot } | ForEach-Object { $_.Root }",
+        )
+        .map(|o| o.stdout)
+        .unwrap_or_default();
         return String::from_utf8_lossy(&out)
             .lines()
             .map(|l| l.trim().to_string())

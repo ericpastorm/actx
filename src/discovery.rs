@@ -263,15 +263,16 @@ mod tests {
         assert_eq!(reads.get(), 1);
         let original = file.metadata().unwrap().modified().unwrap();
         std::fs::write(&file, b"other").unwrap();
-        #[cfg(unix)]
         std::fs::File::options()
             .write(true)
             .open(&file)
             .unwrap()
-            .set_modified(original)
+            .set_modified(if cfg!(unix) {
+                original // Unix also invalidates equal-mtime edits via ctime.
+            } else {
+                original + std::time::Duration::from_secs(1)
+            })
             .unwrap();
-        #[cfg(not(unix))]
-        let _ = original;
         assert_eq!(memo("test-live", &file, &Value::Null, read).unwrap(), "other");
         assert_eq!(reads.get(), 2);
         std::fs::write(file.with_file_name("history.jsonl-wal"), b"new data").unwrap();

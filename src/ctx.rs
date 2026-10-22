@@ -249,6 +249,24 @@ pub fn quiet(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
     c
 }
 
+/// Keep PowerShell's startup/JIT caches out of the profile being inspected, too.
+/// Prefer PowerShell 7 when available; Windows PowerShell remains the fallback.
+pub fn powershell(script: &str) -> std::io::Result<std::process::Output> {
+    let scratch = tempfile::Builder::new().prefix("actx-powershell-").tempdir()?;
+    let program = find_program("pwsh").unwrap_or_else(|| PathBuf::from("powershell.exe"));
+    quiet(program)
+        .env("HOME", scratch.path())
+        .env("USERPROFILE", scratch.path())
+        .env("LOCALAPPDATA", scratch.path().join("Local"))
+        .env("APPDATA", scratch.path().join("Roaming"))
+        .env("XDG_CACHE_HOME", scratch.path())
+        .env("XDG_STATE_HOME", scratch.path())
+        .env("PSModuleAnalysisCachePath", "NUL")
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .stdin(std::process::Stdio::null())
+        .output()
+}
+
 /// A command that runs `program` the way a shell would: on Windows that finds .cmd and .bat
 /// shims too (std only looks for .exe), and opens no window.
 pub fn command(program: &str) -> std::process::Command {
