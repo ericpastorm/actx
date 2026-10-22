@@ -20,6 +20,7 @@ struct Proc {
     /// files it has open (Linux only)
     files: Vec<PathBuf>,
     interactive: bool,
+    server: bool,
     session: Option<String>,
 }
 
@@ -70,18 +71,35 @@ fn processes() -> Vec<Proc> {
         let cmdline = String::from_utf8_lossy(&cmdline);
         let args: Vec<&str> = cmdline.split('\0').filter(|s| !s.is_empty()).collect();
         let Some(tool) = tool_of_command(&args) else { continue };
+        let state = std::fs::read_to_string(dir.join("stat"))
+            .ok()
+            .and_then(|s| {
+                s.rsplit_once(')')
+                    .map(|(_, rest)| rest.trim_start().chars().next().unwrap_or('Z'))
+            })
+            .unwrap_or('Z');
+        if matches!(state, 'Z' | 'X') {
+            continue;
+        }
         let cwd = std::fs::read_link(dir.join("cwd")).unwrap_or_default();
         let files = std::fs::read_dir(dir.join("fd"))
             .into_iter()
             .flatten()
-            .filter_map(|f| std::fs::read_link(f.ok()?.path()).ok())
+            .filter_map(|f| {
+                let f = f.ok()?;
+                let info = std::fs::read_to_string(dir.join("fdinfo").join(f.file_name())).ok()?;
+                let flags = info.lines().find_map(|line| line.strip_prefix("flags:"))?;
+                let flags = u32::from_str_radix(flags.trim(), 8).ok()?;
+                (flags & 3 != 0).then(|| std::fs::read_link(f.path()).ok()).flatten()
+            })
             .collect();
         out.push(Proc {
             tool,
             pid,
             cwd: cwd.to_string_lossy().into_owned(),
             files,
-            interactive: interactive_tool(&args).is_some(),
+            interactive: !matches!(state, 'T' | 't') && interactive_tool(&args).is_some(),
+            server: codex_server(&args),
             session: selected_session(&args),
         });
     }
@@ -243,6 +261,23 @@ fn interactive_tool(args: &[&str]) -> Option<&'static str> {
     Some(tool)
 }
 
+fn codex_server(args: &[&str]) -> bool {
+    if tool_of_command(args) != Some("codex") {
+        return false;
+    }
+    let mut i = if tool_of(args[0]).is_some() { 1 } else { 2 };
+    while let Some(arg) = args.get(i) {
+        if value_options("codex").contains(arg) {
+            i += 2;
+        } else if arg.starts_with('-') {
+            i += 1;
+        } else {
+            return *arg == "app-server";
+        }
+    }
+    false
+}
+
 fn selected_session(args: &[&str]) -> Option<String> {
     let tool = tool_of_command(args)?;
     let mut i = if tool_of(args[0]).is_some() { 1 } else { 2 };
@@ -285,6 +320,7 @@ fn processes() -> Vec<Proc> {
                 cwd: String::new(),
                 files: Vec::new(),
                 interactive: interactive_tool(&args).is_some(),
+                server: codex_server(&args),
                 session: selected_session(&args),
             })
         })
@@ -306,6 +342,7 @@ fn processes() -> Vec<Proc> {
                 cwd: String::new(),
                 files: Vec::new(),
                 interactive: interactive_tool(&args).is_some(),
+                server: codex_server(&args),
                 session: selected_session(&args),
             })
         })
@@ -315,23 +352,46 @@ fn processes() -> Vec<Proc> {
     }
     let pids: Vec<String> = out.iter().map(|p| p.pid.to_string()).collect();
     let lsof = std::process::Command::new("lsof")
-        .args(["-a", "-d", "cwd", "-Fpn", "-p", &pids.join(",")])
+        .args(["-a", "-Fpfan", "-p", &pids.join(",")])
         .output();
-    let mut pid = 0;
-    let mut cwds = HashMap::new();
-    for line in String::from_utf8_lossy(&lsof.map(|o| o.stdout).unwrap_or_default()).lines() {
+    let mut found = lsof_fields(&String::from_utf8_lossy(&lsof.map(|o| o.stdout).unwrap_or_default()));
+    for p in &mut out {
+        if let Some((cwd, files)) = found.remove(&p.pid) {
+            p.cwd = cwd;
+            p.files = files;
+        }
+    }
+    out
+}
+
+#[cfg(any(all(not(target_os = "linux"), not(windows)), test))]
+fn lsof_fields(text: &str) -> HashMap<u32, (String, Vec<PathBuf>)> {
+    let (mut pid, mut fd, mut access) = (0, String::new(), String::new());
+    let mut result: HashMap<u32, (String, Vec<PathBuf>)> = HashMap::new();
+    for line in text.lines() {
         match line.split_at_checked(1) {
-            Some(("p", n)) => pid = n.parse().unwrap_or(0),
+            Some(("p", value)) => {
+                pid = value.parse().unwrap_or(0);
+                fd.clear();
+                access.clear();
+            }
+            Some(("f", value)) => {
+                fd = value.into();
+                access.clear();
+            }
+            Some(("a", value)) => access = value.into(),
             Some(("n", path)) => {
-                cwds.insert(pid, path.to_string());
+                let entry = result.entry(pid).or_default();
+                if fd == "cwd" {
+                    entry.0 = path.into();
+                } else if matches!(access.as_str(), "w" | "u") {
+                    entry.1.push(path.into());
+                }
             }
             _ => {}
         }
     }
-    for p in &mut out {
-        p.cwd = cwds.remove(&p.pid).unwrap_or_default();
-    }
-    out
+    result
 }
 
 fn scan_running() -> Running {
@@ -392,7 +452,30 @@ pub fn in_use_by_agent_now(s: &Session) -> bool {
 }
 
 fn used_by(r: &Running, s: &Session) -> bool {
-    // Windows can't tell which folder an agent runs in: Codex and opencode count as open in any
+    // Codex identities are exact. A folder match (or an idle indexing server)
+    // is not evidence that this particular conversation is open.
+    if s.harness == "codex" {
+        return r.procs.iter().filter(|p| p.tool == "codex").any(|p| {
+            let owns_file = s
+                .src
+                .as_ref()
+                .is_some_and(|f| p.files.contains(f) || f.canonicalize().is_ok_and(|real| p.files.contains(&real)));
+            if p.server {
+                return owns_file
+                    && s.src
+                        .as_ref()
+                        .is_some_and(|f| crate::codex::task_running(f).unwrap_or(true));
+            }
+            let known_rollout = p.files.iter().any(|f| {
+                f.file_name()
+                    .is_some_and(|n| n.to_string_lossy().starts_with("rollout-"))
+            });
+            if known_rollout {
+                return owns_file;
+            }
+            p.interactive && p.session.as_ref() == Some(&s.id)
+        });
+    }
     let here = |p: &Proc| {
         p.tool == s.harness
             && p.interactive
@@ -413,10 +496,6 @@ fn used_by(r: &Running, s: &Session) -> bool {
         "claude" => {
             r.claude_open.contains(&s.id) || r.procs.iter().any(|p| here(p) && !r.claude_registered.contains(&p.pid))
         }
-        "codex" => r
-            .procs
-            .iter()
-            .any(|p| here(p) || (p.tool == "codex" && s.src.as_ref().is_some_and(|f| p.files.contains(f)))),
         _ => r.procs.iter().any(here),
     }
 }
@@ -503,6 +582,7 @@ mod tests {
                 cwd: s.path.clone(),
                 files: vec![],
                 interactive: false,
+                server: false,
                 session: None,
             }],
             claude_open: HashSet::new(),
@@ -523,6 +603,63 @@ mod tests {
         assert!(used_by(&r, &s));
     }
 
+    #[test]
+    fn codex_requires_an_identity_and_idle_servers_do_not_lock_threads() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("rollout-one.jsonl");
+        let mut s = Session::local("codex", "one".into(), "t".into(), "/work".into(), 0., 1);
+        s.src = Some(file.clone());
+        let mut r = Running {
+            procs: vec![Proc {
+                tool: "codex",
+                pid: 42,
+                cwd: s.path.clone(),
+                files: vec![],
+                interactive: true,
+                server: false,
+                session: None,
+            }],
+            claude_open: HashSet::new(),
+            claude_registered: HashSet::new(),
+            claude_lists: false,
+        };
+        assert!(!used_by(&r, &s), "another Codex in the same folder proves nothing");
+        r.procs[0].session = Some("other".into());
+        assert!(!used_by(&r, &s));
+        r.procs[0].session = Some(s.id.clone());
+        assert!(used_by(&r, &s));
+        r.procs[0].files = vec![dir.path().join("rollout-new-fork.jsonl")];
+        assert!(!used_by(&r, &s), "the actual writer overrides an old resume argument");
+        r.procs[0].files = vec![file.clone()];
+        r.procs[0].server = true;
+        r.procs[0].interactive = false;
+        std::fs::write(
+            &file,
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\"}}\n",
+        )
+        .unwrap();
+        assert!(!used_by(&r, &s), "an idle indexing server is not an active agent");
+        std::fs::write(
+            &file,
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\"}}\n",
+        )
+        .unwrap();
+        assert!(used_by(&r, &s), "an actively generating server remains protected");
+        std::fs::write(
+            &file,
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_aborted\"}}\n",
+        )
+        .unwrap();
+        assert!(!used_by(&r, &s));
+    }
+    #[test]
+    fn macos_file_fields_preserve_spaces_and_ignore_readers() {
+        let result = lsof_fields(
+            "p42\nfcwd\nn/work/my project\nf7\nar\nn/sessions/rollout-old.jsonl\nf8\nau\nn/sessions/rollout-live.jsonl\n",
+        );
+        assert_eq!(result[&42].0, "/work/my project");
+        assert_eq!(result[&42].1, vec![PathBuf::from("/sessions/rollout-live.jsonl")]);
+    }
     #[test]
     fn selected_session_skips_option_values_and_helpers() {
         assert_eq!(selected_session(&["codex", "--model", "resume", "prompt"]), None);

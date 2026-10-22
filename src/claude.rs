@@ -678,6 +678,12 @@ pub fn other_branch(l: &Session, r: &Session, fix: Fix) -> Result<Vec<Turn>> {
 }
 
 pub fn append(l: &mut Session, text: &str, ack: &str) -> Result<()> {
+    append_messages(l, Some(text), ack)
+}
+pub(crate) fn append_reply(l: &mut Session, ack: &str) -> Result<()> {
+    append_messages(l, None, ack)
+}
+fn append_messages(l: &mut Session, text: Option<&str>, ack: &str) -> Result<()> {
     let src = l.src.clone().expect("a local Claude conversation");
     // the last message of the conversation, to hang the new ones from, and the cwd it was using
     let scan = |buf: &[u8], cwd: &mut String| {
@@ -715,16 +721,23 @@ pub fn append(l: &mut Session, text: &str, ack: &str) -> Result<()> {
         "usage": {"input_tokens": 0, "output_tokens": 0},
     });
     let mut f = File::options().append(true).open(&src)?;
-    f.write_all(
-        jsonl(&common(
-            leaf.as_deref(),
-            "user",
-            &u1,
-            json!({"role": "user", "content": text}),
-        ))
-        .as_bytes(),
-    )?;
-    f.write_all(jsonl(&common(Some(&u1), "assistant", &u2, reply)).as_bytes())?;
+    if let Some(text) = text {
+        f.write_all(
+            jsonl(&common(
+                leaf.as_deref(),
+                "user",
+                &u1,
+                json!({"role":"user","content":text}),
+            ))
+            .as_bytes(),
+        )?;
+    }
+    let parent = if text.is_some() {
+        Some(u1.as_str())
+    } else {
+        leaf.as_deref()
+    };
+    f.write_all(jsonl(&common(parent, "assistant", &u2, reply)).as_bytes())?;
     let meta = src.metadata()?;
     l.weight = meta.len();
     l.updated = epoch(meta.modified()?);

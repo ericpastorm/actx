@@ -35,6 +35,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn extended_last_replies_are_continuations_but_edits_remain_conflicts() {
+        let turn = |who, text: &str| Turn {
+            who,
+            text: text.into(),
+            ts: 1,
+        };
+        let before = vec![turn("user", "question"), turn("assistant", "答复: first")];
+        let mut after = before.clone();
+        after[1].text.push_str("\n\nmore details");
+        let base = hashes(&before);
+        let delta = continuation(&base, &after).unwrap();
+        assert_eq!(delta, vec![turn("assistant", "more details")]);
+        assert!(complete_delta(&delta));
+        after.extend([turn("user", "next"), turn("assistant", "answer")]);
+        assert_eq!(continuation(&base, &after).unwrap().len(), 3);
+        after[0].text = "edited question".into();
+        assert!(continuation(&base, &after).is_none());
+        after[0] = before[0].clone();
+        after[1].text = "答复: OTHER\n\nmore details".into();
+        assert!(continuation(&base, &after).is_none());
+        assert!(delta_change(Some(&[1]), Some(&[2])) == LinkChange::Diverged);
+        assert!(delta_change(Some(&[1]), Some(&[1])) == LinkChange::Baselines);
+        assert!(!complete_delta(&[turn("user", "unfinished")]));
+    }
+    #[test]
     fn browser_cache_is_invalidated_by_native_file_changes() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("session.jsonl");
@@ -140,6 +165,7 @@ fn epoch(source: &Session) -> Option<String> {
     }
     crate::codex::compaction_key(source.src.as_ref()?).ok().flatten()
 }
+#[cfg(test)]
 fn change(link: &Link, source: &Session, a: &[u64], b: &[u64]) -> LinkChange {
     let change = link_change(link, a, b);
     if change == LinkChange::Edited
@@ -151,6 +177,7 @@ fn change(link: &Link, source: &Session, a: &[u64], b: &[u64]) -> LinkChange {
     }
     change
 }
+#[cfg(test)]
 fn link_change(link: &Link, a: &[u64], b: &[u64]) -> LinkChange {
     if a == link.a && b == link.b {
         return LinkChange::Unchanged;
@@ -166,6 +193,76 @@ fn link_change(link: &Link, a: &[u64], b: &[u64]) -> LinkChange {
         (true, false) => LinkChange::ToSource,
         _ => LinkChange::Baselines,
     }
+}
+
+/// Return only the new text/turns. A resumed harness can append to the last
+/// assistant message; the saved hash must match an exact UTF-8 prefix to accept it.
+fn continuation(base: &[u64], history: &[Turn]) -> Option<Vec<Turn>> {
+    let current = hashes(history);
+    if current.starts_with(base) {
+        return Some(history[base.len()..].to_vec());
+    }
+    let last = base.len().checked_sub(1)?;
+    if current.len() < base.len() || current[..last] != base[..last] || history[last].who != "assistant" {
+        return None;
+    }
+    let turn = &history[last];
+    let mut hash = turn
+        .who
+        .bytes()
+        .chain([0])
+        .fold(0xcbf29ce484222325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3));
+    for (i, b) in turn.text.bytes().enumerate() {
+        hash = (hash ^ b as u64).wrapping_mul(0x100000001b3);
+        let end = i + 1;
+        if hash == base[last] && turn.text.is_char_boundary(end) {
+            let mut delta = vec![];
+            let text = turn.text[end..].trim();
+            if !text.is_empty() {
+                delta.push(Turn {
+                    text: text.into(),
+                    ..turn.clone()
+                });
+            }
+            delta.extend_from_slice(&history[base.len()..]);
+            return Some(delta);
+        }
+    }
+    None
+}
+fn delta_change(a: Option<&[u64]>, b: Option<&[u64]>) -> LinkChange {
+    let (Some(a), Some(b)) = (a, b) else {
+        return LinkChange::Edited;
+    };
+    match (a.is_empty(), b.is_empty()) {
+        (true, true) => LinkChange::Unchanged,
+        (false, true) => LinkChange::ToTarget,
+        (true, false) => LinkChange::ToSource,
+        (false, false) if a == b => LinkChange::Baselines,
+        _ => LinkChange::Diverged,
+    }
+}
+fn history_change(link: &Link, source: &Session, a: &[Turn], b: &[Turn]) -> LinkChange {
+    let da = continuation(&link.a, a).map(|t| hashes(&t));
+    let db = continuation(&link.b, b).map(|t| hashes(&t));
+    let change = delta_change(da.as_deref(), db.as_deref());
+    if change == LinkChange::Edited
+        && hashes(b) == link.b
+        && epoch(source).is_some_and(|e| Some(&e) != link.epoch.as_ref())
+    {
+        LinkChange::Refresh
+    } else {
+        change
+    }
+}
+fn complete_delta(delta: &[Turn]) -> bool {
+    // An exact extension of a saved assistant reply needs no invented user turn.
+    let pairs = if delta.first().is_some_and(|t| t.who == "assistant") {
+        &delta[1..]
+    } else {
+        delta
+    };
+    pairs.len().is_multiple_of(2) && pairs.chunks(2).all(|p| p[0].who == "user" && p[1].who == "assistant")
 }
 
 fn file() -> std::path::PathBuf {
@@ -355,7 +452,7 @@ pub fn extend_keys(keys: &mut std::collections::HashSet<String>) {
 }
 fn append(s: &mut Session, delta: &[Turn]) -> Result<()> {
     // Never manufacture replies or silently flatten an incomplete turn.
-    if !delta.len().is_multiple_of(2) || delta.chunks(2).any(|p| p[0].who != "user" || p[1].who != "assistant") {
+    if !complete_delta(delta) {
         return Err(Error(
             "Incomplete continuation: close the agent turn before syncing harnesses".into(),
         ));
@@ -373,7 +470,18 @@ fn append(s: &mut Session, delta: &[Turn]) -> Result<()> {
         let data = crate::opencode::export(&s.id, &s.path)?;
         state::backup(s, state::Copy::Bytes(&data), "multiharness")?;
     }
-    for pair in delta.chunks(2) {
+    let pairs = if let Some(first) = delta.first().filter(|t| t.who == "assistant") {
+        match s.harness {
+            "claude" => crate::claude::append_reply(s, &first.text)?,
+            "codex" => crate::codex::append_reply(s, &first.text)?,
+            "opencode" => crate::opencode::append_reply(s, &first.text)?,
+            _ => return Err(Error("Unsupported reply continuation".into())),
+        }
+        &delta[1..]
+    } else {
+        delta
+    };
+    for pair in pairs.chunks(2) {
         harness::get(s.harness).append(s, &pair[0].text, &pair[1].text)?;
     }
     Ok(())
@@ -569,8 +677,7 @@ fn run_locked(root: &Path, args: &crate::commands::Args, config: &serde_json::Va
                         };
                         let mirror_history = histories.get(&mirror)?;
                         let (b_turns, _) = mirror_history.as_ref();
-                        let b = hashes(b_turns);
-                        let change = change(link, &source, &a, &b);
+                        let change = history_change(link, &source, a_turns, b_turns);
                         match change {
                             LinkChange::Refresh => {
                                 if agents::in_use(&mirror) || agents::in_use_by_agent_now(&mirror) {
@@ -630,10 +737,28 @@ fn run_locked(root: &Path, args: &crate::commands::Args, config: &serde_json::Va
                         }
                         if change == LinkChange::ToTarget {
                             histories.invalidate(&mirror);
-                            append(&mut mirror, &a_turns[link.a.len()..])?;
+                            append(
+                                &mut mirror,
+                                &continuation(&link.a, a_turns)
+                                    .ok_or_else(|| Error("Source history changed".into()))?,
+                            )?;
                         } else if change == LinkChange::ToSource {
+                            if agents::in_use(&mirror)
+                                || agents::in_use_by_agent_now(&mirror)
+                                || mirror.harness == "codex"
+                                    && mirror
+                                        .src
+                                        .as_ref()
+                                        .is_some_and(|p| crate::codex::completed_end(p).ok().flatten().is_some())
+                            {
+                                return Err(Error("Source turn is still in progress; linked copies deferred".into()));
+                            }
                             histories.invalidate(&source);
-                            append(&mut source, &b_turns[link.b.len()..])?;
+                            append(
+                                &mut source,
+                                &continuation(&link.b, b_turns)
+                                    .ok_or_else(|| Error("Target history changed".into()))?,
+                            )?;
                             source_changed = true;
                         }
                         let a = hashes(&histories.get(&source)?.0);
@@ -809,6 +934,8 @@ pub struct LinkView {
 struct CachedHashes {
     stamp: String,
     hashes: Vec<u64>,
+    #[serde(default)]
+    continuations: HashMap<String, Option<Vec<u64>>>,
 }
 
 // Only the browser uses this disposable cache. Sync still reads the native history before
@@ -860,10 +987,34 @@ impl ViewCache {
             CachedHashes {
                 stamp,
                 hashes: hashes.clone(),
+                continuations: HashMap::new(),
             },
         );
         *dirty = true;
         Some(hashes)
+    }
+    fn delta(&mut self, s: &Session, base: &[u64], dirty: &mut bool) -> Option<Option<Vec<u64>>> {
+        let current = self.get(s, dirty)?;
+        if current.starts_with(base) {
+            return Some(Some(current[base.len()..].to_vec()));
+        }
+        let key = crate::engine::digest(&serde_json::to_vec(base).ok()?);
+        if let Some(delta) = self.0.get(&s.key())?.continuations.get(&key) {
+            return Some(delta.clone());
+        }
+        let stamp = Self::stamp(s)?;
+        let turns = harness::get(s.harness).local_turns(s).ok()?.0;
+        if Self::stamp(s).as_ref() != Some(&stamp) {
+            return None;
+        }
+        let delta = continuation(base, &turns).map(|t| hashes(&t));
+        let entry = self.0.get_mut(&s.key())?;
+        if entry.continuations.len() >= 8 {
+            entry.continuations.clear();
+        }
+        entry.continuations.insert(key, delta.clone());
+        *dirty = true;
+        Some(delta)
     }
     fn save(&self, path: &Path) -> Result<()> {
         std::fs::create_dir_all(&ctx().cache_dir)?;
@@ -896,21 +1047,7 @@ pub fn views(local: &HashMap<String, Session>) -> Vec<LinkView> {
         .and_then(|data| serde_json::from_slice(&data).ok())
         .unwrap_or_default();
     let mut dirty = false;
-    let mut cache = HashMap::new();
-    for key in links
-        .copies
-        .values()
-        .filter(|l| active(l))
-        .flat_map(|l| [&l.source, &l.target])
-    {
-        cache
-            .entry(key.clone())
-            .or_insert_with(|| local.get(key).and_then(|s| disk.get(s, &mut dirty)));
-    }
-    if dirty && !crate::inspection::enabled() {
-        let _ = disk.save(&cache_file);
-    }
-    links
+    let views = links
         .copies
         .into_values()
         .map(|l| {
@@ -921,33 +1058,29 @@ pub fn views(local: &HashMap<String, Session>) -> Vec<LinkView> {
                     state: "unmanaged",
                 };
             }
-            let state = match (
-                cache.get(&l.source).and_then(Option::as_ref),
-                cache.get(&l.target).and_then(Option::as_ref),
-            ) {
+            let a = local.get(&l.source).and_then(|s| disk.delta(s, &l.a, &mut dirty));
+            let b = local.get(&l.target).and_then(|s| disk.delta(s, &l.b, &mut dirty));
+            let state = match (a, b) {
                 (_, None) => "missing",
-                (None, Some(b)) => {
-                    if b == &l.b {
+                (None, Some(Some(b))) => {
+                    if b.is_empty() {
                         "unknown"
                     } else {
                         "push"
                     }
                 }
-                (Some(a), Some(b)) if !a.starts_with(&l.a) || !b.starts_with(&l.b) => {
-                    if local
-                        .get(&l.source)
-                        .is_some_and(|s| change(&l, s, a, b) == LinkChange::Refresh)
+                (None, _) => "conflict",
+                (Some(a), Some(b)) => match delta_change(a.as_deref(), b.as_deref()) {
+                    LinkChange::Unchanged | LinkChange::Baselines => "synced",
+                    LinkChange::ToTarget => "pull",
+                    LinkChange::ToSource => "push",
+                    _ if b.as_ref().is_some_and(Vec::is_empty)
+                        && local
+                            .get(&l.source)
+                            .is_some_and(|s| epoch(s).is_some_and(|e| Some(&e) != l.epoch.as_ref())) =>
                     {
                         "pull"
-                    } else {
-                        "conflict"
                     }
-                }
-                (Some(a), Some(b)) => match (a != &l.a, b != &l.b) {
-                    (false, false) => "synced",
-                    (true, false) => "pull",
-                    (false, true) => "push",
-                    (true, true) if a[l.a.len()..] == b[l.b.len()..] => "synced",
                     _ => "conflict",
                 },
             };
@@ -957,7 +1090,11 @@ pub fn views(local: &HashMap<String, Session>) -> Vec<LinkView> {
                 state,
             }
         })
-        .collect()
+        .collect();
+    if dirty && !crate::inspection::enabled() {
+        let _ = disk.save(&cache_file);
+    }
+    views
 }
 
 /// Inspect linked continuations and retention using the same baselines as the writer.
@@ -1072,8 +1209,7 @@ pub fn preview(
                         ));
                     };
                     let mirror_history = histories.get(mirror)?;
-                    let b = hashes(&mirror_history.0);
-                    let (kind, delta, destination) = match change(link, source, &a, &b) {
+                    let (kind, delta, destination) = match history_change(link, source, &history.0, &mirror_history.0) {
                         LinkChange::Unchanged => {
                             return Ok((
                                 "synced",
@@ -1109,8 +1245,10 @@ pub fn preview(
                                 tr!("Both harnesses continued independently; both copies are kept"),
                             ));
                         }
-                        LinkChange::ToTarget => ("linked_pull", &history.0[link.a.len()..], mirror),
-                        LinkChange::ToSource => ("linked_push", &mirror_history.0[link.b.len()..], source),
+                        LinkChange::ToTarget => ("linked_pull", continuation(&link.a, &history.0).unwrap(), mirror),
+                        LinkChange::ToSource => {
+                            ("linked_push", continuation(&link.b, &mirror_history.0).unwrap(), source)
+                        }
                         LinkChange::Baselines => {
                             return Ok((
                                 "link",
@@ -1119,9 +1257,21 @@ pub fn preview(
                             ));
                         }
                     };
-                    if !delta.len().is_multiple_of(2)
-                        || delta.chunks(2).any(|p| p[0].who != "user" || p[1].who != "assistant")
+                    if kind == "linked_push"
+                        && (agents::in_use(mirror)
+                            || mirror.harness == "codex"
+                                && mirror
+                                    .src
+                                    .as_ref()
+                                    .is_some_and(|p| crate::codex::completed_end(p).ok().flatten().is_some()))
                     {
+                        return Ok((
+                            "skip",
+                            "source_active",
+                            tr!("Source open or active in the last 2 minutes; linked copies are deferred"),
+                        ));
+                    }
+                    if !complete_delta(&delta) {
                         return Ok((
                             "skip",
                             "incomplete_turn",

@@ -268,6 +268,34 @@ impl State {
         }
         crate::session::status(local, remote, remote.and_then(|r| self.base.get(&r.key()).copied()))
     }
+    /// Catalog display must not download legacy shared payloads. Current publications
+    /// provide their content hash in metadata; older ones retain their weight indicator.
+    /// Action planning/revision checks still call the full `status` method above.
+    pub fn display_status(&self, local: Option<&Session>, remote: Option<&Session>) -> &'static str {
+        if let (Some(l), Some(r)) = (local, remote)
+            && !r.meta().get("content_hash").is_some_and(Value::is_string)
+            && let Some(b) = self
+                .content
+                .get(&r.key())
+                .filter(|b| Some(&b.weights) == self.base.get(&r.key()))
+        {
+            let here = if crate::integrity::stamp(l) == b.stamp {
+                Ok(b.local.clone())
+            } else {
+                crate::integrity::local(l)
+            };
+            return match here {
+                Ok(hash) => match (hash != b.local, r.weight != b.weights.1) {
+                    (false, false) => "synced",
+                    (true, false) => "push",
+                    (false, true) => "pull",
+                    (true, true) => "conflict",
+                },
+                Err(_) => "unknown",
+            };
+        }
+        self.status(local, remote)
+    }
     pub fn checkpoint(&mut self, local: &Session, remote: &Session) -> Result<()> {
         let weights = *self
             .base
@@ -283,6 +311,38 @@ impl State {
 mod tests {
     use super::*;
 
+    #[test]
+    fn catalog_display_does_not_open_legacy_shared_payloads() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("local.jsonl");
+        std::fs::write(&file, "{\"type\":\"assistant\",\"message\":{\"content\":\"saved\"}}\n").unwrap();
+        let mut local = Session::local(
+            "claude",
+            "legacy-display".into(),
+            "title".into(),
+            "/work".into(),
+            1.,
+            100,
+        );
+        local.src = Some(file);
+        let mut remote = local.clone();
+        remote.src = None;
+        remote.meta = Some(json!({"files":{"session":"missing-payload.zst"}}));
+        let mut state = State::default();
+        state.base.insert(remote.key(), (100, 100));
+        state.content.insert(
+            remote.key(),
+            crate::integrity::Baseline {
+                local: crate::integrity::fresh(&local).unwrap(),
+                remote: "stored-content".into(),
+                stamp: crate::integrity::stamp(&local),
+                weights: (100, 100),
+            },
+        );
+        assert_eq!(state.display_status(Some(&local), Some(&remote)), "synced");
+        remote.weight = 101;
+        assert_eq!(state.display_status(Some(&local), Some(&remote)), "pull");
+    }
     #[test]
     fn saving_keeps_what_others_saved_meanwhile() {
         let was: BTreeMap<String, u64> = [("a".into(), 1), ("b".into(), 1), ("gone".into(), 1)].into();

@@ -88,6 +88,8 @@ conversation edits, binary updates or opencode CLI calls. SQLite reads use priva
 snapshots, including WAL data. Native change indicators remain available; where a content baseline
 exists, states also compare versioned fingerprints to detect edits that counts alone would miss.
 Legacy state falls back to its existing indicators until a successful sync records content baselines.
+Catalog display does not download legacy shared payloads lacking a metadata fingerprint; their shared
+weight remains the display indicator. Action planning and confirmation still perform full checks.
 
 ## Envelope and exit codes
 

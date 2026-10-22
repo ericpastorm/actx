@@ -3,6 +3,11 @@
 The **actX** desktop follows Pneuma's terminal style: black panels, square borders,
 JetBrains Mono typography and white/gray controls. The wordmark uses a white `act`
 and a red uppercase `X`; color in the interface indicates status and destructive actions.
+The wordmark uses original bitmap lettering. Settings offers **Pixel 5x7** (default),
+**Terminal stencil** and **ASCII matrix**, with a red X pulse/scan animation that can be disabled.
+These local appearance choices are saved immediately, independently of sync configuration.
+Compare the [three lettering proposals](../assets/actx-wordmark-proposals.svg).
+
 A standalone vector wordmark is available in [assets/actx.svg](../assets/actx.svg).
 
 The desktop is an optional native frontend using [egui/eframe](https://docs.rs/eframe/0.37.0/eframe/)
@@ -67,6 +72,13 @@ A spinner stays active while they work. Confirmations include current revisions 
 again under locks before writes. Closing during an apply is deferred until it completes.
 Canceling a confirmation performs no writes.
 
+App-owned dialogs open centered horizontally and vertically. Vector action icons retain text
+labels and keyboard interaction; they do not depend on system emoji fonts.
+Action icons have their own column so wrapped labels stay aligned. Official harness logos identify
+Claude, Codex, opencode and Antigravity in selectors and configuration. Conversation titles use
+the full row width, with small logos beside status and age underneath; hovering reveals the tool names.
+Artwork sources are recorded in [assets/harnesses](../assets/harnesses/README.md).
+
 Wide windows have three columns; narrow windows use conversation/detail tabs. **Ctrl+1 / Ctrl+2**
 (**Cmd** on macOS) switch views. Tab navigation uses egui widgets. The bundled OFL font covers
 common CJK characters without requiring a separate Chinese font install.
@@ -96,6 +108,10 @@ metadata; it checks those cheaply every two seconds. Returning focus also reques
 Changes made on another computer appear on the next catalog refresh; no filesystem watcher is
 installed on shared storage. GUI actions refresh the catalog afterwards. Settings changes discard
 old on-screen data before loading the new configuration.
+
+For older shared publications without a stored content fingerprint, the catalog uses their legacy
+weight indicator rather than downloading compressed histories just to display a row. Current
+publications supply their content hash in metadata. This display fallback never authorizes writes.
 
 All previews and writes still re-read the real histories and check revisions/locks. The index
 is only for display and never supplies synchronization decisions or work-folder bindings.

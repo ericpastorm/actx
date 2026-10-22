@@ -277,7 +277,7 @@ impl Catalog {
                 remote: None,
                 state: "new",
             });
-            c.state = st.status(c.local.as_ref(), Some(&r));
+            c.state = st.display_status(c.local.as_ref(), Some(&r));
             c.remote = Some(r);
         }
         let registered: HashSet<_> = views.iter().map(|v| v.target.clone()).collect();

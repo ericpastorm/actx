@@ -7,7 +7,10 @@ use std::{
     sync::{Arc, atomic::Ordering, mpsc},
     time::{Duration, Instant},
 };
+mod brand;
 mod cleanup;
+mod icons;
+use icons::Icon;
 mod jobs;
 mod theme;
 
@@ -92,6 +95,7 @@ struct Desktop {
     recovery_request: Value,
     diagnostic_data: Option<Value>,
     adoption_editor: Option<AdoptionEditor>,
+    appearance: brand::Appearance,
 }
 fn text(v: &Value, k: &str) -> String {
     v[k].as_str().unwrap_or_default().to_string()
@@ -153,6 +157,7 @@ impl Desktop {
             recovery_request: json!({"action":"recoveries"}),
             diagnostic_data: None,
             adoption_editor: None,
+            appearance: brand::Appearance::load(),
         };
         app.enqueue(Kind::Settings, json!({"action":"settings"}));
         app.refresh();
@@ -610,19 +615,19 @@ impl Desktop {
     }
     fn header(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            theme::wordmark(ui);
+            brand::wordmark(ui, self.appearance.style, self.appearance.motion);
             if ui.available_width() > 850. {
                 ui.weak(tr!("Your conversations, across tools and computers"));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
-                    .add_enabled(!self.busy(), egui::Button::new(tr!("Settings")))
+                    .add_enabled(!self.busy(), icons::button(Icon::Settings, tr!("Settings")))
                     .clicked()
                 {
                     self.show_settings = !self.show_settings;
                 }
                 if ui
-                    .add_enabled(!self.busy(), egui::Button::new(tr!("Refresh")))
+                    .add_enabled(!self.busy(), icons::button(Icon::Refresh, tr!("Refresh")))
                     .clicked()
                 {
                     self.refresh();
@@ -649,14 +654,14 @@ impl Desktop {
         }
         ui.separator();
         if ui
-            .add_enabled(!self.busy(), egui::Button::new(tr!("Create project")))
+            .add_enabled(!self.busy(), icons::button(Icon::Add, tr!("Create project")))
             .clicked()
         {
             self.new_project = true;
             self.folder.clear();
         }
         if ui
-            .add_enabled(!self.busy(), egui::Button::new(tr!("Sync project scope")))
+            .add_enabled(!self.busy(), icons::button(Icon::Sync, tr!("Sync project scope")))
             .clicked()
         {
             let mut req = json!({"action":"sync"});
@@ -672,7 +677,7 @@ impl Desktop {
         if self.scope != "*"
             && self.scope != crate::store::GENERAL
             && ui
-                .add_enabled(!self.busy(), egui::Button::new(tr!("Automatic additions")))
+                .add_enabled(!self.busy(), icons::button(Icon::Automatic, tr!("Automatic additions")))
                 .clicked()
         {
             let rule = array(&self.catalog, "projects")
@@ -692,27 +697,30 @@ impl Desktop {
             && ui
                 .add_enabled(
                     !self.busy(),
-                    egui::Button::new(RichText::new(tr!("Delete project")).color(theme::RED)),
+                    icons::button(Icon::Delete, tr!("Delete project")).color(theme::RED),
                 )
                 .clicked()
         {
             self.enqueue(Kind::Preview, json!({"action":"delete_project","project":self.scope}));
         }
         if ui
-            .add_enabled(!self.busy(), egui::Button::new(tr!("Recovery")))
+            .add_enabled(!self.busy(), icons::button(Icon::Recovery, tr!("Recovery")))
             .clicked()
         {
             self.enqueue(Kind::Recoveries, json!({"action":"recoveries"}));
         }
         if ui
-            .add_enabled(!self.busy(), egui::Button::new(tr!("Clean local conversations")))
+            .add_enabled(
+                !self.busy(),
+                icons::button(Icon::Clean, tr!("Clean local conversations")),
+            )
             .clicked()
         {
             self.cleanup_editor = Some(cleanup::Editor::default());
         }
         let old = self.all;
         let add_clicked = ui
-            .add_enabled(!self.busy(), egui::Button::new(tr!("Add conversations")))
+            .add_enabled(!self.busy(), icons::button(Icon::Add, tr!("Add conversations")))
             .clicked();
         if add_clicked {
             self.picking = true;
@@ -775,46 +783,23 @@ impl Desktop {
                         .map(|c| text(c, "harness"))
                         .collect::<BTreeSet<_>>()
                         .into_iter()
-                        .collect::<Vec<_>>()
-                        .join(" · ");
+                        .collect::<Vec<_>>();
                     let color = match group["state"].as_str() {
                         Some("conflict" | "unknown") => theme::WARNING,
                         Some("synced") => theme::OK,
                         _ => theme::MUTED,
                     };
                     let current = group["id"] == self.selected;
-                    let mut label = egui::text::LayoutJob::default();
-                    label.append(
-                        &format!("{} {title}\n", if current { ">" } else { " " }),
-                        0.,
-                        egui::TextFormat {
-                            font_id: egui::FontId::monospace(13.),
-                            color: if current { theme::TEXT } else { theme::SECONDARY },
-                            ..Default::default()
-                        },
-                    );
-                    label.append(
-                        &format!(
-                            "  {tools}  ·  {}  ·  {}",
-                            state_label(&text(&group, "state")),
-                            crate::ui::ago(group["updated_at"].as_f64().unwrap_or(0.))
-                        ),
-                        0.,
-                        egui::TextFormat {
-                            font_id: egui::FontId::monospace(11.),
-                            color,
-                            ..Default::default()
-                        },
+                    let status = format!(
+                        "{} · {}",
+                        state_label(&text(&group, "state")),
+                        crate::ui::ago(group["updated_at"].as_f64().unwrap_or(0.))
                     );
                     if ui
-                        .add_enabled(
-                            !self.navigation_locked(),
-                            egui::Button::new(label)
-                                .selected(current)
-                                .frame(current)
-                                .wrap()
-                                .min_size(egui::vec2(ui.available_width(), 58.)),
-                        )
+                        .add_enabled_ui(!self.navigation_locked(), |ui| {
+                            icons::conversation(ui, &title, &tools, &status, current, color)
+                        })
+                        .inner
                         .clicked()
                     {
                         selected = Some(group);
@@ -846,15 +831,18 @@ impl Desktop {
                     .iter()
                     .find(|c| c["id"] == self.source)
                     .map(|c| {
-                        format!(
-                            "{} · {}",
-                            text(c, "harness"),
-                            if c["local"].is_object() {
-                                tr!("Local")
-                            } else {
-                                tr!("Shared")
-                            }
-                        )
+                        egui::Atoms::new((
+                            icons::harness(&text(c, "harness")),
+                            format!(
+                                "{} · {}",
+                                text(c, "harness"),
+                                if c["local"].is_object() {
+                                    tr!("Local")
+                                } else {
+                                    tr!("Shared")
+                                }
+                            ),
+                        ))
                     })
                     .unwrap_or_default(),
             )
@@ -863,14 +851,17 @@ impl Desktop {
                     ui.selectable_value(
                         &mut self.source,
                         text(c, "id"),
-                        format!(
-                            "{} · {}",
-                            text(c, "harness"),
-                            if c["local"].is_object() {
-                                tr!("Local")
-                            } else {
-                                tr!("Shared")
-                            }
+                        (
+                            icons::harness(&text(c, "harness")),
+                            format!(
+                                "{} · {}",
+                                text(c, "harness"),
+                                if c["local"].is_object() {
+                                    tr!("Local")
+                                } else {
+                                    tr!("Shared")
+                                }
+                            ),
                         ),
                     );
                 }
@@ -882,10 +873,10 @@ impl Desktop {
         ui.horizontal(|ui| {
             ui.label(tr!("Harnesses"));
             egui::ComboBox::from_id_salt("target-harness")
-                .selected_text(&self.target)
+                .selected_text((icons::harness(&self.target), self.target.clone()))
                 .show_ui(ui, |ui| {
                     for tool in crate::harness::CONVERTS {
-                        ui.selectable_value(&mut self.target, tool.to_string(), tool);
+                        ui.selectable_value(&mut self.target, tool.to_string(), (icons::harness(tool), tool));
                     }
                 });
         });
@@ -912,7 +903,7 @@ impl Desktop {
         });
         ui.horizontal_wrapped(|ui| {
             if ui
-                .add_enabled(!self.busy(), egui::Button::new(tr!("Compare histories")))
+                .add_enabled(!self.busy(), icons::button(Icon::Compare, tr!("Compare histories")))
                 .clicked()
             {
                 let copy = copies.iter().find(|c| c["id"] == self.source);
@@ -924,7 +915,7 @@ impl Desktop {
                 self.enqueue(Kind::Comparison, req);
             }
             if ui
-                .add_enabled(!self.busy(), egui::Button::new(tr!("Recovery")))
+                .add_enabled(!self.busy(), icons::button(Icon::Recovery, tr!("Recovery")))
                 .clicked()
             {
                 self.enqueue(Kind::Recoveries, json!({"action":"recoveries","ids":[self.selected]}));
@@ -947,12 +938,18 @@ impl Desktop {
                         "sync" | "delete" => group["managed"] == true,
                         _ => true,
                     };
-                    let label = if action == "delete" {
-                        RichText::new(label).color(theme::RED)
-                    } else {
-                        RichText::new(label)
+                    let icon = match action {
+                        "add" => Icon::Add,
+                        "sync" => Icon::Sync,
+                        "convert" => Icon::Convert,
+                        "resume" => Icon::Resume,
+                        _ => Icon::Delete,
                     };
-                    if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
+                    let mut button = icons::button(icon, label);
+                    if action == "delete" {
+                        button = button.color(theme::RED);
+                    }
+                    if ui.add_enabled(enabled, button).clicked() {
                         self.preview(action);
                     }
                 }
@@ -1002,7 +999,7 @@ impl Desktop {
             let path = if root { &mut self.root } else { &mut self.folder };
             ui.add(egui::TextEdit::singleline(path).desired_width(220.));
             if ui
-                .add_enabled(!self.busy(), egui::Button::new(tr!("Choose folder")))
+                .add_enabled(!self.busy(), icons::button(Icon::Folder, tr!("Choose folder")))
                 .clicked()
             {
                 self.enqueue(if root { Kind::RootFolder } else { Kind::WorkFolder }, Value::Null);
@@ -1014,7 +1011,7 @@ impl Desktop {
             return;
         }
         let mut open = true;
-        egui::Window::new(tr!("Settings"))
+        theme::dialog(tr!("Settings"))
             .open(&mut open)
             .default_width(550.)
             .max_height((ctx.content_rect().height() - 80.).max(240.))
@@ -1023,6 +1020,26 @@ impl Desktop {
                 if self.settings["root_from_env"] == true {
                     ui.label(tr!("ACTX_ROOT overrides the shared folder in settings"));
                 }
+                let previous = (self.appearance.style, self.appearance.motion);
+                ui.collapsing(tr!("Wordmark style"), |ui| {
+                    for (style, label) in [
+                        (brand::Style::Pixel, "Pixel 5x7"),
+                        (brand::Style::Stencil, "Terminal stencil"),
+                        (brand::Style::Ascii, "ASCII matrix"),
+                    ] {
+                        ui.horizontal(|ui| {
+                            ui.radio_value(&mut self.appearance.style, style, label);
+                            brand::wordmark(ui, style, false);
+                        });
+                    }
+                    ui.checkbox(&mut self.appearance.motion, tr!("Animate the X"));
+                });
+                if previous != (self.appearance.style, self.appearance.motion)
+                    && let Err(e) = self.appearance.save()
+                {
+                    self.notice = e.to_string();
+                }
+                ui.separator();
                 self.folder_field(ui, true);
                 ui.horizontal(|ui| {
                     ui.label(tr!("Language"));
@@ -1045,13 +1062,16 @@ impl Desktop {
                     if ui
                         .checkbox(
                             &mut enabled,
-                            format!(
-                                "{id}{}",
-                                if tool["installed"] == true {
-                                    String::new()
-                                } else {
-                                    format!(" ({})", tr!("not installed"))
-                                }
+                            (
+                                icons::harness(&id),
+                                format!(
+                                    "{id}{}",
+                                    if tool["installed"] == true {
+                                        String::new()
+                                    } else {
+                                        format!(" ({})", tr!("not installed"))
+                                    }
+                                ),
                             ),
                         )
                         .changed()
@@ -1087,13 +1107,13 @@ impl Desktop {
                         }
                     }
                     if ui
-                        .add_enabled(!self.busy(), egui::Button::new(tr!("Diagnostics")))
+                        .add_enabled(!self.busy(), icons::button(Icon::Diagnostics, tr!("Diagnostics")))
                         .clicked()
                     {
                         self.enqueue(Kind::Diagnostics, json!({"action":"diagnostics"}));
                     }
                     if ui
-                        .add_enabled(!self.busy(), egui::Button::new(tr!("Recovery")))
+                        .add_enabled(!self.busy(), icons::button(Icon::Recovery, tr!("Recovery")))
                         .clicked()
                     {
                         self.enqueue(Kind::Recoveries, json!({"action":"recoveries"}));
@@ -1127,7 +1147,7 @@ impl Desktop {
             return;
         }
         let mut open = true;
-        egui::Window::new(tr!("Create project"))
+        theme::dialog(tr!("Create project"))
             .open(&mut open)
             .default_width(520.)
             .show(ctx, |ui| {
@@ -1140,7 +1160,7 @@ impl Desktop {
                     "Create the project, then select its conversations from the local list"
                 ));
                 if ui
-                    .add_enabled(!self.busy(), egui::Button::new(tr!("Preview")))
+                    .add_enabled(!self.busy(), icons::button(Icon::Compare, tr!("Preview")))
                     .clicked()
                 {
                     self.enqueue(
@@ -1185,13 +1205,13 @@ impl Desktop {
             ui.horizontal(|ui| {
                 let allowed = pending.response["status"] == "ok" && pending.response["data"]["expected"].is_object();
                 if ui
-                    .add_enabled(allowed && !self.busy(), egui::Button::new(tr!("Apply")))
+                    .add_enabled(allowed && !self.busy(), icons::button(Icon::Check, tr!("Apply")))
                     .clicked()
                 {
                     confirm = true;
                     keep = false;
                 }
-                if ui.button(tr!("Cancel")).clicked() {
+                if ui.add(icons::button(Icon::Cancel, tr!("Cancel"))).clicked() {
                     keep = false;
                 }
             });
@@ -1211,7 +1231,7 @@ impl Desktop {
     fn comparison_window(&mut self, ctx: &egui::Context) {
         let Some(data) = self.comparison.clone() else { return };
         let mut open = true;
-        egui::Window::new(tr!("Compare histories"))
+        theme::dialog(tr!("Compare histories"))
             .open(&mut open)
             .default_width(840.)
             .max_height((ctx.content_rect().height() - 80.).max(240.))
@@ -1224,7 +1244,10 @@ impl Desktop {
                 let render = |ui: &mut egui::Ui, side: &str, label: String| {
                     let history = &data["comparison"][side];
                     ui.strong(label);
-                    ui.small(format!("{} · {}", text(history, "harness"), text(history, "host")));
+                    ui.add(egui::WidgetAtom::new((
+                        icons::harness(&text(history, "harness")),
+                        RichText::new(format!("{} · {}", text(history, "harness"), text(history, "host"))).small(),
+                    )));
                     if history["omitted_messages"].as_u64().unwrap_or(0) > 0 {
                         ui.weak(tr!("Preview shortened; the complete original is preserved"));
                     }
@@ -1307,7 +1330,7 @@ impl Desktop {
     fn recovery_window(&mut self, ctx: &egui::Context) {
         let Some(data) = self.recoveries.clone() else { return };
         let mut open = true;
-        egui::Window::new(tr!("Recovery"))
+        theme::dialog(tr!("Recovery"))
             .open(&mut open)
             .default_width(680.)
             .max_height((ctx.content_rect().height() - 80.).max(240.))
@@ -1317,7 +1340,7 @@ impl Desktop {
                     "Choose a backup or quarantined conversation to review its recovery"
                 ));
                 if ui
-                    .add_enabled(!self.busy(), egui::Button::new(tr!("Refresh")))
+                    .add_enabled(!self.busy(), icons::button(Icon::Refresh, tr!("Refresh")))
                     .clicked()
                 {
                     self.enqueue(Kind::Recoveries, self.recovery_request.clone());
@@ -1397,7 +1420,7 @@ impl Desktop {
         };
         let mut open = true;
         let mut preview = false;
-        egui::Window::new(tr!("Automatic additions"))
+        theme::dialog(tr!("Automatic additions"))
             .open(&mut open).default_width(550.)
             .max_height((ctx.content_rect().height()-80.).max(240.)).vscroll(true)
             .show(ctx, |ui| {
@@ -1409,7 +1432,7 @@ impl Desktop {
                 ui.label(tr!("Harnesses"));
                 for harness in crate::harness::NAMES {
                     let mut enabled=editor.rule.harnesses.iter().any(|h|h==harness);
-                    if ui.checkbox(&mut enabled,harness).changed() {
+                    if ui.checkbox(&mut enabled,(icons::harness(harness),harness)).changed() {
                         editor.rule.harnesses.retain(|h|h!=harness);
                         if enabled { editor.rule.harnesses.push(harness.into()); }
                     }
@@ -1419,7 +1442,7 @@ impl Desktop {
                 ui.label(tr!("Excluded titles, one pattern per line (*private*)"));
                 ui.text_edit_multiline(&mut editor.titles);
                 ui.label(tr!("Disabling keeps existing synchronized conversations. Deleted conversations stay excluded until added manually."));
-                preview=ui.add_enabled(!self.busy(),egui::Button::new(tr!("Preview"))).clicked();
+                preview=ui.add_enabled(!self.busy(),icons::button(Icon::Compare, tr!("Preview"))).clicked();
             });
         if preview {
             editor.rule.exclude = editor
@@ -1450,7 +1473,7 @@ impl Desktop {
             return;
         };
         let mut open = true;
-        egui::Window::new(tr!("Diagnostics"))
+        theme::dialog(tr!("Diagnostics"))
             .open(&mut open)
             .default_width(620.)
             .show(ctx, |ui| {
@@ -1464,11 +1487,14 @@ impl Desktop {
                     }
                 ));
                 for tool in array(&data, "tools") {
-                    ui.label(format!(
-                        "{} {}",
-                        if tool["installed"] == true { "✓" } else { "·" },
-                        text(&tool, "tool")
-                    ));
+                    ui.add(egui::WidgetAtom::new((
+                        icons::harness(&text(&tool, "tool")),
+                        format!(
+                            "{} {}",
+                            if tool["installed"] == true { "✓" } else { "·" },
+                            text(&tool, "tool")
+                        ),
+                    )));
                 }
                 ui.separator();
                 ui.strong(tr!("Automatic sync"));
@@ -1493,7 +1519,7 @@ impl Desktop {
                         }
                     });
                 if ui
-                    .add_enabled(!self.busy(), egui::Button::new(tr!("Refresh")))
+                    .add_enabled(!self.busy(), icons::button(Icon::Refresh, tr!("Refresh")))
                     .clicked()
                 {
                     self.enqueue(Kind::Diagnostics, json!({"action":"diagnostics"}));
@@ -1773,7 +1799,7 @@ impl eframe::App for Desktop {
                         }
                         if self.running_request["action"].is_string()
                             && (self.running_request["apply"] != true || self.running_request["action"] == "cleanup")
-                            && ui.button(tr!("Cancel")).clicked()
+                            && ui.add(icons::button(Icon::Cancel, tr!("Cancel"))).clicked()
                         {
                             control.cancel();
                             self.notice = if self.running_request["apply"] == true {
@@ -1844,7 +1870,7 @@ impl eframe::App for Desktop {
         self.confirmation(&ctx);
         if self.result.is_some() {
             let mut open = true;
-            egui::Window::new(tr!("Results"))
+            theme::dialog(tr!("Results"))
                 .open(&mut open)
                 .default_width(580.)
                 .show(&ctx, |ui| {

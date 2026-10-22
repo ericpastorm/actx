@@ -925,6 +925,12 @@ pub fn other_branch(l: &Session, r: &Session, fix: Fix) -> Result<Vec<Turn>> {
 }
 
 pub fn append(l: &mut Session, text: &str, ack: &str) -> Result<()> {
+    append_messages(l, Some(text), ack)
+}
+pub(crate) fn append_reply(l: &mut Session, ack: &str) -> Result<()> {
+    append_messages(l, None, ack)
+}
+fn append_messages(l: &mut Session, text: Option<&str>, ack: &str) -> Result<()> {
     let raw = export(&l.id, &l.path)?;
     backup(l, Copy::Bytes(&raw), "merge")?;
     let mut exp: Value = serde_json::from_slice(&raw)?;
@@ -932,17 +938,33 @@ pub fn append(l: &mut Session, text: &str, ack: &str) -> Result<()> {
     let model = export_model(&exp).or_else(last_model).ok_or_else(no_model)?;
     let now = now_ms();
     let (user_id, reply_id) = (oc_id("msg", now, 1, false), oc_id("msg", now, 2, false));
-    let new = if one {
-        [
-            message1(&l.id, &user_id, now, "user", text, &model, &user_id, &l.path),
-            message1(&l.id, &reply_id, now, "assistant", ack, &model, &user_id, &l.path),
-        ]
+    let parent = if text.is_some() {
+        user_id.clone()
     } else {
-        [
-            message2(&user_id, now, "user", text, &model),
-            message2(&reply_id, now, "assistant", ack, &model),
-        ]
+        exp["messages"]
+            .as_array()
+            .and_then(|m| {
+                m.iter()
+                    .rev()
+                    .find(|m| m["info"]["role"] == "user" || m["role"] == "user" || m["type"] == "user")
+            })
+            .map(msg_id)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| Error("No user message for reply continuation".into()))?
     };
+    let mut new = Vec::new();
+    if let Some(text) = text {
+        new.push(if one {
+            message1(&l.id, &user_id, now, "user", text, &model, &parent, &l.path)
+        } else {
+            message2(&user_id, now, "user", text, &model)
+        });
+    }
+    new.push(if one {
+        message1(&l.id, &reply_id, now, "assistant", ack, &model, &parent, &l.path)
+    } else {
+        message2(&reply_id, now, "assistant", ack, &model)
+    });
     let msgs = exp["messages"]
         .as_array_mut()
         .ok_or_else(|| Error("no messages".into()))?;

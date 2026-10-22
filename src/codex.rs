@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{LazyLock, OnceLock};
@@ -440,7 +440,9 @@ pub(crate) fn completed_end(path: &Path) -> Result<Option<u64>> {
     let mut offset = 0;
     let mut completed = 0;
     let mut started = false;
-    for raw in BufReader::new(File::open(path)?).split(b'\n') {
+    let file = File::open(path)?;
+    let length = file.metadata()?.len();
+    for raw in BufReader::new(file.take(length)).split(b'\n') {
         let raw = raw?;
         offset += raw.len() as u64 + 1;
         let Ok(e) = serde_json::from_slice::<Value>(&raw) else {
@@ -460,6 +462,28 @@ pub(crate) fn completed_end(path: &Path) -> Result<Option<u64>> {
         }
     }
     Ok(started.then_some(completed))
+}
+
+/// An app-server may keep an indexed, completed thread's writer open while idle.
+/// Only an unfinished native task proves that such a server is using the thread.
+pub(crate) fn task_running(path: &Path) -> Result<bool> {
+    let mut active = false;
+    let file = File::open(path)?;
+    let length = file.metadata()?.len();
+    for raw in BufReader::new(file.take(length)).split(b'\n') {
+        let raw = raw?;
+        let Ok(e) = serde_json::from_slice::<Value>(&raw) else {
+            continue;
+        };
+        if e["type"] == "event_msg" {
+            match e["payload"]["type"].as_str() {
+                Some("task_started") => active = true,
+                Some("task_complete" | "task_aborted") => active = false,
+                _ => {}
+            }
+        }
+    }
+    Ok(active)
 }
 
 /// ~/.codex/sessions/<dir>, where `dir` (2026/10/16) may have been stored by a machine whose
@@ -569,7 +593,8 @@ pub fn turns<L: AsRef<[u8]>>(raw_lines: impl IntoIterator<Item = L>) -> Vec<Turn
 }
 
 pub fn file_turns(path: &Path) -> Result<Vec<Turn>> {
-    let reader = BufReader::new(File::open(path)?);
+    let file = File::open(path)?;
+    let reader = BufReader::new(file.take(path.metadata()?.len()));
     Ok(turns(reader.split(b'\n').map_while(io::Result::ok)))
 }
 
@@ -587,20 +612,27 @@ pub fn other_branch(l: &Session, r: &Session, fix: Fix) -> Result<Vec<Turn>> {
 }
 
 pub fn append(l: &mut Session, text: &str, ack: &str) -> Result<()> {
+    append_messages(l, Some(text), ack)
+}
+pub(crate) fn append_reply(l: &mut Session, ack: &str) -> Result<()> {
+    append_messages(l, None, ack)
+}
+fn append_messages(l: &mut Session, text: Option<&str>, ack: &str) -> Result<()> {
     let src = l.src.clone().expect("a local Codex conversation");
     let now = now_ms();
-    let new = [
-        Turn {
+    let mut new = Vec::new();
+    if let Some(text) = text {
+        new.push(Turn {
             who: "user",
             text: text.into(),
             ts: now,
-        },
-        Turn {
-            who: "assistant",
-            text: ack.into(),
-            ts: now,
-        },
-    ];
+        });
+    }
+    new.push(Turn {
+        who: "assistant",
+        text: ack.into(),
+        ts: now,
+    });
     let mut f = File::options().append(true).open(&src)?;
     for l in turn_lines(&l.id, &new) {
         f.write_all(l.as_bytes())?;
@@ -744,7 +776,9 @@ pub(crate) fn compaction_key(path: &Path) -> Result<Option<String>> {
         return Ok(key.clone());
     }
     let mut key = None;
-    for raw in BufReader::new(File::open(path)?).split(b'\n') {
+    let file = File::open(path)?;
+    let length = file.metadata()?.len();
+    for raw in BufReader::new(file.take(length)).split(b'\n') {
         let raw = raw?;
         if memchr::memmem::find(&raw, b"compacted").is_none() {
             continue;

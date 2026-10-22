@@ -584,5 +584,7 @@
   "Interrupted publications: {n}": "中断的发布：{n}",
   "Review shared recovery with actx recoveries": "使用 actx recoveries 检查共享恢复",
   "Cleanup stopped; completed moves remain recoverable": "清理已停止；已完成的移动仍可恢复",
-  "Shared publication": "共享发布"
+  "Shared publication": "共享发布",
+  "Wordmark style": "字标样式",
+  "Animate the X": "启用 X 动画"
 }

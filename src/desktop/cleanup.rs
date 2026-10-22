@@ -26,7 +26,7 @@ impl Desktop {
         let mut scan = false;
         let mut preview = false;
         let mut recovery = false;
-        egui::Window::new(tr!("Clean local conversations"))
+        theme::dialog(tr!("Clean local conversations"))
             .open(&mut open)
             .default_width(760.)
             .max_height((ctx.content_rect().height() - 80.).max(240.))
@@ -50,7 +50,7 @@ impl Desktop {
                     ui.horizontal_wrapped(|ui| {
                         for harness in crate::harness::CONVERTS {
                             let mut enabled = editor.settings.harnesses.iter().any(|s| s == harness);
-                            if ui.checkbox(&mut enabled, harness).changed() {
+                            if ui.checkbox(&mut enabled, (icons::harness(harness), harness)).changed() {
                                 editor.settings.harnesses.retain(|s| s != harness);
                                 if enabled {
                                     editor.settings.harnesses.push(harness.into());
@@ -85,7 +85,10 @@ impl Desktop {
                     editor.selected.clear();
                 }
                 scan = ui
-                    .add_enabled(!self.busy(), egui::Button::new(tr!("Analyze local conversations")))
+                    .add_enabled(
+                        !self.busy(),
+                        icons::button(Icon::Clean, tr!("Analyze local conversations")),
+                    )
                     .clicked();
                 if !editor.data.is_null() {
                     ui.label(tr!(
@@ -100,11 +103,14 @@ impl Desktop {
                                 if ui
                                     .checkbox(
                                         &mut selected,
-                                        format!(
-                                            "{} · {} · {}",
-                                            text(&candidate, "harness"),
-                                            text(&candidate, "title"),
-                                            crate::ui::human(candidate["bytes"].as_u64().unwrap_or(0))
+                                        (
+                                            icons::harness(&text(&candidate, "harness")),
+                                            format!(
+                                                "{} · {} · {}",
+                                                text(&candidate, "harness"),
+                                                text(&candidate, "title"),
+                                                crate::ui::human(candidate["bytes"].as_u64().unwrap_or(0))
+                                            ),
                                         ),
                                     )
                                     .changed()
@@ -130,11 +136,11 @@ impl Desktop {
                 preview = ui
                     .add_enabled(
                         !self.busy() && !editor.selected.is_empty(),
-                        egui::Button::new(RichText::new(tr!("Move selected to quarantine")).color(theme::WARNING)),
+                        icons::button(Icon::Clean, tr!("Move selected to quarantine")).color(theme::WARNING),
                     )
                     .clicked();
                 recovery = ui
-                    .add_enabled(!self.busy(), egui::Button::new(tr!("Recovery")))
+                    .add_enabled(!self.busy(), icons::button(Icon::Recovery, tr!("Recovery")))
                     .clicked();
             });
         if scan {

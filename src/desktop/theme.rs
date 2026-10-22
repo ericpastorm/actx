@@ -98,20 +98,8 @@ pub fn install(ctx: &egui::Context) {
     ctx.set_global_style(style);
 }
 
-pub fn wordmark(ui: &mut egui::Ui) {
-    let mut logo = egui::text::LayoutJob::default();
-    for (text, color) in [("act", TEXT), ("X", RED)] {
-        logo.append(
-            text,
-            0.,
-            egui::TextFormat {
-                font_id: bold(30.),
-                color,
-                ..Default::default()
-            },
-        );
-    }
-    ui.label(logo);
+pub fn dialog<'open>(title: impl Into<egui::WidgetText>) -> egui::Window<'open> {
+    egui::Window::new(title).anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
 }
 
 pub fn panel_frame() -> egui::Frame {

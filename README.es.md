@@ -392,9 +392,10 @@ no confiarías tu código.
   versión de opencode.
 - opencode se maneja con su CLI: mientras importas una sesión, no la tengas abierta en opencode.
 - La CLI tiene matriz de CI en Linux/macOS/Windows; falta validar la GUI nativa en Windows/macOS.
-  En Windows, actx no puede ver en qué carpeta corre otro programa, así que mientras Codex u opencode estén abiertos, no baja encima de sus conversaciones
-  (Claude Code dice exactamente cuál tiene abierta, así que a él no le afecta). Los hooks se ejecutan en el
-  shell que usan allí Claude Code y Codex (Git Bash).
+  En Windows no se dispone de la carpeta de trabajo de cada proceso. Codex usa el ID explícito de
+  resume cuando está disponible; un proceso sin identificar no ocupa todas las conversaciones.
+  opencode conserva su alternativa prudente si falta el ID. Claude Code usa su propio registro de
+  sesiones. El sync automático también pospone la actividad reciente. Los hooks usan Git Bash.
 - Las apps de sincronización de Windows con archivos bajo demanda (Synology Drive, OneDrive…) dejan los
   ficheros solo en línea, y actx falla con `os error 395`. Pon la carpeta compartida en «Mantener siempre
   en este dispositivo» (o `attrib +P "<carpeta>" /S /D`).

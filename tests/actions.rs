@@ -930,3 +930,88 @@ fn publication_recovery_defers_active_writers_and_rejects_incomplete_or_unsafe_p
     assert_eq!(std::fs::read(destination.join("meta.json")).unwrap(), untouched);
     assert!(source.exists() && staged.exists());
 }
+
+#[test]
+fn growing_last_reply_syncs_without_a_duplicate_prompt_or_new_session() {
+    let w = World::new();
+    let m = w.machine("reply-extension");
+    let folder = m.home.join("work");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::create_dir_all(m.claude_dir()).unwrap();
+    m.actx(&[
+        "init",
+        m.store.to_str().unwrap(),
+        "--harnesses",
+        "codex,claude",
+        "--retention",
+        "never",
+    ]);
+    let sid = uuid::Uuid::new_v4().to_string();
+    let key = format!("codex:{sid}");
+    let path = m.codex_sessions().join(format!("2026/01/01/rollout-{sid}.jsonl"));
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let line = |v: Value| format!("{v}\n");
+    let message = |role: &str, text: &str| json!({"type":"response_item","timestamp":"2026-01-01T00:00:00Z","payload":{"type":"message","role":role,"content":[{"type":if role=="user"{"input_text"}else{"output_text"},"text":text}]}});
+    let mut raw = line(json!({"type":"session_meta","payload":{"id":sid,"cwd":folder,"source":"cli"}}));
+    raw += &line(message("user", "question"));
+    raw += &line(message("assistant", "first answer"));
+    std::fs::write(&path, raw).unwrap();
+    let closed = |p: &std::path::Path| {
+        std::fs::File::options()
+            .write(true)
+            .open(p)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(86400))
+            .unwrap()
+    };
+    closed(&path);
+    let add = json!({"action":"add","ids":[key],"general":true});
+    let plan = api(&m, add.clone());
+    assert_eq!(api(&m, confirm(&add, &plan))["status"], "ok");
+    let sync = json!({"action":"sync","ids":[key]});
+    let plan = api(&m, sync.clone());
+    assert_eq!(api(&m, confirmed(&sync, &plan))["status"], "ok");
+    let link_file = m.home.join(".local/state/actx/harness-links.json");
+    let before: Value = serde_json::from_slice(&std::fs::read(&link_file).unwrap()).unwrap();
+    let target = before["copies"][format!("{key}/claude")]["target"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let target_file = find(&m.claude_dir(), &format!("{}.jsonl", target.split_once(':').unwrap().1)).unwrap();
+    closed(&target_file);
+    append(&path, &line(message("assistant", "continued answer")));
+    closed(&path);
+    let list = api(&m, json!({"action":"list"}));
+    assert_ne!(list["status"], "conflict", "{list}");
+    let plan = api(&m, sync.clone());
+    assert!(
+        plan["data"]["operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|o| o["kind"] == "linked_pull"),
+        "{plan}"
+    );
+    let result = api(&m, confirmed(&sync, &plan));
+    assert_eq!(result["status"], "ok", "{result}");
+    let after: Value = serde_json::from_slice(&std::fs::read(&link_file).unwrap()).unwrap();
+    assert_eq!(after["copies"][format!("{key}/claude")]["target"], target);
+    let transcript = std::fs::read_to_string(&target_file).unwrap();
+    let records: Vec<Value> = transcript.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(
+        records.iter().filter(|r| r["type"] == "user").count(),
+        1,
+        "no duplicate user prompt"
+    );
+    assert!(transcript.contains("continued answer"));
+    let list = api(&m, json!({"action":"list"}));
+    assert_eq!(list["status"], "ok", "{list}");
+    let bytes = std::fs::read(&target_file).unwrap();
+    let plan = api(&m, sync.clone());
+    assert_eq!(api(&m, confirmed(&sync, &plan))["status"], "ok");
+    assert_eq!(
+        std::fs::read(&target_file).unwrap(),
+        bytes,
+        "a repeated sync must not duplicate the continuation"
+    );
+}

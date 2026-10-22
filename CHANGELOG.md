@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Codex activity, growing replies and desktop appearance
+
+- Identify Codex activity by the actual writable rollout or an explicit resume ID, rather than
+  treating every conversation in the same work folder as open. Stopped launchers without an open
+  writer and idle indexing app-servers no longer block resume. A server with an unfinished task
+  remains protected; Linux and macOS file discovery distinguish writers from readers.
+- Recognize an exact extension of the last synchronized assistant reply as a continuation. Existing
+  saved hashes must match its full previous prefix; independent edits and divergent continuations
+  remain conflicts. Append the new reply text without duplicating the user prompt or changing IDs.
+- Keep catalog display from downloading legacy shared histories that lack a fingerprint in their
+  metadata; use their existing weight indicator for display and keep full checks in action planning.
+- Add labeled vector action icons, centered dialogs and original pixel/ASCII wordmark proposals.
+  Settings chooses Pixel 5x7, Terminal stencil or ASCII matrix; the red X animation can be disabled.
+  Appearance preferences stay on this computer.
+- Use official harness logos in selectors and settings, and small logos beside conversation status
+  and age. Titles span the full row; hovering reveals harness names. Wrapped action labels reserve
+  a separate icon column, and Settings uses a gear icon. Bundled artwork needs no network requests.
+
 These changes extend the CLI and optional desktop preview. Existing configuration and legacy size
 baselines remain readable. This section describes source changes; it does not announce a tagged
 release or downloadable binaries.

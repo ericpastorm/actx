@@ -83,6 +83,8 @@ const HELP_ES: &str = "actx (agent context): mantiene tus conversaciones de Clau
 
 pub static ES: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| {
     HashMap::from([
+        ("Wordmark style", "Estilo del wordmark"),
+        ("Animate the X", "Animar la X"),
         ("Shared publication", "Publicación compartida"),
         ("Interrupted publications: {n}", "Publicaciones interrumpidas: {n}"),
         (

@@ -1,6 +1,6 @@
 //! The tools behind one interface. Adding a tool means implementing `Harness` for it.
 
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
 use crate::ctx::{Error, Result, ctx, which};
@@ -115,7 +115,9 @@ impl Harness for Claude {
         claude::install(r, local, folder, fix)
     }
     fn local_turns(&self, s: &Session) -> Result<(Vec<Turn>, Option<String>)> {
-        let file = BufReader::new(std::fs::File::open(s.src.as_ref().expect("local"))?);
+        let source = std::fs::File::open(s.src.as_ref().expect("local"))?;
+        let length = source.metadata()?.len();
+        let file = BufReader::new(source.take(length));
         Ok((claude::turns(file.split(b'\n').map_while(std::io::Result::ok)), None))
     }
     fn stored_turns(&self, r: &Session, fix: Fix) -> Result<(Vec<Turn>, Option<String>)> {

@@ -391,9 +391,10 @@ private, and don't use a public sync service you wouldn't trust with your code.
 - opencode is driven through its CLI; while you're importing a session, don't have that same session
   open in opencode.
 - The CLI has a Linux/macOS/Windows CI matrix; native GUI validation on Windows/macOS is pending.
-  On Windows, actx can't see which folder another program is running in, so while Codex or opencode is running at all, it doesn't pull over their
-  conversations (Claude Code says exactly which one it has open, so it isn't affected). The hooks run
-  in the shell Claude Code and Codex use there (Git Bash).
+  On Windows, process working folders are unavailable. Codex matches explicit resume IDs when
+  available; an unidentified process does not mark every thread as open. opencode keeps its
+  conservative fallback when no session ID is available. Claude Code uses its own session registry.
+  Automatic sync also defers recent activity. Hooks use Claude Code's and Codex's shell (Git Bash).
 - Windows sync apps with on-demand files (Synology Drive, OneDrive…) leave files online-only, and
   actx fails with `os error 395`. Set the shared folder to "Always keep on this device" (or
   `attrib +P "<folder>" /S /D`).
