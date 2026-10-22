@@ -46,7 +46,7 @@ fn confirmed(req: &Value, plan: &Value) -> Value {
 fn services_sync_two_machines_and_convert_without_duplicates() {
     let w = World::new();
     let a = w.machine("desk");
-    let b = w.machine("laptop");
+    let mut b = w.machine("laptop");
     let folder = a.home.join("notes");
     std::fs::create_dir_all(&folder).unwrap();
     let file = claude_session(
@@ -102,6 +102,23 @@ fn services_sync_two_machines_and_convert_without_duplicates() {
     assert_eq!(r["status"], "ok", "{r}");
     assert_eq!(r["data"]["launch"]["args"][0], "--resume");
     assert!(r["data"]["terminal_pid"].is_null());
+    let agy = b.home.join("bin").join(if cfg!(windows) { "agy.cmd" } else { "agy" });
+    std::fs::write(&agy, "not executed").unwrap();
+    let unmaintained = api(&b, json!({"action":"resume","ids":[id],"target":"antigravity"}));
+    assert_eq!(unmaintained["status"], "decision_required");
+    assert!(
+        unmaintained["data"]["operations"][0]["requirements"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("enable_target_harness"))
+    );
+    let online = b.store.clone();
+    b.store = w.dir.path().join("offline");
+    assert_eq!(
+        api(&b, resume.clone())["diagnostics"][0]["code"],
+        "shared_folder_unavailable"
+    );
+    b.store = online;
     let plan = api(&b, req.clone());
     assert_eq!(plan["data"]["operations"][0]["kind"], "reuse");
     assert_eq!(api(&b, confirmed(&req, &plan))["data"]["target_id"], target);
@@ -184,4 +201,61 @@ fn chinese_locale_help_and_json_work_without_changing_machine_codes() {
     let zh = api(&m, req.clone());
     m.lang = "en".into();
     assert_eq!(api(&m, req), zh);
+}
+
+#[test]
+fn desktop_setup_discovers_project_conversations_without_adding_them() {
+    let w = World::new();
+    let m = w.machine("pc");
+    let repo = git_repo(&m.home.join("project"));
+    let prompt = format!("Work in {}", repo.display());
+    let source = claude_session(
+        &m,
+        &m.home,
+        &[("user", &prompt), ("assistant", "yes")],
+        Some("Project from home"),
+    );
+    claude_session(
+        &m,
+        &m.home,
+        &[("user", "unrelated"), ("assistant", "no")],
+        Some("Unrelated"),
+    );
+    let config = m.home.join(".config/actx/config.json");
+    let req = json!({"action":"configure","root":m.store,"lang":"zh-CN","harnesses":["claude"]});
+    let plan = api(&m, req.clone());
+    assert!(!config.exists());
+    assert!(plan["data"]["expected"]["configure"].is_string());
+    assert_eq!(api(&m, confirmed(&req, &plan))["status"], "ok");
+    assert!(config.exists());
+    let req = json!({"action":"create_project","project":"Work","folder":repo});
+    let plan = api(&m, req.clone());
+    assert!(!w.store().join("Work").exists());
+    assert_eq!(api(&m, confirmed(&req, &plan))["status"], "ok");
+    let candidates = api(&m, json!({"action":"candidates","project":"Work"}));
+    assert_eq!(candidates["status"], "ok", "{candidates}");
+    assert_eq!(candidates["data"]["conversations"].as_array().unwrap().len(), 1);
+    assert_eq!(candidates["data"]["conversations"][0]["title"], "Project from home");
+    assert!(
+        api(&m, json!({"action":"list"}))["data"]["conversations"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let id = format!("claude:{}", source.file_stem().unwrap().to_string_lossy());
+    let before = std::fs::read(&source).unwrap();
+    let messages = api(&m, json!({"action":"messages","ids":[id]}));
+    assert_eq!(messages["data"]["messages"][0]["text"], prompt);
+    assert_eq!(std::fs::read(&source).unwrap(), before);
+    let add = json!({"action":"add","project":"Work","ids":[id]});
+    let plan = api(&m, add);
+    assert_eq!(
+        plan["data"]["operations"][0]["destination"],
+        repo.to_string_lossy().as_ref()
+    );
+    let wrong = git_repo(&m.home.join("wrong"));
+    assert_eq!(
+        api(&m, json!({"action":"add","project":"Work","ids":[id],"folder":wrong}))["diagnostics"][0]["code"],
+        "project_binding_failed"
+    );
 }

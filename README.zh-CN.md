@@ -38,6 +38,12 @@ actx rm myproject            # 删除整个项目及共享副本；需要确认
 
 ## 脚本和其他界面
 
+可选桌面界面：通过 `cargo build --release --features gui --locked` 编译，运行 `actx gui` 打开。
+支持项目、常规对话、搜索、消息预览、添加、删除、同步、转换和继续对话。
+写入前均预览并确认。窄窗口使用对话/详情标签页，Ctrl+1 / Ctrl+2 切换。
+首次打开可选择共享文件夹，也可直接使用转换功能。
+参见[桌面预览说明和当前限制](docs/desktop.md)。
+
 ```sh
 actx ls --json
 actx sync --dry-run --json

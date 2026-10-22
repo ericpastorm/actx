@@ -28,6 +28,11 @@ pub enum Action {
     Sync,
     Convert,
     Resume,
+    Settings,
+    Configure,
+    CreateProject,
+    Messages,
+    Candidates,
 }
 
 #[derive(Clone, Deserialize)]
@@ -43,6 +48,9 @@ pub struct Request {
     pub all: bool,
     pub folder: Option<String>,
     pub target: Option<String>,
+    pub root: Option<String>,
+    pub lang: Option<String>,
+    pub harnesses: Option<Vec<String>>,
     #[serde(default)]
     pub launch: bool,
     #[serde(default)]
@@ -72,6 +80,11 @@ impl Request {
             Action::Sync => "sync",
             Action::Convert => "convert",
             Action::Resume => "resume",
+            Action::Settings => "settings",
+            Action::Configure => "configure",
+            Action::CreateProject => "create_project",
+            Action::Messages => "messages",
+            Action::Candidates => "candidates",
         }
     }
 }
@@ -188,6 +201,18 @@ pub(crate) fn prepare(req: &Request) -> std::result::Result<Prepared, Diagnostic
     {
         return Err(Diagnostic::new("invalid_destination", "Choose an existing work folder"));
     }
+    if matches!(req.action, Action::Add)
+        && collection != store::GENERAL
+        && let Some(folder) = &req.folder
+        && let Some(meta) = crate::project::metadata(&root, &collection)
+        && let Some(expected) = meta["git"]["root"].as_str()
+        && crate::git::git_id(folder).and_then(|g| g.root).as_deref() != Some(expected)
+    {
+        return Err(Diagnostic::new(
+            "project_binding_failed",
+            "The selected work folder belongs to another repository",
+        ));
+    }
     let remote: HashMap<_, _> = store::stored_sessions(&root)
         .into_iter()
         .map(|s| (s.key(), s))
@@ -245,7 +270,14 @@ pub(crate) fn prepare(req: &Request) -> std::result::Result<Prepared, Diagnostic
                 s.project.clone().unwrap_or_default()
             },
             destination: if matches!(req.action, Action::Add) {
-                req.folder.clone().or_else(|| Some(s.path.clone()))
+                if collection == store::GENERAL {
+                    Some(s.path.clone())
+                } else {
+                    req.folder
+                        .clone()
+                        .or_else(|| crate::project::folder(&root, &collection, &st))
+                        .or_else(|| Some(s.path.clone()))
+                }
             } else {
                 None
             },
@@ -317,6 +349,9 @@ pub fn run(req: Request) -> Response<Value> {
         Action::Sync => return crate::engine::sync(&req),
         Action::Convert => return crate::engine::convert(&req),
         Action::Resume => return crate::engine::resume(&req),
+        Action::Settings | Action::Configure | Action::CreateProject | Action::Messages | Action::Candidates => {
+            return crate::desktop_api::run(&req);
+        }
         _ => {}
     }
     let inspect = || {
@@ -366,7 +401,7 @@ pub fn run(req: Request) -> Response<Value> {
     }
     if matches!(req.action, Action::Add)
         && prepared.collection != store::GENERAL
-        && !crate::project::has_binding(&prepared.root, &prepared.collection)
+        && (req.folder.is_some() || !crate::project::has_binding(&prepared.root, &prepared.collection))
     {
         let folder = req.folder.clone().or_else(|| {
             let folders: std::collections::BTreeSet<_> = prepared
@@ -414,7 +449,7 @@ pub fn run(req: Request) -> Response<Value> {
     };
     response(command, status, data(&prepared, true, &results), diagnostics)
 }
-fn serde_response<T: Serialize>(r: Response<T>) -> Response<Value> {
+pub(crate) fn serde_response<T: Serialize>(r: Response<T>) -> Response<Value> {
     Response {
         schema_version: r.schema_version,
         command: r.command,

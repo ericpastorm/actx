@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=actx
+Comment=Sync and convert your agent conversations
+Exec=actx-gui
+Terminal=false
+Categories=Development;Utility;
+Keywords=Claude;Codex;opencode;conversation;sync;

@@ -90,6 +90,7 @@ Y luego:
 | `actx ls [proyecto]` | Lista compacta sin interacción, con los estados de las copias (`--all` incluye las locales). |
 | `actx resume [proyecto]` | Sincroniza la conversación elegida y abre su copia en el harness seleccionado (`--all` incluye las locales). |
 | `actx setup [carpeta]` | Asistente completo de carpeta compartida, harnesses, retención y preferencia al abrir. |
+| `actx gui` | GUI opcional: proyectos, vista previa, sincronización, conversión y retomar. Compila con `--features gui`; consulta la [guía de escritorio](docs/desktop.md). |
 | `actx profile` / `actx profile setup` | Resumen del perfil o asistente para modificarlo. `--json` conserva la salida estructurada. |
 | `actx cv [proyecto]` | Copia una conversación a otro programa (Claude Code, opencode, Codex, Antigravity). |
 | `actx rm <proyecto>` | Borra el proyecto completo y sus copias compartidas, previa confirmación. Conserva los originales locales en todos los equipos. |

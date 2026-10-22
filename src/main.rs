@@ -13,6 +13,9 @@ mod clean;
 mod codex;
 mod commands;
 mod ctx;
+#[cfg(feature = "gui")]
+mod desktop;
+mod desktop_api;
 mod engine;
 mod git;
 mod harness;
@@ -133,7 +136,8 @@ fn cli() -> Command {
                 ),
         ))
         .subcommand(clean::command())
-        .subcommand(Command::new("api").about("Read one structured request from stdin"))
+        .subcommand(Command::new("api").about(tr!("Read one structured request from stdin")))
+        .subcommand(Command::new("gui").about(tr!("Open the desktop interface")))
         .subcommand(
             Command::new("mk")
                 .about(tr!("create a project here and choose conversations"))
@@ -307,7 +311,7 @@ fn main() {
         ui::set_machine_mode();
     }
     let get = |m: &clap::ArgMatches, name: &str| m.try_get_one::<String>(name).ok().flatten().cloned();
-    let _loading = if matches.subcommand_name() != Some("hook")
+    let _loading = if !matches!(matches.subcommand_name(), Some("hook" | "gui"))
         && !matches
             .subcommand()
             .is_some_and(|(name, m)| name == "sync" && m.get_flag("auto"))
@@ -317,6 +321,12 @@ fn main() {
         None
     };
     match matches.subcommand() {
+        Some(("gui", _)) => {
+            #[cfg(feature = "gui")]
+            desktop::run();
+            #[cfg(not(feature = "gui"))]
+            ui::die("This build has no desktop interface. Build with: cargo build --release --features gui");
+        }
         Some(("api", _)) => actions::stdin_request(),
         Some((name @ ("init" | "setup"), m)) => commands::init(Args {
             wizard: name == "setup",

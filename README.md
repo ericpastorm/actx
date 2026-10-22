@@ -89,6 +89,7 @@ Then:
 | `actx ls [project]` | Print the compact list and copy states without interaction (`--all` for local conversations too). |
 | `actx resume [project]` | Sync the selected conversation and open its chosen harness copy (`--all` to include local ones). |
 | `actx setup [folder]` | Full shared-folder and profile setup wizard. |
+| `actx gui` | Optional desktop interface: projects, previews, sync, conversion and resume. Build with `--features gui`; see the [desktop guide](docs/desktop.md). |
 | `actx profile` / `actx profile setup` | Readable preferences or the profile wizard; `--json` provides structured output. |
 | `actx cv [project]` | Copy a conversation into another tool (Claude Code, opencode, Codex, Antigravity). |
 | `actx rm <project>` | Delete the whole project and its shared copies, after confirmation. Keeps local originals on every machine. |

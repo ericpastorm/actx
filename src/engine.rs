@@ -17,7 +17,7 @@ use std::{
     process::Stdio,
 };
 
-fn digest(bytes: &[u8]) -> String {
+pub(crate) fn digest(bytes: &[u8]) -> String {
     format!(
         "{:016x}",
         bytes.iter().fold(0xcbf29ce484222325u64, |h, b| (h ^ u64::from(*b))
@@ -53,7 +53,7 @@ fn ready(
     }
     None
 }
-fn local_guard() -> Result<std::fs::File> {
+pub(crate) fn local_guard() -> Result<std::fs::File> {
     std::fs::create_dir_all(&ctx().state_dir)?;
     let guard = std::fs::File::create(ctx().state_dir.join("actions.lock"))?;
     guard.try_lock().map_err(|e| Error(e.to_string()))?;
@@ -446,7 +446,7 @@ pub(crate) fn launch_terminal(s: &Session) -> Result<u32> {
             return Err(Error("Windows Terminal (wt) is required to open an agent".into()));
         }
         command = std::process::Command::new("wt");
-        command.args(["-d", &s.path, &program]).args(&args);
+        command.args(["-d", &s.path, "cmd", "/k", &program]).args(&args);
     }
     #[cfg(target_os = "macos")]
     {
@@ -502,6 +502,13 @@ pub fn resume(req: &Request) -> Response<Value> {
     let Some(group) = catalog.find(&req.ids[0]) else {
         return actions::error("resume", "conversation_not_found", &req.ids[0]);
     };
+    if group.managed && store::configured_root().is_some() && store::store_root(true).is_none() {
+        return actions::error(
+            "resume",
+            "shared_folder_unavailable",
+            "Reconnect the shared folder before synchronized resume; use the CLI to explicitly open offline",
+        );
+    }
     let target = req
         .target
         .as_deref()
@@ -531,6 +538,16 @@ pub fn resume(req: &Request) -> Response<Value> {
         return actions::error("resume", "ambiguous_copy", "Choose one physical copy in this harness");
     }
     let session = copies.first().copied();
+    if group.managed
+        && session.is_some_and(|s| s.key() != group.id)
+        && !crate::profile::harnesses(&group.id).contains(&target)
+        && group
+            .copies
+            .iter()
+            .any(|c| c.session().harness == target && matches!(c.state, "local" | "unmanaged"))
+    {
+        requirements.push("enable_target_harness");
+    }
     if session.is_none()
         && (sync_plan.is_none()
             || (!group

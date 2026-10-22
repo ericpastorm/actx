@@ -6,17 +6,25 @@ description = "Keep Claude Code, opencode and Codex conversations in sync across
 license = "MIT"
 repository = "https://github.com/ericpastorm/actx"
 readme = "README.md"
+default-run = "actx"
 keywords = ["claude-code", "opencode", "codex", "sync", "cli"]
 categories = ["command-line-utilities"]
+
+[[bin]]
+name = "actx-gui"
+path = "desktop/main.rs"
+required-features = ["gui"]
 
 [dependencies]
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 clap = { version = "4.6.7", features = ["string", "wrap_help"] }
 clap_complete = "4.6.11"
+eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"], optional = true }
 flate2 = "1.1.10"
 gethostname = "1.1.0"
 memchr = "2.8.3"
 regex = "1.13.1"
+rfd = { version = "0.17.2", optional = true }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.154", features = ["preserve_order"] }
@@ -37,3 +45,6 @@ rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde_json = "1.0.154"
 uuid = { version = "1.28.0", features = ["v4", "v7"] }
 zstd = "0.14.2"
+
+[features]
+gui = ["dep:eframe", "dep:rfd"]

@@ -5,7 +5,8 @@
 `actx api` reads one JSON request from stdin (at most 1 MiB) and returns the same versioned
 envelope. `action` can be `list`, `preview`, `add` or `delete`. For writes, `ids` is an explicit
 array of physical `harness:id` values; there is no implicit "select everything". Add accepts
-`project` or `general`, and an optional existing `folder` for binding an unbound project.
+`project` or `general`, and an optional existing `folder` for binding the project on this machine.
+Existing repository identities are validated before changing a local project binding.
 Delete can be narrowed by `project` or `general`. Original local transcripts and project folders
 are preserved when deleting saved copies. Antigravity native shared sync is unsupported.
 
@@ -46,6 +47,8 @@ copies before opening and refuses pending conflicts or active agents. With `laun
 opens an agent in a separate system terminal: Windows Terminal on Windows, Terminal on macOS,
 or an available terminal on Linux. The frontend remains responsive and receives `terminal_pid`.
 Launching a terminal successfully does not guarantee the harness subsequently starts successfully.
+Managed copies cannot be resumed through this API while their configured shared storage is offline.
+Enable an unmaintained target copy in the harness profile before synchronized resume.
 
 ```sh
 actx ls --json
@@ -157,3 +160,23 @@ recalculates operations and checks its locks and current inputs before writing.
 Consumers should ignore additional fields and handle unknown codes rather than assume an
 exhaustive enum. Breaking structural changes will increment `schema_version`. The older
 `profile --json` retains its existing format and is not part of this envelope.
+
+## Desktop support requests
+
+- `settings` reads the configured root, language, harnesses, retention and installed tools.
+  `root_from_env` indicates that `ACTX_ROOT` overrides saved configuration.
+- `configure` accepts optional `root` (existing directory), `lang` (`en`, `es`, `zh-CN`) and
+  `harnesses` (array). It uses preview/`data.expected`/`apply`, preserves unrelated settings,
+  does not move storage and does not install hooks or timers.
+- `create_project` requires `project` and an existing work `folder`. It uses the same confirmation
+  flow and binds the folder/repository under the shared lock. It never adds conversations implicitly.
+- `candidates` lists conversations for explicit selection. `project` narrows discovery using the
+  bound folder/repository and bounded native history path references; `all: true` bypasses that
+  filter. Without a project it returns the full inventory. It never adds conversations.
+- `messages` requires one physical ID and returns at most the latest 20 normalized messages,
+  each clipped to 4,000 Unicode scalar values, with truncation flags and total count. Local
+  data is preferred; shared-only sources use the stored adapter. It is read-only and does not
+  execute a harness CLI to export messages.
+
+New statuses: `decision_required` (exit 5) and `cancelled` (exit 0). Existing list/preview statuses
+and the older profile JSON format retain their behavior.
