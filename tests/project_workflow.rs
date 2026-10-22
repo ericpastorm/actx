@@ -2,10 +2,9 @@
 mod common;
 use common::*;
 use serde_json::Value;
-use std::{
-    process::Stdio,
-    time::{Duration, SystemTime},
-};
+#[cfg(unix)]
+use std::process::Stdio;
+use std::time::{Duration, SystemTime};
 
 #[test]
 fn create_select_sync_and_convert_in_the_matching_clone() {

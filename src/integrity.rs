@@ -51,12 +51,12 @@ fn file_stamp(path: &Path) -> String {
     let Ok(m) = path.metadata() else {
         return ":missing".into();
     };
-    let mut stamp = format!(":{}:{}:{:?}", path.display(), m.len(), m.modified());
+    let stamp = format!(":{}:{}:{:?}", path.display(), m.len(), m.modified());
     #[cfg(unix)]
-    {
+    let stamp = {
         use std::os::unix::fs::MetadataExt;
-        stamp.push_str(&format!(":{}:{}", m.ctime(), m.ctime_nsec()));
-    }
+        format!("{stamp}:{}:{}", m.ctime(), m.ctime_nsec())
+    };
     stamp
 }
 fn mix(hash: &mut u64, bytes: &[u8]) {

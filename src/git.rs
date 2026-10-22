@@ -384,7 +384,11 @@ pub fn ask_local_folder(title: &str, path: &str, st: &mut State) -> Option<Strin
 
 /// Swaps the other machine's paths (its repo, or its folder, and its home) for this one's.
 pub fn fixer_for(meta: &Value, folder: &str) -> Option<PathFixer> {
-    if let Some(project) = meta.get("project_folder").filter(|p| p.is_object()) {
+    // A project binding supplies context for conversations started outside a work folder.
+    // Ordinary sessions must use the latest publisher's paths, not the project's creator.
+    if (jstr(meta, "path").is_empty() || jstr(meta, "path") == jstr(meta, "home"))
+        && let Some(project) = meta.get("project_folder").filter(|p| p.is_object())
+    {
         return fixer_for(project, folder);
     }
     let home = ctx().home_str();

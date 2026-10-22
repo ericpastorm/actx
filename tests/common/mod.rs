@@ -525,6 +525,25 @@ pub fn opencode_continue(m: &Machine, folder: &Path, text: &str, reply: &str) {
     exp["messages"].as_array_mut().unwrap().extend(new);
     opencode(m, &["session", "delete"], &[OC_SID], folder);
     opencode_import(m, &exp, folder);
+    // Imports in opencode 2 are dated now. These fixtures represent completed, inactive
+    // exchanges, so automatic sync must not mistake them for a conversation still in use.
+    let table = if opencode_major() == Some(2) {
+        "session_v2"
+    } else {
+        "session"
+    };
+    let closed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
+        - 3_600_000;
+    rusqlite::Connection::open(m.opencode_db())
+        .unwrap()
+        .execute(
+            &format!("update {table} set time_updated=?1 where id=?2"),
+            rusqlite::params![closed, OC_SID],
+        )
+        .unwrap();
 }
 
 // ── Codex ───────────────────────────────────────────────────────────────────

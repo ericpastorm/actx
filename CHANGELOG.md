@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Cross-machine sync and CI fixes
+
+- Rewrite conversation paths using the latest publishing computer's metadata when syncing back
+  to another machine. Keep the project binding as a fallback for conversations started at home.
+- Inspect opencode databases through private SQLite snapshots so the first discovery does not
+  hide sessions or invalidate content fingerprints by creating WAL sidecars in the source database.
+- Fix Windows-specific compiler warnings and update native opencode fixtures for its current
+  import timestamps. Scoped-sync tests verify that unselected conversations stay undownloaded.
+
 ### Codex activity, growing replies and desktop appearance
 
 - Identify Codex activity by the actual writable rollout or an explicit resume ID, rather than

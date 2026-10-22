@@ -100,6 +100,9 @@ fn local_impl(include_children: bool, keys: Option<&std::collections::HashSet<St
     if keys.is_some_and(|keys| !keys.iter().any(|k| k.starts_with("opencode:"))) || !ctx().opencode_db.is_file() {
         return Vec::new();
     }
+    // Even a read-only SQLite open can create WAL sidecars. Inspect a private snapshot
+    // so the first discovery does not invalidate its own signature and hide the sessions.
+    let _inspection = crate::inspection::Guard::new();
     let ids = keys.map(|keys| {
         let mut ids: Vec<_> = keys.iter().filter(|k| k.starts_with("opencode:")).cloned().collect();
         ids.sort();
@@ -838,6 +841,7 @@ pub fn turns(exp: &Value) -> Vec<Turn> {
 
 // Reconstruct the native export shape without starting the CLI just to inspect a conversation.
 pub(crate) fn read_export(s: &Session) -> Result<Value> {
+    let _inspection = crate::inspection::Guard::new();
     let con = db().ok_or_else(|| Error("Missing opencode database".into()))?;
     let transaction = con.unchecked_transaction()?;
     let mut messages = Vec::new();

@@ -13,7 +13,12 @@ fn setup(w: &World) -> Option<(Machine, Machine, std::path::PathBuf, std::path::
     opencode_import(&a, &opencode_fixture(&repo, major), &repo);
     a.actx(&["mk", "web"]);
     let out = a.pick(&["add", "web"], &[OC_SID]);
-    assert!(out.contains("Fix the login form"), "{out}");
+    assert!(
+        out.contains("Fix the login form"),
+        "{out}\nNative sessions: {:?}\nLocal catalog: {}",
+        opencode_sessions(&a),
+        a.actx(&["ls", "--all"])
+    );
     Some((a, b, repo, clone, major))
 }
 

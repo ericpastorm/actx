@@ -191,9 +191,10 @@ fn sync_one_project_leaves_the_rest_pending() {
     a.actx(&["mk", "notes"]);
     a.pick(&["add", "notes"], &[&other.file_stem().unwrap().to_string_lossy()]);
     let out = b.actx(&["sync", "shop"]);
+    assert!(out.contains("Cart fix") && !out.contains("Notes"), "{out}");
     assert!(
-        out.contains("Cart fix") && !out.contains("Notes") && out.contains("1 pending in projects you didn't pick"),
-        "{out}"
+        find(&b.claude_dir(), other.file_name().unwrap().to_str().unwrap()).is_none(),
+        "syncing shop must leave the notes conversation undownloaded"
     );
     assert!(b.actx(&["sync", "--all"]).contains("Notes"));
 }
