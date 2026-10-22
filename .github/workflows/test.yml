@@ -65,7 +65,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libxi-dev libxrandr-dev libxcursor-dev libegl1 libgl1 libglx-mesa0 libgl1-mesa-dri xvfb xauth
+          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-dev libxi-dev libxrandr-dev libxcursor-dev libegl1 libgl1 libglx-mesa0 libgl1-mesa-dri xvfb xauth
       - run: cargo fmt --check
       - run: cargo clippy --locked --features gui --all-targets -- -D warnings
       - name: Test desktop state and launcher

@@ -28,6 +28,15 @@ requested. Linux needs a working OpenGL desktop and X11 or Wayland. Folder dialo
 desktop portal, with Zenity as a fallback; see rfd's platform requirements. Windows/macOS
 use system dialogs. Optional GUI dependencies are not needed to build or run the CLI alone.
 
+On Debian/Ubuntu with X11, install the graphics runtime libraries before opening the desktop:
+
+```sh
+sudo apt-get install libxkbcommon-x11-0 libegl1 libgl1 libgl1-mesa-dri
+```
+
+The [X11 keyboard library](https://packages.ubuntu.com/noble/libxkbcommon-x11-0) is a separate
+package from `libxkbcommon`; having the latter installed alone does not provide X11 keyboard support.
+
 ## Workflow
 
 1. **Settings** chooses an existing shared folder, language and harness profile. Review the
