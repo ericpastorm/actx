@@ -556,5 +556,10 @@
   "Excluded relative folders, one pattern per line (scratch/**)": "排除的相对文件夹，每行一个模式（scratch/**）",
   "Excluded titles, one pattern per line (*private*)": "排除的标题，每行一个模式（*private*）",
   "Disabling keeps existing synchronized conversations. Deleted conversations stay excluded until added manually.": "关闭后保留已同步的会话。已删除的会话将保持排除，直到再次手动添加。",
-  "The rule takes effect on the next project sync. Previewed candidates can change.": "规则在下次项目同步时生效。预览的候选会话可能发生变化。"
+  "The rule takes effect on the next project sync. Previewed candidates can change.": "规则在下次项目同步时生效。预览的候选会话可能发生变化。",
+  "Catalog check failed; showing the last known data": "目录检查失败；正在显示上次已知的数据",
+  "Checking conversations in the background": "正在后台检查会话",
+  "Last known data; verification pending": "上次已知的数据；等待验证",
+  "Last checked {when}": "上次检查：{when}",
+  "Project data changed; refreshing the catalog": "项目数据已更改；正在刷新目录"
 }

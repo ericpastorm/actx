@@ -14,6 +14,7 @@ pub fn save(config: &Value) -> Result<()> {
     let tmp = dir.join(format!("config-{}.tmp", std::process::id()));
     std::fs::write(&tmp, serde_json::to_vec_pretty(config)?)?;
     std::fs::rename(tmp, &ctx().config_file)?;
+    crate::gui_index::invalidate();
     Ok(())
 }
 

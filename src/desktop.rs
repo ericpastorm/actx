@@ -1,5 +1,5 @@
 //! Native desktop frontend. All filesystem/agent work runs in an isolated API subprocess.
-use crate::{i18n, tr};
+use crate::{gui_index, i18n, tr};
 use eframe::egui::{self, RichText};
 use serde_json::{Value, json};
 use std::{
@@ -7,7 +7,7 @@ use std::{
     io::Write,
     process::Stdio,
     sync::mpsc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 mod theme;
 
@@ -25,10 +25,12 @@ enum Kind {
     Diagnostics,
 }
 struct Job {
+    generation: u64,
     kind: Kind,
     request: Value,
 }
 struct Completed {
+    generation: u64,
     kind: Kind,
     request: Value,
     result: Result<Value, String>,
@@ -47,7 +49,17 @@ struct Desktop {
     queue: VecDeque<Job>,
     receiver: Option<mpsc::Receiver<Completed>>,
     running: Option<Kind>,
+    running_request: Value,
+    catalog_receiver: Option<mpsc::Receiver<Completed>>,
+    catalog_generation: u64,
+    messages_generation: u64,
+    catalog_cached: bool,
+    catalog_checked_at: Option<u64>,
+    observed_epoch: String,
+    next_probe: Instant,
+    focused: bool,
     catalog: Value,
+    catalog_request: Value,
     settings: Value,
     messages: Value,
     selected: String,
@@ -111,11 +123,25 @@ fn call_api(request: &Value, lang: &str) -> Result<Value, String> {
 impl Desktop {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
         theme::install(&cc.egui_ctx);
+        Self::initial(gui_index::Index::current().load())
+    }
+    fn initial(snapshot: Option<gui_index::Snapshot>) -> Self {
+        let catalog_checked_at = snapshot.as_ref().map(|s| s.checked_at);
         let mut app = Self {
             queue: VecDeque::new(),
             receiver: None,
             running: None,
-            catalog: Value::Null,
+            running_request: Value::Null,
+            catalog_receiver: None,
+            catalog_generation: 0,
+            messages_generation: 0,
+            catalog_cached: snapshot.is_some(),
+            catalog_checked_at,
+            observed_epoch: gui_index::epoch(),
+            next_probe: Instant::now() + Duration::from_secs(2),
+            focused: true,
+            catalog: snapshot.map(|s| s.catalog).unwrap_or(Value::Null),
+            catalog_request: json!({"action":"list","all":false}),
             settings: Value::Null,
             messages: Value::Null,
             selected: String::new(),
@@ -128,7 +154,9 @@ impl Desktop {
             target: "codex".into(),
             project: crate::store::GENERAL.into(),
             folder: String::new(),
-            root: String::new(),
+            root: crate::store::configured_root()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default(),
             lang: i18n::code().into(),
             harnesses: BTreeSet::new(),
             show_settings: false,
@@ -148,7 +176,30 @@ impl Desktop {
         app
     }
     fn enqueue(&mut self, kind: Kind, request: Value) {
-        self.queue.push_back(Job { kind, request });
+        let generation = match kind {
+            Kind::Catalog => {
+                self.catalog_generation += 1;
+                self.catalog_generation
+            }
+            Kind::Messages => {
+                self.messages_generation += 1;
+                self.messages_generation
+            }
+            Kind::Apply => {
+                self.catalog_generation += 1;
+                self.catalog_cached = !self.catalog.is_null();
+                0
+            }
+            _ => 0,
+        };
+        if matches!(kind, Kind::Catalog | Kind::Messages) {
+            self.queue.retain(|j| j.kind != kind);
+        }
+        self.queue.push_back(Job {
+            kind,
+            request,
+            generation,
+        });
     }
     fn refresh(&mut self) {
         let request = if self.picking {
@@ -160,12 +211,80 @@ impl Desktop {
         } else {
             json!({"action":"list","all":self.all})
         };
+        if self.catalog_request != request {
+            self.catalog = Value::Null;
+            self.selected.clear();
+            self.source.clear();
+            self.messages = Value::Null;
+            self.messages_generation += 1;
+            self.queue.retain(|j| j.kind != Kind::Messages);
+            self.catalog_checked_at = None;
+            self.catalog_cached = false;
+            self.catalog_request = request.clone();
+        }
         self.enqueue(Kind::Catalog, request);
     }
+    fn navigation_locked(&self) -> bool {
+        let locked = |kind| matches!(kind, Kind::Preview | Kind::Apply | Kind::RootFolder | Kind::WorkFolder);
+        self.pending.is_some() || self.running.is_some_and(locked) || self.queue.iter().any(|j| locked(j.kind))
+    }
     fn busy(&self) -> bool {
-        self.receiver.is_some() || !self.queue.is_empty()
+        self.receiver.is_some() || self.queue.iter().any(|j| j.kind != Kind::Catalog)
+    }
+    fn message_pending(&self) -> bool {
+        self.running == Some(Kind::Messages) && self.running_request["ids"][0] == self.source
+            || self
+                .queue
+                .iter()
+                .any(|j| j.kind == Kind::Messages && j.request["ids"][0] == self.source)
+    }
+    fn checking_catalog(&self) -> bool {
+        self.catalog_receiver.is_some() || self.queue.iter().any(|j| j.kind == Kind::Catalog)
+    }
+    fn start(job: Job, lang: String, ctx: &egui::Context) -> mpsc::Receiver<Completed> {
+        let (tx, rx) = mpsc::channel();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let index = (job.kind == Kind::Catalog && gui_index::normal(&job.request)).then(gui_index::Index::current);
+            let mut result = if matches!(job.kind, Kind::RootFolder | Kind::WorkFolder) {
+                Ok(rfd::FileDialog::new()
+                    .pick_folder()
+                    .map(|p| json!(p))
+                    .unwrap_or(Value::Null))
+            } else {
+                call_api(&job.request, &lang)
+            };
+            if let (Some(index), Ok(response)) = (&index, &result) {
+                let _ = index.store(response);
+                if !index.unchanged() {
+                    result = Err(tr!("Project data changed; refreshing the catalog"));
+                }
+            }
+            let _ = tx.send(Completed {
+                kind: job.kind,
+                request: job.request,
+                generation: job.generation,
+                result,
+            });
+            ctx.request_repaint();
+        });
+        rx
     }
     fn pump(&mut self, ctx: &egui::Context) {
+        if let Some(rx) = &self.catalog_receiver {
+            match rx.try_recv() {
+                Ok(done) => {
+                    self.catalog_receiver = None;
+                    self.complete(done);
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.catalog_receiver = None;
+                    self.notice = tr!("Catalog check failed; showing the last known data");
+                    self.catalog_cached = !self.catalog.is_null();
+                }
+                _ => {}
+            }
+        }
         if let Some(rx) = &self.receiver {
             match rx.try_recv() {
                 Ok(done) => {
@@ -182,38 +301,60 @@ impl Desktop {
             }
         }
         if self.receiver.is_none()
-            && let Some(job) = self.queue.pop_front()
+            && let Some(pos) = self.queue.iter().position(|j| j.kind != Kind::Catalog)
         {
-            let (tx, rx) = mpsc::channel();
-            self.receiver = Some(rx);
+            let job = self.queue.remove(pos).unwrap();
             self.running = Some(job.kind);
-            let lang = self.lang.clone();
-            let ctx = ctx.clone();
-            std::thread::spawn(move || {
-                let result = if matches!(job.kind, Kind::RootFolder | Kind::WorkFolder) {
-                    Ok(rfd::FileDialog::new()
-                        .pick_folder()
-                        .map(|p| json!(p))
-                        .unwrap_or(Value::Null))
-                } else {
-                    call_api(&job.request, &lang)
-                };
-                let _ = tx.send(Completed {
-                    kind: job.kind,
-                    request: job.request,
-                    result,
-                });
-                ctx.request_repaint();
-            });
+            self.running_request = job.request.clone();
+            self.receiver = Some(Self::start(job, self.lang.clone(), ctx));
         }
-        if self.busy() {
-            ctx.request_repaint_after(Duration::from_millis(50));
+        if self.catalog_receiver.is_none()
+            && self.running != Some(Kind::Apply)
+            && !self.queue.iter().any(|j| j.kind == Kind::Apply)
+            && let Some(pos) = self.queue.iter().position(|j| j.kind == Kind::Catalog)
+        {
+            let job = self.queue.remove(pos).unwrap();
+            self.catalog_receiver = Some(Self::start(job, self.lang.clone(), ctx));
         }
+        let focused = ctx.input(|i| i.viewport().focused.unwrap_or(true));
+        let regained = focused && !self.focused;
+        self.focused = focused;
+        if Instant::now() >= self.next_probe || regained {
+            self.next_probe = Instant::now() + Duration::from_secs(2);
+            let epoch = gui_index::epoch();
+            if (epoch != self.observed_epoch || regained)
+                && !self.busy()
+                && self.pending.is_none()
+                && !self.all
+                && !self.picking
+                && !self.checking_catalog()
+            {
+                self.observed_epoch = epoch;
+                self.catalog_cached = !self.catalog.is_null();
+                self.refresh();
+            }
+        }
+        ctx.request_repaint_after(if self.busy() || self.checking_catalog() {
+            Duration::from_millis(50)
+        } else {
+            Duration::from_secs(2)
+        });
     }
     fn complete(&mut self, done: Completed) {
+        if done.kind == Kind::Catalog && done.generation != self.catalog_generation
+            || done.kind == Kind::Messages && done.generation != self.messages_generation
+        {
+            return;
+        }
         let response = match done.result {
             Ok(r) => r,
             Err(e) => {
+                if done.kind == Kind::Catalog {
+                    self.catalog_cached = !self.catalog.is_null();
+                }
+                if done.kind == Kind::Messages {
+                    self.messages = json!({"diagnostics":[{"code":"messages_failed","message":e}]});
+                }
                 self.notice = e;
                 return;
             }
@@ -243,34 +384,47 @@ impl Desktop {
                 self.show_settings = self.root.is_empty();
             }
             Kind::Catalog => {
+                let old_copy = self
+                    .group()
+                    .and_then(|g| array(&g, "copies").into_iter().find(|c| c["id"] == self.source));
+                let complete = matches!(response["status"].as_str(), Some("ok" | "conflict"))
+                    && response["data"]["complete"] == true;
+                if !complete {
+                    self.catalog_cached = !self.catalog.is_null();
+                    self.notice = tr!("Catalog check failed; showing the last known data");
+                    self.result = Some(response.clone());
+                    // An offline/partial refresh must not erase a usable normal snapshot.
+                    if gui_index::normal(&done.request) && !self.catalog.is_null() {
+                        return;
+                    }
+                }
+                if !response["data"].is_object() {
+                    return;
+                }
                 self.catalog = response["data"].clone();
-                if response["status"] != "ok" && response["status"] != "conflict" {
-                    self.result = Some(response);
+                if complete {
+                    self.catalog_cached = false;
+                    self.catalog_checked_at = Some(gui_index::now());
+                    self.observed_epoch = gui_index::epoch();
+                    if self.notice == tr!("Catalog check failed; showing the last known data") {
+                        self.notice.clear();
+                    }
                 }
-                if !array(&self.catalog, "conversations")
-                    .iter()
-                    .any(|c| c["id"] == self.selected)
-                {
-                    self.selected.clear();
-                    self.source.clear();
-                    self.messages = Value::Null;
-                }
-                if self.selected.is_empty()
-                    && let Some(group) = array(&self.catalog, "conversations").first()
-                {
-                    let page = self.detail_view;
-                    self.select(group);
-                    self.detail_view = page;
-                } else if self.messages.is_null()
-                    && let Some(group) = self.group()
-                {
-                    if !array(&group, "copies").iter().any(|c| c["id"] == self.source) {
+                if let Some(group) = self.group() {
+                    let current = array(&group, "copies").into_iter().find(|c| c["id"] == self.source);
+                    if current.is_none() {
                         let page = self.detail_view;
                         self.select(&group);
                         self.detail_view = page;
-                    } else {
+                    } else if current != old_copy || self.messages.is_null() && !self.message_pending() {
                         self.enqueue(Kind::Messages, json!({"action":"messages","ids":[self.source]}));
                     }
+                } else {
+                    self.selected.clear();
+                    self.source.clear();
+                    self.messages = Value::Null;
+                    self.messages_generation += 1;
+                    self.queue.retain(|j| j.kind != Kind::Messages);
                 }
             }
             Kind::Messages => {
@@ -341,6 +495,14 @@ impl Desktop {
                 self.messages = Value::Null;
                 self.result = Some(response);
                 if done.request["action"] == "configure" || done.request["action"] == "automatic" {
+                    if done.request["action"] == "configure"
+                        && self.result.as_ref().is_some_and(|r| r["status"] == "ok")
+                    {
+                        self.catalog = Value::Null;
+                        self.selected.clear();
+                        self.source.clear();
+                        self.catalog_checked_at = None;
+                    }
                     self.show_settings = false;
                     self.enqueue(Kind::Settings, json!({"action":"settings"}));
                 }
@@ -601,7 +763,7 @@ impl Desktop {
                     );
                     if ui
                         .add_enabled(
-                            !self.busy(),
+                            !self.navigation_locked(),
                             egui::Button::new(label)
                                 .selected(current)
                                 .frame(current)
@@ -1465,13 +1627,23 @@ impl eframe::App for Desktop {
             )
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    if self.busy() {
+                    if self.busy() || self.checking_catalog() {
                         ui.spinner();
-                        ui.label(tr!("Operation in progress"));
+                        ui.label(if self.busy() {
+                            tr!("Operation in progress")
+                        } else {
+                            tr!("Checking conversations in the background")
+                        });
                     } else if !self.notice.is_empty() {
                         ui.label(&self.notice);
                     } else {
                         ui.weak(tr!("No changes were made"));
+                    }
+                    if self.catalog_cached {
+                        ui.colored_label(theme::WARNING, tr!("Last known data; verification pending"));
+                    }
+                    if let Some(checked) = self.catalog_checked_at {
+                        ui.weak(tr!("Last checked {when}", when = crate::ui::ago(checked as f64)));
                     }
                     if self.result.is_some() && ui.button(tr!("Results")).clicked() {
                         self.notice.clear();
@@ -1575,5 +1747,99 @@ pub fn run() {
     };
     if let Err(e) = eframe::run_native("actX", options, Box::new(|cc| Ok(Box::new(Desktop::new(cc))))) {
         crate::ui::die(&e.to_string());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn catalog() -> Value {
+        json!({"complete":true,"scope":{"all":false,"general":false,"project":null},"projects":[],"conversations":[{"id":"claude:one","title":"Saved","managed":true,"copies":[{"id":"claude:one","harness":"claude","local":{"folder":"/work"}}]}]})
+    }
+    fn completion(app: &Desktop, result: Value) -> Completed {
+        Completed {
+            kind: Kind::Catalog,
+            generation: app.catalog_generation,
+            request: json!({"action":"list","all":false}),
+            result: Ok(result),
+        }
+    }
+    #[test]
+    fn startup_and_catalog_refresh_do_not_read_any_history_until_selection() {
+        let snapshot =
+            serde_json::from_value(json!({"version":1,"context":"fixture","checked_at":42,"catalog":catalog()}))
+                .unwrap();
+        let mut app = Desktop::initial(Some(snapshot));
+        assert_eq!(app.catalog, catalog());
+        assert!(app.catalog_cached);
+        assert_eq!(app.catalog_checked_at, Some(42));
+        app.complete(completion(&app, json!({"status":"ok","data":catalog()})));
+        assert!(app.selected.is_empty());
+        assert!(app.queue.iter().all(|j| j.kind != Kind::Messages));
+        let group = app.catalog["conversations"][0].clone();
+        app.select(&group);
+        assert_eq!(app.source, "claude:one");
+        assert_eq!(app.queue.iter().filter(|j| j.kind == Kind::Messages).count(), 1);
+        let generation = app.messages_generation;
+        app.complete(completion(&app, json!({"status":"ok","data":catalog()})));
+        assert_eq!(
+            app.messages_generation, generation,
+            "refresh must not duplicate a pending history read"
+        );
+        // A slow history read never locks conversation navigation.
+        app.running = Some(Kind::Messages);
+        assert!(!app.navigation_locked());
+    }
+    #[test]
+    fn offline_refresh_keeps_snapshot_and_old_jobs_cannot_undo_newer_actions() {
+        let mut app = Desktop::initial(None);
+        app.catalog = catalog();
+        app.catalog_checked_at = Some(42);
+        app.complete(completion(
+            &app,
+            json!({"status":"incomplete","data":{"complete":false,"projects":[],"conversations":[]}}),
+        ));
+        assert_eq!(app.catalog, catalog());
+        assert!(app.catalog_cached);
+        assert_eq!(app.catalog_checked_at, Some(42));
+        let old = completion(
+            &app,
+            json!({"status":"ok","data":{"complete":true,"conversations":[],"projects":[]}}),
+        );
+        app.enqueue(Kind::Apply, json!({"action":"delete"}));
+        app.complete(old);
+        assert_eq!(app.catalog, catalog());
+    }
+    #[test]
+    fn rapid_selection_coalesces_reads_and_ignores_superseded_messages() {
+        let mut app = Desktop::initial(None);
+        let first = catalog()["conversations"][0].clone();
+        let mut second = first.clone();
+        second["id"] = json!("claude:two");
+        second["copies"][0]["id"] = json!("claude:two");
+        app.select(&first);
+        let old_generation = app.messages_generation;
+        app.select(&second);
+        app.select(&first);
+        assert_eq!(app.queue.iter().filter(|j| j.kind == Kind::Messages).count(), 1);
+        app.complete(Completed {
+            kind: Kind::Messages,
+            generation: old_generation,
+            request: json!({"ids":["claude:one"]}),
+            result: Ok(json!({"data":{"messages":[{"text":"stale"}]}})),
+        });
+        assert!(app.messages.is_null());
+    }
+    #[test]
+    fn returning_from_full_inventory_never_displays_it_as_the_normal_catalog() {
+        let mut app = Desktop::initial(None);
+        app.all = true;
+        app.refresh();
+        app.catalog = catalog();
+        app.all = false;
+        app.refresh();
+        assert!(app.catalog.is_null());
+        assert!(app.selected.is_empty());
+        assert_eq!(app.queue.iter().filter(|j| j.kind == Kind::Catalog).count(), 1);
     }
 }

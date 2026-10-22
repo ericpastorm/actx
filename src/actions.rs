@@ -371,6 +371,14 @@ fn outcome(id: &str, result: Result<()>) -> Outcome {
 }
 
 pub fn run(req: Request) -> Response<Value> {
+    let writes = req.apply && !req.cancel;
+    let response = execute(req);
+    if writes && response.data.as_ref().is_some_and(|data| data["applied"] == true) {
+        crate::gui_index::invalidate();
+    }
+    response
+}
+fn execute(req: Request) -> Response<Value> {
     let _quiet = ui::Silence::new();
     let command = req.command();
     if req.cancel {

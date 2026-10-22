@@ -106,6 +106,7 @@ pub fn save(st: &mut State) -> Result<()> {
     now.read_base = now.base.clone();
     now.read_folders = now.folders.clone();
     *st = now;
+    crate::gui_index::invalidate();
     Ok(())
 }
 

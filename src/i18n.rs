@@ -84,6 +84,23 @@ const HELP_ES: &str = "actx (agent context): mantiene tus conversaciones de Clau
 pub static ES: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| {
     HashMap::from([
         (
+            "Project data changed; refreshing the catalog",
+            "Los datos del proyecto han cambiado; actualizando el catálogo",
+        ),
+        (
+            "Catalog check failed; showing the last known data",
+            "No se pudo comprobar el catálogo; se muestran los últimos datos conocidos",
+        ),
+        (
+            "Checking conversations in the background",
+            "Comprobando conversaciones en segundo plano",
+        ),
+        (
+            "Last known data; verification pending",
+            "Últimos datos conocidos; pendientes de comprobar",
+        ),
+        ("Last checked {when}", "Última comprobación: {when}"),
+        (
             "Configure automatic additions for a project",
             "Configurar la incorporación automática de un proyecto",
         ),

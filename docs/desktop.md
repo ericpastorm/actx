@@ -69,6 +69,32 @@ Resume opens a separate terminal: an available supported terminal on Linux, Term
 or Windows Terminal (`wt`, required) on Windows. Windows uses `cmd /k` for npm harness shims.
 A terminal launch can succeed even if the harness later fails; its terminal displays that error.
 
+## Startup and local index
+
+The desktop stores the last complete normal catalog in the local XDG cache folder
+(`~/.cache/actx/gui-index-v1.json` by default on Core). It includes project work folders,
+conversation IDs/titles, native/shared locations and last checked states; it contains no message
+history. This file is specific to this computer, shared-folder configuration and harness locations.
+It is disposable and is rebuilt if missing, corrupt, from another configuration or version.
+
+Startup displays this snapshot with its last-check time and a pending-verification label, then
+checks the actual catalog in a separate background subprocess. Settings and selected-message
+reads run independently of that catalog check. There is no automatic conversation selection:
+message history is loaded only after selection, and superseded selections/results are discarded.
+An unchanged selected copy reuses the messages already loaded in memory.
+
+Successful normal refreshes atomically replace the index. Full local inventory and candidate
+searches do not enter it. Partial/offline refreshes preserve the last complete snapshot with an
+unverified label and diagnostics. CLI/API changes notify an open desktop via local cache/state
+metadata; it checks those cheaply every two seconds. Returning focus also requests verification.
+Changes made on another computer appear on the next catalog refresh; no filesystem watcher is
+installed on shared storage. GUI actions refresh the catalog afterwards. Settings changes discard
+old on-screen data before loading the new configuration.
+
+All previews and writes still re-read the real histories and check revisions/locks. The index
+is only for display and never supplies synchronization decisions or work-folder bindings.
+Opening the GUI creates the index; read-only CLI/JSON queries do not create or update it.
+
 ## Current limits
 
 This is a first desktop preview for review. Native startup, rendering and compact keyboard

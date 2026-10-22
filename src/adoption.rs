@@ -408,6 +408,7 @@ pub fn configure(req: &Request) -> Response<Value> {
     })();
     match result {
         Ok(()) => {
+            crate::gui_index::invalidate();
             data["applied"] = json!(true);
             actions::response("adoption", Status::Ok, data, vec![])
         }

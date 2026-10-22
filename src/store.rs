@@ -334,6 +334,7 @@ pub fn push_one(
             return Err(e.into());
         }
         let _ = std::fs::remove_dir_all(&old);
+        crate::gui_index::invalidate();
         let weights = (pushed.seen, pushed.weight);
         st.content.insert(
             s.key(),
@@ -371,6 +372,7 @@ pub fn push_one(
 pub fn remove_stored(r: &Session) -> Result<()> {
     let _loading = crate::ui::loading(&tr!("Deleting {title}", title = r.title));
     std::fs::remove_dir_all(r.store_dir())?;
+    crate::gui_index::invalidate();
     if let Some(parent) = r.store_dir().parent() {
         let _ = std::fs::remove_dir(parent); // the tool's folder, if it's now empty
     }

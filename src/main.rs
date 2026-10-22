@@ -19,6 +19,7 @@ mod desktop;
 mod desktop_api;
 mod engine;
 mod git;
+mod gui_index;
 mod harness;
 mod i18n;
 mod inspection;
