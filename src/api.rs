@@ -251,6 +251,9 @@ fn inspection_diagnostics() -> Vec<Diagnostic> {
 
 /// A catalog without previews, terminal output, state migration or cache writes.
 pub fn list(args: &Args) -> Response<ListData> {
+    list_with_catalog(args, None)
+}
+pub(crate) fn list_with_catalog(args: &Args, supplied: Option<Catalog>) -> Response<ListData> {
     let _quiet = ui::Silence::new();
     let _guard = inspection::Guard::new();
     if let Err(error) = validate_config() {
@@ -260,7 +263,7 @@ pub fn list(args: &Args) -> Response<ListData> {
     if let Err(error) = validate_project(root.as_deref(), args) {
         return Response::error("ls", error);
     }
-    let catalog = Catalog::load_for(args.all);
+    let catalog = supplied.unwrap_or_else(|| Catalog::load_for(args.all));
     let st = state::load();
     let projects = root
         .as_ref()

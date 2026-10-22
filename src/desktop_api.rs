@@ -34,9 +34,7 @@ fn candidates(req: &Request) -> Response<Value> {
     args.all = true;
     args.project = None;
     args.general = false;
-    let mut listing = crate::api::list(&args);
-    listing.command = "candidates";
-    if let Some(name) = &req.project {
+    let folder = if let Some(name) = &req.project {
         let Some(root) = store::store_root(true) else {
             return actions::error(
                 "candidates",
@@ -51,17 +49,27 @@ fn candidates(req: &Request) -> Response<Value> {
                 "Choose a bound project work folder",
             );
         };
-        if !req.all {
-            let keys: std::collections::HashSet<_> = harness::all_local()
-                .into_iter()
-                .filter(|s| crate::project::candidate(&folder, s))
-                .map(|s| s.key())
-                .collect();
-            if let Some(data) = listing.data.as_mut() {
-                data.conversations
-                    .retain(|g| g.copies.iter().any(|c| keys.contains(&c.id)));
-            }
-        }
+        Some(folder)
+    } else {
+        None
+    };
+    let catalog = crate::catalog::Catalog::load_all();
+    let keys: std::collections::HashSet<_> = catalog
+        .groups
+        .iter()
+        .flat_map(|g| &g.copies)
+        .filter_map(|c| c.local.as_ref())
+        .filter(|s| req.all || folder.as_ref().is_none_or(|f| crate::project::candidate(f, s)))
+        .map(|s| s.key())
+        .collect();
+    let mut listing = crate::api::list_with_catalog(&args, Some(catalog));
+    listing.command = "candidates";
+    if folder.is_some()
+        && !req.all
+        && let Some(data) = listing.data.as_mut()
+    {
+        data.conversations
+            .retain(|g| g.copies.iter().any(|c| keys.contains(&c.id)));
     }
     actions::serde_response(listing)
 }

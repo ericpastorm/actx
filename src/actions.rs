@@ -378,6 +378,7 @@ fn outcome(id: &str, result: Result<()>) -> Outcome {
 pub fn run(req: Request) -> Response<Value> {
     let writes = req.apply && !req.cancel;
     let response = execute(req);
+    crate::discovery::emit();
     if writes && response.data.as_ref().is_some_and(|data| data["applied"] == true) {
         crate::gui_index::invalidate();
     }

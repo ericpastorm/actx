@@ -107,3 +107,22 @@ services were checked with simulated machines. Windows/macOS native windows, dia
 launching and accessibility still need hands-on review. Chinese welcomes native-speaker review.
 
 Frontend sync excludes retention and binary publication. Tray icons and notifications are outside this version. See [JSON API](json-api.md).
+
+## Advanced discovery performance
+
+Discovery keeps disposable native-file metadata and bounded cleanup summaries in the local
+`discovery-v1.json` index. File size, modification time and Unix change time/inode invalidate
+individual entries; SQLite WAL changes invalidate database-derived entries. Directory enumeration
+still finds newly created conversations and ignores removed files. Codex custom titles participate
+in their metadata signature. Missing/corrupt/foreign indexes fall back to native reads.
+
+GUI subprocesses return index deltas through the private stderr transport; the desktop persists
+those atomically. Ordinary CLI/JSON queries can reuse them and do not write them. Full native
+history fingerprints are calculated only for explicit cleanup selections, then checked again
+before and after creating the recovery copy. Active/maintained/parent protections stay live.
+Discovery and cleanup never trust a display index as authorization to overwrite or delete data.
+
+Project candidate listing reuses one catalog, including repository/path-mention suggestions.
+opencode is not opened for a managed-key query containing no opencode conversations. Unchanged
+opencode metadata can be reused without copying its database for each query; changed databases
+continue to use isolated read snapshots.

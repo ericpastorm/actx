@@ -146,6 +146,11 @@ pub fn run(req: &Request) -> Response<Value> {
     if !diagnostics.is_empty() {
         return actions::response(command, Status::Incomplete, json!({"applied":false}), diagnostics);
     }
+    for candidate in &mut selected {
+        if let Err(e) = clean::seal(candidate) {
+            return actions::error(command, "cleanup_selection_changed", e.to_string());
+        }
+    }
     let token =
         crate::engine::digest(&serde_json::to_vec(&json!({"settings":settings,"selected":rows(&selected)})).unwrap());
     let mut data = json!({"operations":selected.iter().map(|c|json!({"kind":"quarantine","session_id":c.session.key(),"title":c.session.title,"destination":c.session.path,"reasons":c.reasons,"bytes":c.bytes})).collect::<Vec<_>>()});

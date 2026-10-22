@@ -693,3 +693,82 @@ fn cleanup_api_reviews_only_selected_unmanaged_histories_and_restores_them() {
     assert_ne!(r["status"], "ok");
     assert!(first.exists());
 }
+
+#[test]
+fn discovery_reuses_a_local_index_without_writes_and_notices_new_edited_and_removed_sources() {
+    let w = World::new();
+    let m = w.machine("discovery");
+    let folder = m.home.join("notes");
+    std::fs::create_dir_all(&folder).unwrap();
+    let old = |p: &std::path::Path| {
+        std::fs::File::options()
+            .write(true)
+            .open(p)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(20 * 86400))
+            .unwrap()
+    };
+    let file = claude_session(&m, &folder, &[("user", "ping"), ("assistant", "pong")], Some("Title A"));
+    old(&file);
+    let request = json!({"action":"cleanup_scan","cleanup":{"harnesses":["claude"]}});
+    // Consume the exact transport event that desktop workers persist; ordinary API calls don't.
+    let mut child = m
+        .command(ACTX)
+        .arg("api")
+        .env("ACTX_PROGRESS", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(request.to_string().as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["status"], "ok", "{result}");
+    let delta = String::from_utf8(output.stderr)
+        .unwrap()
+        .lines()
+        .filter_map(|s| serde_json::from_str::<Value>(s).ok())
+        .find(|v| v["event"] == "discovery_index")
+        .unwrap();
+    let cache = m.home.join(".cache/actx/discovery-v1.json");
+    std::fs::create_dir_all(cache.parent().unwrap()).unwrap();
+    std::fs::write(
+        &cache,
+        json!({"version":1,"context":delta["context"],"entries":delta["entries"]}).to_string(),
+    )
+    .unwrap();
+    let bytes = std::fs::read(&cache).unwrap();
+    let modified = cache.metadata().unwrap().modified().unwrap();
+    assert_eq!(api(&m, request.clone())["data"]["candidates"][0]["title"], "Title A");
+    assert_eq!(std::fs::read(&cache).unwrap(), bytes);
+    assert_eq!(cache.metadata().unwrap().modified().unwrap(), modified);
+    let source = std::fs::read_to_string(&file).unwrap();
+    let timestamp = file.metadata().unwrap().modified().unwrap();
+    std::fs::write(&file, source.replace("Title A", "Title B").replace("ping", "test")).unwrap();
+    #[cfg(unix)]
+    std::fs::File::options()
+        .write(true)
+        .open(&file)
+        .unwrap()
+        .set_modified(timestamp)
+        .unwrap();
+    #[cfg(not(unix))]
+    let _ = timestamp;
+    let edited = api(&m, request.clone());
+    assert_eq!(edited["data"]["candidates"][0]["title"], "Title B", "{edited}");
+    let second = claude_session(&m, &folder, &[("user", "ping"), ("assistant", "pong")], Some("New"));
+    old(&second);
+    assert_eq!(
+        api(&m, request.clone())["data"]["candidates"].as_array().unwrap().len(),
+        2
+    );
+    std::fs::remove_file(file).unwrap();
+    assert_eq!(api(&m, request)["data"]["candidates"].as_array().unwrap().len(), 1);
+    assert_eq!(std::fs::read(&cache).unwrap(), bytes);
+}

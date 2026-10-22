@@ -240,23 +240,45 @@ pub fn local_keys(keys: Option<&std::collections::HashSet<String>>) -> Vec<Sessi
             if keys.is_some_and(|keys| !keys.contains(&format!("claude:{id}"))) {
                 continue;
             }
-            let (Ok(meta), Ok((head, tail))) = (f.metadata(), chunks(&f)) else {
-                continue;
-            };
-            let has = |b: &[u8]| memchr::memmem::find(b, b"\"type\":\"assistant\"").is_some();
-            if !has(&head) && !has(&tail) {
-                continue; // opened and closed without a conversation
+            if crate::work::cancelled() {
+                break;
             }
-            if !exact {
-                (path, exact) = project_path(&dirname, &head, &tail);
+            let row: Result<Option<(crate::discovery::Record, bool)>> =
+                crate::discovery::memo("claude-session", &f, &Value::Null, || {
+                    let meta = f.metadata()?;
+                    let (head, tail) = chunks(&f)?;
+                    let has = |b: &[u8]| memchr::memmem::find(b, b"\"type\":\"assistant\"").is_some();
+                    if !has(&head) && !has(&tail) {
+                        return Ok(None);
+                    }
+                    let (folder, verified) = project_path(&dirname, &head, &tail);
+                    let mut s = Session::local(
+                        "claude",
+                        id.clone(),
+                        title(&head, &tail),
+                        folder,
+                        meta.modified().map(epoch).unwrap_or(0.),
+                        content_weight(&f).unwrap_or(meta.len()),
+                    );
+                    s.size = Some(meta.len());
+                    Ok(Some((crate::discovery::Record::from(&s), verified)))
+                });
+            match row {
+                Ok(Some((row, verified))) => {
+                    let s = row.session("claude", Some(&f));
+                    if !exact {
+                        path = s.path.clone();
+                        exact = verified;
+                    }
+                    found.push(s);
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    if crate::inspection::enabled() {
+                        crate::inspection::record_error(e.to_string());
+                    }
+                }
             }
-            let id = f.file_stem().unwrap_or_default().to_string_lossy().into_owned();
-            let updated = meta.modified().map(epoch).unwrap_or(0.0);
-            let weight = content_weight(&f).unwrap_or(meta.len());
-            let mut s = Session::local("claude", id, title(&head, &tail), String::new(), updated, weight);
-            s.size = Some(meta.len());
-            s.src = Some(f.clone());
-            found.push(s);
         }
         for mut s in found {
             s.path = path.clone();
@@ -282,20 +304,33 @@ pub fn clean_local() -> Vec<Session> {
                 if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
                     continue;
                 }
-                let Ok((head, tail)) = chunks(&path) else { continue };
-                let Ok(meta) = path.metadata() else { continue };
-                let id = path.file_stem().unwrap_or_default().to_string_lossy().into_owned();
-                let mut session = Session::local(
-                    "claude",
-                    id,
-                    title(&head, &tail),
-                    project_path(&dirname, &head, &tail).0,
-                    meta.modified().map(epoch).unwrap_or(0.0),
-                    meta.len(),
-                );
-                session.size = Some(meta.len());
-                session.src = Some(path);
-                sessions.push(session);
+                if crate::work::cancelled() {
+                    break;
+                }
+                let row = crate::discovery::session("claude", &path, &json!({"child":true}), || {
+                    let (head, tail) = chunks(&path)?;
+                    let meta = path.metadata()?;
+                    let id = path.file_stem().unwrap_or_default().to_string_lossy().into_owned();
+                    let mut s = Session::local(
+                        "claude",
+                        id,
+                        title(&head, &tail),
+                        project_path(&dirname, &head, &tail).0,
+                        meta.modified().map(epoch).unwrap_or(0.),
+                        meta.len(),
+                    );
+                    s.size = Some(meta.len());
+                    Ok(Some(s))
+                });
+                match row {
+                    Ok(Some(s)) => sessions.push(s),
+                    Ok(None) => {}
+                    Err(e) => {
+                        if crate::inspection::enabled() {
+                            crate::inspection::record_error(e.to_string());
+                        }
+                    }
+                }
             }
         }
     }

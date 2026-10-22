@@ -18,6 +18,7 @@ mod ctx;
 #[cfg(feature = "gui")]
 mod desktop;
 mod desktop_api;
+mod discovery;
 mod engine;
 mod git;
 mod gui_index;

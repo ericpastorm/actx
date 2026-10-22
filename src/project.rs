@@ -70,6 +70,16 @@ pub fn candidate(folder: &str, session: &crate::session::Session) -> bool {
     {
         return true;
     }
+    let source = session.src.as_deref().unwrap_or(&crate::ctx::ctx().opencode_db);
+    crate::discovery::memo(
+        &format!("project-match:{}:{folder}", session.key()),
+        source,
+        &Value::Null,
+        || Ok(candidate_mentions(folder, session)),
+    )
+    .unwrap_or(false)
+}
+fn candidate_mentions(folder: &str, session: &crate::session::Session) -> bool {
     let mentions = |text: &[u8]| {
         [folder.to_string(), paths::slashed(folder), folder.replace('\\', "\\\\")]
             .iter()

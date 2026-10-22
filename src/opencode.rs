@@ -97,6 +97,21 @@ pub fn local_keys(keys: &std::collections::HashSet<String>) -> Vec<Session> {
     local_impl(false, Some(keys))
 }
 fn local_impl(include_children: bool, keys: Option<&std::collections::HashSet<String>>) -> Vec<Session> {
+    if keys.is_some_and(|keys| !keys.iter().any(|k| k.starts_with("opencode:"))) || !ctx().opencode_db.is_file() {
+        return Vec::new();
+    }
+    let ids = keys.map(|keys| {
+        let mut ids: Vec<_> = keys.iter().filter(|k| k.starts_with("opencode:")).cloned().collect();
+        ids.sort();
+        ids
+    });
+    crate::discovery::inventory(
+        &ctx().opencode_db,
+        &json!({"children":include_children,"ids":ids}),
+        || local_uncached(include_children, keys),
+    )
+}
+fn local_uncached(include_children: bool, keys: Option<&std::collections::HashSet<String>>) -> Vec<Session> {
     // Without a database there are no local sessions. In particular, don't start an npm shim
     // just to discover its version every time another tool's conversations are listed or synced.
     if !ctx().opencode_db.is_file() {
@@ -188,6 +203,16 @@ pub(crate) fn clean_fingerprint(sid: &str) -> Result<u64> {
 }
 
 pub(crate) fn clean_parent(sid: &str) -> Option<String> {
+    crate::discovery::memo(
+        &format!("opencode-parent:{sid}"),
+        &ctx().opencode_db,
+        &Value::Null,
+        || Ok(clean_parent_fresh(sid)),
+    )
+    .ok()
+    .flatten()
+}
+fn clean_parent_fresh(sid: &str) -> Option<String> {
     let table = if version() == Some(2) { "session_v2" } else { "session" };
     query(&format!("select parent_id from {table} where id=?1"), [sid], |r| {
         r.get::<_, Option<String>>(0)
@@ -197,6 +222,15 @@ pub(crate) fn clean_parent(sid: &str) -> Option<String> {
     .next()
 }
 pub(crate) fn clean_has_children(sid: &str) -> bool {
+    crate::discovery::memo(
+        &format!("opencode-children:{sid}"),
+        &ctx().opencode_db,
+        &Value::Null,
+        || Ok(clean_has_children_fresh(sid)),
+    )
+    .unwrap_or(true)
+}
+fn clean_has_children_fresh(sid: &str) -> bool {
     let table = if version() == Some(2) { "session_v2" } else { "session" };
     query(
         &format!("select count(*) from {table} where parent_id=?1"),

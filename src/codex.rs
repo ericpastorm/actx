@@ -189,6 +189,9 @@ pub fn messages(buf: &[u8]) -> Vec<(String, String)> {
 }
 
 pub(crate) fn session_meta(f: &Path) -> Value {
+    crate::discovery::memo("codex-meta", f, &Value::Null, || Ok(session_meta_fresh(f))).unwrap_or(Value::Null)
+}
+fn session_meta_fresh(f: &Path) -> Value {
     let mut first = String::new();
     let _ = File::open(f)
         .map(BufReader::new)
@@ -239,31 +242,50 @@ fn local_impl(include_subagents: bool, keys: Option<&std::collections::HashSet<S
         if keys.is_some_and(|keys| !keys.contains(&format!("codex:{id}"))) {
             continue;
         }
+        if crate::work::cancelled() {
+            break;
+        }
         let meta = session_meta(&f);
         if !meta.is_object() {
             continue;
         }
         let thread_source = meta.get("thread_source").and_then(Value::as_str);
         if !include_subagents && !matches!(thread_source, None | Some("user")) {
-            continue; // a subagent's thread
+            continue;
         }
-        let cwd = jstr(&meta, "cwd").to_string();
-        let Ok((head, tail)) = chunks(&f) else { continue };
-        let said: Vec<String> = messages(&head)
-            .into_iter()
-            .chain(messages(&tail))
-            .filter(|(role, _)| role == "user")
-            .map(|(_, t)| t)
-            .collect();
-        let Some(first) = said.first() else { continue };
-        let title = titles
-            .get(&id)
-            .cloned()
-            .unwrap_or_else(|| crate::ui::take_chars(first.lines().next().unwrap_or(""), 80).to_string());
-        let size = f.metadata().map(|m| m.len()).unwrap_or(0);
-        let mut s = Session::local("codex", id, title, cwd, epoch(&f), size);
-        s.src = Some(f);
-        out.push(s);
+        let row = crate::discovery::session("codex", &f, &json!({"title":titles.get(&id)}), || {
+            let (head, tail) = chunks(&f)?;
+            let said: Vec<_> = messages(&head)
+                .into_iter()
+                .chain(messages(&tail))
+                .filter(|(role, _)| role == "user")
+                .map(|(_, t)| t)
+                .collect();
+            let Some(first) = said.first() else {
+                return Ok(None);
+            };
+            let title = titles
+                .get(&id)
+                .cloned()
+                .unwrap_or_else(|| crate::ui::take_chars(first.lines().next().unwrap_or(""), 80).to_string());
+            Ok(Some(Session::local(
+                "codex",
+                id.clone(),
+                title,
+                jstr(&meta, "cwd").to_string(),
+                epoch(&f),
+                f.metadata()?.len(),
+            )))
+        });
+        match row {
+            Ok(Some(s)) => out.push(s),
+            Ok(None) => {}
+            Err(e) => {
+                if crate::inspection::enabled() {
+                    crate::inspection::record_error(e.to_string());
+                }
+            }
+        }
     }
     out
 }

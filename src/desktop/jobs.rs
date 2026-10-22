@@ -79,6 +79,10 @@ pub(super) fn call_api(
             {
                 *reader_control.progress.lock().unwrap() = event;
                 ctx.request_repaint();
+            } else if let Ok(event) = serde_json::from_str::<Value>(&line)
+                && event["event"] == "discovery_index"
+            {
+                let _ = crate::discovery::persist(&event);
             } else if errors.len() < 8192 {
                 errors.push_str(&line);
                 errors.push('\n');

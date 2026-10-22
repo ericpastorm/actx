@@ -45,6 +45,7 @@ impl Default for Options {
         }
     }
 }
+#[derive(serde::Serialize, serde::Deserialize)]
 struct Summary {
     first: String,
     turns: Option<usize>,
@@ -120,6 +121,15 @@ fn normalized(text: &str) -> String {
         .join(" ")
 }
 fn summary(s: &Session) -> Result<Summary> {
+    let path = s.src.as_deref().unwrap_or(&ctx().opencode_db);
+    crate::discovery::memo(
+        &format!("cleanup-summary-{}", s.key()),
+        path,
+        &serde_json::json!([s.key(), s.weight, s.title]),
+        || summary_fresh(s),
+    )
+}
+fn summary_fresh(s: &Session) -> Result<Summary> {
     let small = s
         .src
         .as_ref()
@@ -234,7 +244,7 @@ fn sidecar(path: &Path, suffix: &str) -> PathBuf {
 pub(crate) fn fingerprint(s: &Session) -> Result<String> {
     fingerprint_inner(s, true)
 }
-fn revision(s: &Session) -> Result<String> {
+pub(crate) fn revision(s: &Session) -> Result<String> {
     fingerprint_inner(s, false)
 }
 fn fingerprint_inner(s: &Session, full: bool) -> Result<String> {
@@ -280,7 +290,15 @@ fn fingerprint_inner(s: &Session, full: bool) -> Result<String> {
         if stamp(&path)? != before {
             return Err(Error(tr!("Conversation changed while being inspected")));
         }
-        for b in format!("{}:{}:{}", path.display(), before.0, before.1).bytes() {
+        #[cfg(unix)]
+        let extra = {
+            use std::os::unix::fs::MetadataExt;
+            let meta = path.metadata()?;
+            format!("{}:{}:{}", meta.ctime(), meta.ctime_nsec(), meta.ino())
+        };
+        #[cfg(not(unix))]
+        let extra = String::new();
+        for b in format!("{}:{}:{}:{extra}", path.display(), before.0, before.1).bytes() {
             hash = (hash ^ u64::from(b)).wrapping_mul(0x100000001b3);
         }
     }
@@ -451,7 +469,7 @@ pub(crate) fn scan(options: &Options) -> Result<Vec<Candidate>> {
         if revision(&session)? != observed_revision {
             continue;
         }
-        let fingerprint = fingerprint(&session)?;
+        let fingerprint = observed_revision;
         let bytes = session
             .src
             .as_ref()
@@ -481,6 +499,17 @@ pub(crate) fn scan(options: &Options) -> Result<Vec<Candidate>> {
         return Err(Error(inspection::errors().join("; ")));
     }
     Ok(candidates)
+}
+/// Full content checks are paid only for explicitly selected conversations.
+pub(crate) fn seal(candidate: &mut Candidate) -> Result<()> {
+    let _inspect = inspection::Guard::new();
+    if revision(&candidate.session)? != candidate.fingerprint {
+        return Err(Error(tr!("Conversation changed since selection; cleanup deferred")));
+    }
+    // Re-read the selected history classification without trusting the discovery cache.
+    let _ = summary_fresh(&candidate.session)?;
+    candidate.fingerprint = fingerprint(&candidate.session)?;
+    Ok(())
 }
 struct Inspection;
 impl Drop for Inspection {
@@ -623,7 +652,7 @@ pub fn run(mut options: Options) {
         let _loading = crate::ui::loading(&crate::tr!("Reviewing local conversations"));
         scan(&options)
     };
-    let candidates = match scanned {
+    let mut candidates = match scanned {
         Ok(c) => c,
         Err(error) => {
             ui::fail(&error.to_string());
@@ -682,6 +711,12 @@ pub fn run(mut options: Options) {
     )
     .map(|selection| selection.keys)
     .unwrap_or_default();
+    for candidate in candidates.iter_mut().filter(|c| keys.contains(&c.session.key())) {
+        if let Err(e) = seal(candidate) {
+            ui::warn(&e.to_string());
+            return;
+        }
+    }
     let selected: Vec<_> = candidates.iter().filter(|c| keys.contains(&c.session.key())).collect();
     if selected.is_empty()
         || !ui::confirm(&tr!(
