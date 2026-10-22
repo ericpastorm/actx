@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-labelledby="title description">
+<title id="title">actX — agent context, everywhere</title>
+<desc id="description">The pixel actX wordmark with a red X. Desktop and laptop conversations connect through a shared folder.</desc>
+<rect width="1200" height="360" fill="#080808"/>
+<rect x="1" y="1" width="1198" height="358" fill="none" stroke="#333333"/>
+<path d="M32 32H66M32 32V66M1168 32H1134M1168 32V66M32 328H66M32 328V294M1168 328H1134M1168 328V294" fill="none" stroke="#666666"/>
+<text x="64" y="58" fill="#999999" font-family="monospace" font-size="13" letter-spacing="3">AGENT CONTEXT, EVERYWHERE.</text>
+<g transform="translate(60 76) scale(3.2)"><g xmlns="http://www.w3.org/2000/svg" fill="#ffffff"><rect x="7" y="12" width="3.28" height="3.28" /><rect x="11" y="12" width="3.28" height="3.28" /><rect x="15" y="12" width="3.28" height="3.28" /><rect x="19" y="16" width="3.28" height="3.28" /><rect x="7" y="20" width="3.28" height="3.28" /><rect x="11" y="20" width="3.28" height="3.28" /><rect x="15" y="20" width="3.28" height="3.28" /><rect x="19" y="20" width="3.28" height="3.28" /><rect x="3" y="24" width="3.28" height="3.28" /><rect x="19" y="24" width="3.28" height="3.28" /><rect x="7" y="28" width="3.28" height="3.28" /><rect x="11" y="28" width="3.28" height="3.28" /><rect x="15" y="28" width="3.28" height="3.28" /><rect x="19" y="28" width="3.28" height="3.28" /></g><g xmlns="http://www.w3.org/2000/svg" fill="#ffffff"><rect x="35" y="12" width="3.28" height="3.28" /><rect x="39" y="12" width="3.28" height="3.28" /><rect x="43" y="12" width="3.28" height="3.28" /><rect x="47" y="12" width="3.28" height="3.28" /><rect x="31" y="16" width="3.28" height="3.28" /><rect x="31" y="20" width="3.28" height="3.28" /><rect x="31" y="24" width="3.28" height="3.28" /><rect x="35" y="28" width="3.28" height="3.28" /><rect x="39" y="28" width="3.28" height="3.28" /><rect x="43" y="28" width="3.28" height="3.28" /><rect x="47" y="28" width="3.28" height="3.28" /></g><g xmlns="http://www.w3.org/2000/svg" fill="#ffffff"><rect x="63" y="4" width="3.28" height="3.28" /><rect x="63" y="8" width="3.28" height="3.28" /><rect x="59" y="12" width="3.28" height="3.28" /><rect x="63" y="12" width="3.28" height="3.28" /><rect x="67" y="12" width="3.28" height="3.28" /><rect x="71" y="12" width="3.28" height="3.28" /><rect x="63" y="16" width="3.28" height="3.28" /><rect x="63" y="20" width="3.28" height="3.28" /><rect x="63" y="24" width="3.28" height="3.28" /><rect x="75" y="24" width="3.28" height="3.28" /><rect x="67" y="28" width="3.28" height="3.28" /><rect x="71" y="28" width="3.28" height="3.28" /></g><g xmlns="http://www.w3.org/2000/svg" fill="#ef4444"><rect x="87" y="4" width="3.28" height="3.28" /><rect x="103" y="4" width="3.28" height="3.28" /><rect x="87" y="8" width="3.28" height="3.28" /><rect x="103" y="8" width="3.28" height="3.28" /><rect x="91" y="12" width="3.28" height="3.28" /><rect x="99" y="12" width="3.28" height="3.28" /><rect x="95" y="16" width="3.28" height="3.28" /><rect x="91" y="20" width="3.28" height="3.28" /><rect x="99" y="20" width="3.28" height="3.28" /><rect x="87" y="24" width="3.28" height="3.28" /><rect x="103" y="24" width="3.28" height="3.28" /><rect x="87" y="28" width="3.28" height="3.28" /><rect x="103" y="28" width="3.28" height="3.28" /></g></g>
+<text x="68" y="235" fill="#ffffff" font-family="monospace" font-size="23">Switch machines.</text>
+<text x="68" y="267" fill="#b8b8b8" font-family="monospace" font-size="23">Keep the conversation.</text>
+<text x="68" y="310" fill="#777777" font-family="monospace" font-size="12">CLAUDE CODE / CODEX / OPENCODE / ANTIGRAVITY</text>
+<g font-family="monospace">
+<path d="M824 106H864V180H900M824 254H864V180" fill="none" stroke="#555555" stroke-width="2"/>
+<rect x="660" y="65" width="164" height="82" fill="#101010" stroke="#555555"/>
+<rect x="676" y="81" width="34" height="26" fill="none" stroke="#bbbbbb" stroke-width="2"/>
+<path d="M685 112H701M693 108V112" fill="none" stroke="#bbbbbb" stroke-width="2"/>
+<text x="723" y="102" fill="#dddddd" font-size="13">DESKTOP</text>
+<text x="677" y="132" fill="#777777" font-size="11">~/work/project</text>
+<rect x="660" y="213" width="164" height="82" fill="#101010" stroke="#555555"/>
+<path d="M678 230H709V251H678ZM673 256H714" fill="none" stroke="#bbbbbb" stroke-width="2"/>
+<text x="723" y="250" fill="#dddddd" font-size="13">LAPTOP</text>
+<text x="677" y="280" fill="#777777" font-size="11">~/code/project</text>
+<rect x="900" y="139" width="236" height="82" fill="#151010" stroke="#ef4444"/>
+<path d="M919 165V159H932L937 164H952V186H919V165" fill="none" stroke="#ef4444" stroke-width="2"/>
+<text x="970" y="173" fill="#eeeeee" font-size="13">SHARED FOLDER</text>
+<text x="970" y="193" fill="#999999" font-size="11">Your storage.</text>
+<circle cx="864" cy="180" r="4" fill="#ef4444"/>
+</g>
+</svg>

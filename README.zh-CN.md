@@ -1,4 +1,8 @@
-# actx
+<p align="center">
+  <img src="assets/readme-hero.svg" alt="actX — 跨设备保留你的智能体对话上下文" width="100%">
+</p>
+
+# 随时随地，继续你的智能体对话
 
 通过共享文件夹，在不同设备间同步 Claude Code、opencode 和 Codex 对话。
 也可将对话转换到 Antigravity；目前 Antigravity 支持转换和本地关联副本，尚不支持原生共享同步。
@@ -6,6 +10,24 @@
 [English](README.md) · [Español](README.es.md)
 
 [桌面指南](docs/desktop.md) · [JSON API](docs/json-api.md) · [更新记录](CHANGELOG.md)
+
+## 功能一览
+
+| 功能 | 用途 |
+| --- | --- |
+| 跨设备同步 | 双向同步对话，识别仓库克隆并适配不同的项目路径。 |
+| 切换智能体 | 在 Claude Code、Codex、opencode 与 Antigravity CLI 之间转换对话。 |
+| 项目与常规对话 | 手动选择共享内容，也可启用带排除规则的项目自动添加。 |
+| 原生桌面与终端 | 搜索、预览消息、查看副本状态，并在所选智能体中继续对话。 |
+| 配置与自动化 | 每台设备独立配置智能体副本，按需启用 hooks 和定时同步。 |
+| 冲突与恢复 | 比较历史、审阅解决方案，恢复备份、隔离区和中断的共享发布。 |
+| 本地清理 | 审阅候选对话后，将选中的对话移入可恢复隔离区。 |
+| JSON API | 为脚本和其他界面提供带版本的查询、预览和确认操作。 |
+
+![actX 原生桌面，使用示例对话](assets/screenshots/desktop.png)
+
+桌面采用 Pixel 5×7 标识、红色动态 X 和官方智能体图标。先显示本地目录，再后台检查更新。
+[CLI 完整指南](docs/cli.md) · [桌面指南](docs/desktop.md) · [JSON API](docs/json-api.md)
 
 ## 快速开始
 
