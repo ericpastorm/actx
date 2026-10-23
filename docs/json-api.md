@@ -8,9 +8,9 @@ envelope. Requests use these action names:
 | Area | Actions |
 | --- | --- |
 | Catalog and previews | `list`, `preview`, `candidates`, `messages` |
-| Conversations | `add`, `delete`, `sync`, `convert`, `resume` |
+| Conversations | `add`, `delete`, `move`, `sync`, `convert`, `resume` |
 | Conflicts and recovery | `compare`, `resolve`, `recoveries`, `restore` |
-| Desktop administration | `settings`, `configure`, `create_project`, `delete_project`, `diagnostics`, `automatic` |
+| Desktop administration | `settings`, `configure`, `create_project`, `rename_project`, `delete_project`, `diagnostics`, `automatic` |
 | Project discovery | `adoption` |
 | Local cleanup | `cleanup_scan`, `cleanup` |
 
@@ -90,6 +90,36 @@ exists, states also compare versioned fingerprints to detect edits that counts a
 Legacy state falls back to its existing indicators until a successful sync records content baselines.
 Catalog display does not download legacy shared payloads lacking a metadata fingerprint; their shared
 weight remains the display indicator. Action planning and confirmation still perform full checks.
+
+## Moving saved conversations and renaming projects
+
+`move` takes an explicit `ids` array of conversation or physical-copy IDs, and a destination
+`project` or `general: true`. Each ID expands to all explicitly linked shared harness copies;
+duplicate references to the same conversation are deduplicated. It does not discover unsaved
+local conversations or publish pending native edits. To create a destination project as part of
+the confirmed move, pass `project: "new-name", choice: "create"`; no project is created at preview.
+
+```json
+{"action":"move","ids":["claude:YOUR-ID"],"project":"pneuma"}
+```
+
+`rename_project` takes the existing `project` and its new name in `target`. Work folders, native
+histories, conversation IDs, preferences and synchronization baselines remain in place.
+
+```json
+{"action":"rename_project","project":"old-name","target":"new-name"}
+```
+
+Both actions return `operations`, `applied: false` and an opaque `expected` object. Resend it
+unchanged with `apply: true`. Revisions bind the shared source snapshots, destination, creation
+choice and project settings. They are recomputed under the shared lock; stale requests require
+another review and destination collisions are rejected. A move already at its destination has
+no operations or confirmation token. Moving preserves the shared snapshot bytes and native edits;
+it changes their collection membership. Histories can be shared-only and no harness needs launching.
+I/O failures trigger a rollback of completed conversation directory moves; a failed rollback
+reports the remaining paths. If shared changes complete but saving local state fails, the response
+uses `incomplete` with `applied: true`; refresh before retrying. Process interruption can leave intact
+copies in different collections.
 
 ## Envelope and exit codes
 

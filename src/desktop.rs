@@ -12,6 +12,7 @@ mod cleanup;
 mod icons;
 use icons::Icon;
 mod jobs;
+mod organize;
 mod theme;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -50,6 +51,32 @@ struct AdoptionEditor {
     rule: crate::adoption::Rule,
     paths: String,
     titles: String,
+}
+struct MoveEditor {
+    scope: String,
+    all: bool,
+    search: String,
+    selected: BTreeSet<String>,
+    destination: String,
+    name: String,
+}
+impl MoveEditor {
+    fn request(&self) -> Value {
+        let mut req = json!({"action":"move","ids":self.selected});
+        match self.destination.as_str() {
+            crate::store::GENERAL => req["general"] = json!(true),
+            "::new" => {
+                req["project"] = json!(self.name.trim());
+                req["choice"] = json!("create");
+            }
+            name => req["project"] = json!(name),
+        }
+        req
+    }
+}
+struct RenameEditor {
+    project: String,
+    name: String,
 }
 struct Desktop {
     queue: VecDeque<Job>,
@@ -97,6 +124,8 @@ struct Desktop {
     recovery_request: Value,
     diagnostic_data: Option<Value>,
     adoption_editor: Option<AdoptionEditor>,
+    move_editor: Option<MoveEditor>,
+    rename_editor: Option<RenameEditor>,
     appearance: brand::Appearance,
 }
 fn text(v: &Value, k: &str) -> String {
@@ -160,6 +189,8 @@ impl Desktop {
             recovery_request: json!({"action":"recoveries"}),
             diagnostic_data: None,
             adoption_editor: None,
+            move_editor: None,
+            rename_editor: None,
             appearance: brand::Appearance::load(),
         };
         app.enqueue(Kind::Settings, json!({"action":"settings"}));
@@ -543,6 +574,33 @@ impl Desktop {
                 if response["status"] == "ok" && done.request["action"] == "adoption" {
                     self.adoption_editor = None;
                 }
+                if response["status"] == "ok" && response["data"]["applied"] == true && done.request["action"] == "move"
+                {
+                    self.move_editor = None;
+                    self.picking = false;
+                    self.all = false;
+                    self.project = if done.request["general"] == true {
+                        crate::store::GENERAL.into()
+                    } else {
+                        text(&done.request, "project")
+                    };
+                    self.scope = self.project.clone();
+                    self.search.clear();
+                }
+                if response["status"] == "ok"
+                    && response["data"]["applied"] == true
+                    && done.request["action"] == "rename_project"
+                {
+                    self.rename_editor = None;
+                    let old = text(&done.request, "project");
+                    let new = text(&done.request, "target");
+                    if self.scope == old {
+                        self.scope = new.clone();
+                    }
+                    if self.project == old {
+                        self.project = new;
+                    }
+                }
                 if done.request["action"] == "cleanup"
                     && let Some(editor) = &mut self.cleanup_editor
                 {
@@ -649,6 +707,12 @@ impl Desktop {
         });
     }
     fn sidebar(&mut self, ui: &mut egui::Ui) {
+        egui::ScrollArea::vertical()
+            .id_salt("project-sidebar")
+            .auto_shrink([false, false])
+            .show(ui, |ui| self.sidebar_contents(ui));
+    }
+    fn sidebar_contents(&mut self, ui: &mut egui::Ui) {
         theme::panel_title(ui, &tr!("PROJECT"));
         if theme::project(ui, self.scope == "*", tr!("All projects")).clicked() {
             self.scope = "*".into();
@@ -709,6 +773,17 @@ impl Desktop {
         if self.scope != "*"
             && self.scope != crate::store::GENERAL
             && ui
+                .add_enabled(!self.busy(), icons::button(Icon::Rename, tr!("Rename project")))
+                .clicked()
+        {
+            self.rename_editor = Some(RenameEditor {
+                project: self.scope.clone(),
+                name: self.scope.clone(),
+            });
+        }
+        if self.scope != "*"
+            && self.scope != crate::store::GENERAL
+            && ui
                 .add_enabled(
                     !self.busy(),
                     icons::button(Icon::Delete, tr!("Delete project")).color(theme::RED),
@@ -740,6 +815,12 @@ impl Desktop {
             self.picking = true;
             self.all = true;
             self.scope = "*".into();
+        }
+        if ui
+            .add_enabled(!self.busy(), icons::button(Icon::Move, tr!("Move conversations")))
+            .clicked()
+        {
+            self.start_move(false);
         }
         ui.add_enabled_ui(!self.busy(), |ui| {
             ui.checkbox(&mut self.all, tr!("Show local conversations"));
@@ -944,12 +1025,14 @@ impl Desktop {
                     ("sync", tr!("Sync")),
                     ("convert", tr!("Convert")),
                     ("resume", tr!("Resume")),
+                    ("move", tr!("Move")),
                     ("delete", tr!("Delete")),
                 ] {
                     let enabled = match action {
                         "add" => copies
                             .iter()
                             .any(|c| c["id"] == self.source && c["local"].is_object() && c["harness"] != "antigravity"),
+                        "move" => copies.iter().any(|c| c["shared"].is_object()),
                         "sync" | "delete" => group["managed"] == true,
                         _ => true,
                     };
@@ -958,6 +1041,7 @@ impl Desktop {
                         "sync" => Icon::Sync,
                         "convert" => Icon::Convert,
                         "resume" => Icon::Resume,
+                        "move" => Icon::Move,
                         _ => Icon::Delete,
                     };
                     let mut button = icons::button(icon, label);
@@ -965,7 +1049,11 @@ impl Desktop {
                         button = button.color(theme::RED);
                     }
                     if ui.add_enabled(enabled, button).clicked() {
-                        self.preview(action);
+                        if action == "move" {
+                            self.start_move(true);
+                        } else {
+                            self.preview(action);
+                        }
                     }
                 }
             });
@@ -1620,6 +1708,8 @@ fn operations(ui: &mut egui::Ui, data: &Value) {
             "configure" => tr!("Save settings"),
             "create_project" => tr!("Create project"),
             "delete_project" => tr!("Delete project"),
+            "move" => tr!("Move"),
+            "rename_project" => tr!("Rename project"),
             "restore" => tr!("Recovery"),
             "restore_publication" => tr!("Restore shared publication"),
             "resolve" => crate::recovery::choice_label(op["resolution"].as_str().unwrap_or_default()),
@@ -1891,6 +1981,8 @@ impl eframe::App for Desktop {
         }
         self.settings_window(&ctx);
         self.new_project_window(&ctx);
+        self.move_window(&ctx);
+        self.rename_window(&ctx);
         self.comparison_window(&ctx);
         self.recovery_window(&ctx);
         self.diagnostics_window(&ctx);
@@ -1913,6 +2005,9 @@ impl eframe::App for Desktop {
                     });
                     egui::ScrollArea::vertical().max_height(360.).show(ui, |ui| {
                         diagnostics(ui, response);
+                        if matches!(response["command"].as_str(), Some("move" | "rename_project")) {
+                            operations(ui, &response["data"]);
+                        }
                         for r in array(&response["data"], "results") {
                             ui.label(format!(
                                 "{} · {}",
@@ -2151,9 +2246,91 @@ mod tests {
         assert_eq!(app.project_folder, "/new/project");
     }
     #[test]
+    fn organization_editors_keep_drafts_until_the_reviewed_request_is_applied() {
+        for action in ["move", "rename_project"] {
+            for (status, applied) in [
+                ("error", false),
+                ("decision_required", false),
+                ("cancelled", false),
+                ("ok", false),
+            ] {
+                let mut app = Desktop::initial(None);
+                app.start_move(false);
+                app.move_editor.as_mut().unwrap().name = "Draft".into();
+                app.rename_editor = Some(RenameEditor {
+                    project: "Demo".into(),
+                    name: "Renamed".into(),
+                });
+                app.queue.clear();
+                app.complete(Completed {
+                    kind: Kind::Apply,
+                    generation: 0,
+                    epoch: gui_index::epoch(),
+                    request: json!({"action":action,"project":"Demo","target":"Renamed"}),
+                    result: Ok(json!({"status":status,"data":{"applied":applied}})),
+                });
+                assert_eq!(app.move_editor.as_ref().unwrap().name, "Draft");
+                assert_eq!(app.rename_editor.as_ref().unwrap().name, "Renamed");
+            }
+        }
+    }
+    #[test]
+    fn moving_and_renaming_follow_confirmed_destinations() {
+        for general in [true, false] {
+            let mut app = Desktop::initial(None);
+            app.selected = "claude:one".into();
+            app.start_move(true);
+            let editor = app.move_editor.as_mut().unwrap();
+            editor.selected.insert("codex:two".into());
+            editor.destination = if general {
+                crate::store::GENERAL.into()
+            } else {
+                "::new".into()
+            };
+            editor.name = " New-project ".into();
+            let req = editor.request();
+            assert_eq!(req["ids"].as_array().unwrap().len(), 2);
+            assert_eq!(req["general"] == true, general);
+            if !general {
+                assert_eq!(req["project"], "New-project");
+                assert_eq!(req["choice"], "create");
+            }
+            app.project = "Unrelated draft".into();
+            app.queue.clear();
+            app.complete(Completed {
+                kind: Kind::Apply,
+                generation: 0,
+                epoch: gui_index::epoch(),
+                request: req,
+                result: Ok(json!({"status":"ok","data":{"applied":true}})),
+            });
+            assert!(app.move_editor.is_none());
+            assert_eq!(app.scope, if general { crate::store::GENERAL } else { "New-project" });
+            assert_eq!(app.project, app.scope);
+        }
+        let mut app = Desktop::initial(None);
+        app.queue.clear();
+        app.scope = "Demo".into();
+        app.project = "Demo".into();
+        app.rename_editor = Some(RenameEditor {
+            project: "Demo".into(),
+            name: "Renamed".into(),
+        });
+        app.complete(Completed {
+            kind: Kind::Apply,
+            generation: 0,
+            epoch: gui_index::epoch(),
+            request: json!({"action":"rename_project","project":"Demo","target":"Renamed"}),
+            result: Ok(json!({"status":"ok","data":{"applied":true}})),
+        });
+        assert_eq!(app.scope, "Renamed");
+        assert_eq!(app.project, "Renamed");
+        assert!(app.rename_editor.is_none());
+    }
+    #[test]
     fn desktop_views_and_dialogs_render_in_compact_and_wide_windows() {
-        for width in [920., 1180.] {
-            for view in 0..10 {
+        for (width, height) in [(920., 560.), (920., 760.), (1180., 760.)] {
+            for view in 0..14 {
                 let ctx = egui::Context::default();
                 theme::install(&ctx);
                 let mut frame = eframe::Frame::_new_kittest();
@@ -2193,12 +2370,33 @@ mod tests {
                             response: json!({"status":"ok","data":{"expected":{},"operations":[]}}),
                         });
                     }
+                    10..=12 => {
+                        app.catalog["conversations"][0]["shared"] = json!(true);
+                        app.catalog["conversations"][0]["collections"] = json!([{"kind":"general","id":null}]);
+                        app.catalog["conversations"][0]["copies"][0]["shared"] =
+                            json!({"collection":{"kind":"general"}});
+                        app.start_move(true);
+                        if view == 11 {
+                            app.move_editor.as_mut().unwrap().destination = crate::store::GENERAL.into();
+                        }
+                        if view == 12 {
+                            let editor = app.move_editor.as_mut().unwrap();
+                            editor.destination = "::new".into();
+                            editor.name = "Nuevo 中文".into();
+                        }
+                    }
+                    13 => {
+                        app.rename_editor = Some(RenameEditor {
+                            project: "Demo".into(),
+                            name: "Renamed 中文".into(),
+                        })
+                    }
                     _ => {}
                 }
                 for _ in 0..2 {
                     let out = ctx.run_ui(
                         egui::RawInput {
-                            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 760.))),
+                            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, height))),
                             ..Default::default()
                         },
                         |ui| eframe::App::ui(&mut app, ui, &mut frame),

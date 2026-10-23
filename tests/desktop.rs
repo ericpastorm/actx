@@ -154,6 +154,45 @@ fn native_window_tracks_reviewed_changes_and_keeps_its_offline_catalog() {
     assert!(contains(&candidates["data"], &key));
     apply(&m, json!({"action":"add","project":"demo","ids":[key]}));
     window.wait_for("adding a conversation", |c| contains(c, &key));
+    apply(&m, json!({"action":"move","general":true,"ids":[key]}));
+    window.wait_for("moving to General", |c| {
+        c["conversations"].as_array().is_some_and(|rows| {
+            rows.iter().any(|g| {
+                g["id"] == key
+                    && g["collections"]
+                        .as_array()
+                        .is_some_and(|cs| cs.iter().any(|s| s["kind"] == "general"))
+            })
+        })
+    });
+    apply(&m, json!({"action":"move","project":"demo","ids":[key]}));
+    window.wait_for("moving back to the project", |c| {
+        c["conversations"].as_array().is_some_and(|rows| {
+            rows.iter().any(|g| {
+                g["id"] == key
+                    && g["collections"]
+                        .as_array()
+                        .is_some_and(|cs| cs.iter().any(|s| s["id"] == "demo"))
+            })
+        })
+    });
+    apply(
+        &m,
+        json!({"action":"rename_project","project":"demo","target":"renamed"}),
+    );
+    window.wait_for("renaming the project", |c| {
+        c["projects"]
+            .as_array()
+            .is_some_and(|ps| ps.iter().any(|p| p["collection"]["id"] == "renamed"))
+            && c["conversations"].as_array().is_some_and(|gs| {
+                gs.iter().any(|g| {
+                    g["id"] == key
+                        && g["collections"]
+                            .as_array()
+                            .is_some_and(|cs| cs.iter().any(|s| s["id"] == "renamed"))
+                })
+            })
+    });
     apply(&m, json!({"action":"delete","ids":[key]}));
     window.wait_for("removing the shared copy", |c| !contains(c, &key));
     assert_eq!(std::fs::read(&source).unwrap(), original);

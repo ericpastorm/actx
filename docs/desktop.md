@@ -53,23 +53,30 @@ package from `libxkbcommon`; having the latter installed alone does not provide 
    **Delete** first show what will happen. Choose a work folder when the destination is unresolved.
    Delete removes shared copies, preserving native originals and projects. Conversion is local,
    reuses identified existing copies and does not implicitly publish them.
-5. **Compare histories** shows local/shared or selected linked histories, omitted-message counts
+5. **Move conversations** in the sidebar opens a searchable checklist of saved conversations.
+   It starts with the current project or General, with an option to include other collections.
+   Choose an existing destination, General, or **Create project**, then review and apply. The
+   detail panel's **Move** button preselects its conversation. Linked harness copies move together,
+   preserving saved snapshots, pending native edits and work folders. A selected project's
+   **Rename project** preserves settings and folder bindings on other computers. Cancelling or
+   failing leaves the editor draft available; completing a move switches to its destination.
+6. **Compare histories** shows local/shared or selected linked histories, omitted-message counts
    and the native merge preview. Choose a resolution and review **Apply**; the alternative stays
    recoverable. Independent edits are never silently replaced. A Codex compaction with an intact
    target can repair the conversion while retaining the old native conversation.
-6. **Recovery** lists backups, quarantined conversations and interrupted shared publications, with
+7. **Recovery** lists backups, quarantined conversations and interrupted shared publications, with
    preview and confirmation. Restoring a backup protects the current history; quarantine recovery
    does not overwrite it. Replacing a shared publication retains its previous shared version.
-7. A selected project's **Delete project** reviews all shared copies and keeps local originals.
+8. A selected project's **Delete project** reviews all shared copies and keeps local originals.
    **Settings** shows automatic-sync components and lets you enable or disable them through a
    reviewed operation. **Diagnostics** shows storage availability, installed tools and recent
    automatic-sync logs. Partial OS setup failures are reported with actual component state.
 
-8. **Clean local conversations** opens criteria and an explicit candidate checklist. Analyze first,
+9. **Clean local conversations** opens criteria and an explicit candidate checklist. Analyze first,
    review reasons/previews, select entries and confirm moving them to recoverable quarantine.
    Progress and cancellation are available; a running move finishes the current conversation before
    stopping. **Recovery** restores completed moves. Nothing is selected by default.
-9. **Automatic additions** on a selected project edits its opt-in shared rule, harnesses, subfolders,
+10. **Automatic additions** on a selected project edits its opt-in shared rule, harnesses, subfolders,
    clone handling and exclusions. **Preview** lists current matches before saving. **Sync project
    scope** applies the selected project, General or all projects; eligible new conversations are
    included when their project rule is enabled. A conversation-only Sync keeps its explicit scope.

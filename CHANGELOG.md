@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Desktop conversation moves and project renames
+
+- Add searchable multiple selection for moving saved conversations between projects and General,
+  including confirmed creation of a destination project. The detail panel can preselect a conversation.
+- Add project renaming in the sidebar. Keep drafts after cancellation or failed/stale confirmations;
+  use the confirmed destination when refreshing the view after success.
+- Reuse the CLI's move/rename plans through reviewed `move` and `rename_project` API actions.
+  Expand explicitly linked shared copies, preserve snapshots and native edits, and recheck tokens
+  and destination collisions under the shared lock. Preview and cancellation remain read-only.
+- Center organization dialogs, adapt their lists to short windows and make the sidebar scrollable.
+  Extend GUI rendering checks and the native Linux smoke flow to cover organization and index refresh.
+
 ### Moving saved conversations and renaming projects
 
 - Add `actx mv [destination]`, `--general` and `--all` with source detection from the current

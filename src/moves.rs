@@ -15,6 +15,7 @@ use std::{
     path::{Path, PathBuf},
     time::SystemTime,
 };
+pub(crate) mod api;
 
 pub fn command() -> Command {
     Command::new("mv")
@@ -82,6 +83,7 @@ fn stamp(path: &Path) -> Result<Stamp> {
 type Snapshot = BTreeMap<PathBuf, (Stamp, Option<Vec<u8>>)>;
 fn snapshot(path: &Path) -> Result<Snapshot> {
     fn walk(path: &Path, out: &mut Snapshot) -> Result<()> {
+        crate::work::check()?;
         let value = stamp(path)?;
         let metadata = matches!(
             path.file_name().and_then(|s| s.to_str()),
@@ -137,8 +139,9 @@ pub(crate) struct MovePlan {
     identities: HashSet<String>,
 }
 impl MovePlan {
-    pub fn prepare(root: &Path, copies: Vec<Session>, destination: &str, create: bool) -> Result<Self> {
+    pub fn prepare(root: &Path, mut copies: Vec<Session>, destination: &str, create: bool) -> Result<Self> {
         let _loading = ui::loading(&tr!("Preparing move"));
+        copies.sort_by_key(Session::key);
         let destination = if destination == GENERAL {
             GENERAL.into()
         } else if create {
@@ -168,6 +171,16 @@ impl MovePlan {
             target,
             identities,
         })
+    }
+
+    fn revision(&self) -> String {
+        crate::engine::digest(
+            format!(
+                "{:?}",
+                (&self.root, &self.destination, self.create, &self.before, &self.target)
+            )
+            .as_bytes(),
+        )
     }
 
     pub fn apply(&self, st: &mut State, local_folders: &HashMap<String, String>) -> Result<usize> {
@@ -215,6 +228,7 @@ impl MovePlan {
             }
         }
         let mut moved: Vec<(&PathBuf, &PathBuf)> = Vec::new();
+        crate::work::check()?;
         let result = (|| -> Result<()> {
             for (src, dest) in &paths {
                 require_lock(&self.root)?;
@@ -321,6 +335,9 @@ impl RenamePlan {
         }
         crate::gui_index::invalidate();
         Ok(())
+    }
+    fn revision(&self) -> String {
+        crate::engine::digest(format!("{:?}", (&self.root, &self.old, &self.new, &self.before)).as_bytes())
     }
 }
 

@@ -1659,6 +1659,19 @@ pub static ES: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
             "Falta la carpeta de trabajo original; restáurala antes de recuperar esta conversación",
         ),
         ("Recovered: {title}", "Recuperada: {title}"),
+        ("Move", "Mover"),
+        ("Move conversations", "Mover conversaciones"),
+        ("Rename project", "Renombrar proyecto"),
+        ("Choose destination", "Elegir destino"),
+        ("Clear selection", "Quitar selección"),
+        (
+            "Include other projects and General",
+            "Incluir otros proyectos y General",
+        ),
+        (
+            "Saved copies move together; histories and work folders are kept.",
+            "Las copias guardadas se mueven juntas; se conservan los historiales y las carpetas de trabajo.",
+        ),
         (
             "A shared copy already exists at {path}; nothing was moved",
             "Ya existe una copia compartida en {path}; no se ha movido nada",
