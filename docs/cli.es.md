@@ -78,6 +78,8 @@ Y luego:
 | `actx gui` | GUI opcional: proyectos, vista previa, sincronización, conversión y retomar. Compila con `--features gui`; consulta la [guía de escritorio](desktop.md). |
 | `actx profile` / `actx profile setup` | Resumen del perfil o asistente para modificarlo. `--json` conserva la salida estructurada. |
 | `actx cv [proyecto]` | Convierte conversaciones de la carpeta/proyecto actual; `--all` busca en todas las carpetas. |
+| `actx mv [destino]` | Mueve conversaciones guardadas a un proyecto o a `--general`; `--all` incluye otros proyectos. |
+| `actx mv --project OLD NEW` | Renombra un proyecto de actx, conservando su carpeta de trabajo y sus conversaciones. |
 | `actx rm <proyecto>` | Borra el proyecto completo y sus copias compartidas, previa confirmación. Conserva los originales locales en todos los equipos. |
 | `actx auto [on\|off]` | Sincronización automática: hooks en Claude Code y Codex, y un temporizador. `actx auto` a secas dice cómo va. |
 | `actx restore` | Recupera una conversación de una copia de seguridad. |
@@ -98,6 +100,39 @@ La vista normal lee solo las conversaciones mantenidas. `--all` abre el inventar
 Las operaciones que tardan muestran una animación de carga en terminales interactivas.
 `delete` quita conversaciones concretas; `rm` borra el proyecto completo. Los proyectos existentes
 siguen funcionando; ejecuta `mk <proyecto>` en su carpeta para guardar una vinculación explícita.
+
+### Mover conversaciones y renombrar proyectos
+
+```sh
+actx mv                        # elige conversaciones guardadas y después su destino
+actx mv pneuma                 # mueve la selección al proyecto pneuma existente
+actx mv --general              # mueve la selección a General
+actx mv pneuma --all           # elige entre todos los proyectos guardados y General
+actx mv --project viejo nuevo  # renombra el proyecto de actx completo
+```
+
+Dentro de un proyecto vinculado, el selector muestra sus conversaciones. Fuera de un proyecto,
+muestra todas las guardadas. `--all` amplía la selección de origen a todas las colecciones guardadas;
+las conversaciones locales que nunca se han añadido quedan fuera de esta operación.
+
+Se mueven juntas todas las copias compartidas vinculadas de los distintos harnesses. Antes de
+confirmar se muestran el origen y el destino. Se trasladan las versiones ya guardadas, conservando
+las ediciones locales pendientes, los historiales nativos y las carpetas de trabajo. Se mantienen
+los IDs, perfiles, referencias del último sync y los bytes del historial guardado. El selector de
+destino permite crear un proyecto, que se crea solo tras confirmar. Si necesita una carpeta de
+trabajo vinculada, ejecuta después `actx mk <nombre>` desde esa carpeta.
+
+Renombrar un proyecto conserva su configuración y las carpetas recordadas en cada equipo. El archivo
+`.renamed-from.json` conserva los nombres anteriores para que las instalaciones actualizadas de
+actx puedan reutilizar el destino local, también sin Git. Si se vuelve a usar un nombre anterior
+para otro proyecto, actx deja de usarlo como referencia alternativa. La organización nueva se
+refleja en el siguiente sync. Un nombre de destino existente se rechaza; no se mezclan proyectos.
+
+El bloqueo compartido protege la operación. Si los datos cambian durante la selección o la
+confirmación, hace falta revisarla de nuevo. Ante un error de E/S al mover conversaciones, actx
+intenta deshacer los movimientos ya completados e informa de las copias que no haya podido devolver.
+Una interrupción abrupta del proceso puede dejar copias vinculadas en colecciones distintas;
+los historiales guardados se conservan.
 
 ### Conversaciones generales
 

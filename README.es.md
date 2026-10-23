@@ -150,6 +150,7 @@ Consulta los [detalles de conversión](docs/cli.es.md#convertir-entre-programas)
 | `actx` / `actx ls` | Navegar por las conversaciones mantenidas / imprimir sus estados. |
 | `actx mk <proyecto>` / `actx rm <proyecto>` | Crear o quitar un proyecto de actX. |
 | `actx add` / `actx delete` | Elegir conversaciones que compartir o quitar del almacenamiento compartido. Conserva los originales locales. |
+| `actx mv [destino]` / `actx mv --project OLD NEW` | Mover conversaciones guardadas entre colecciones / renombrar un proyecto de actX. |
 | `actx sync` / `actx sync --dry-run` | Sincronizar o consultar las operaciones propuestas. |
 | `actx resume` / `actx cv --all` | Retomar una conversación / convertirla a otro agente. |
 | `actx compare` / `actx resolve` | Comparar historiales y revisar la resolución de un conflicto. |

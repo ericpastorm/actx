@@ -12,6 +12,29 @@ pub fn key(name: &str) -> String {
     format!("project:{}", name.to_lowercase())
 }
 
+pub fn valid_name(name: &str) -> bool {
+    name.chars().next().is_some_and(|c| c.is_alphanumeric())
+        && name.chars().all(|c| c.is_alphanumeric() || "_.-".contains(c))
+}
+
+pub(crate) const RENAMED_FROM: &str = ".renamed-from.json";
+
+/// A rename carries its former names so other machines retain their local folder binding.
+/// Once a former name is reused, it can no longer identify the renamed project safely.
+pub(crate) fn remembered_folder(root: &Path, name: &str, st: &State) -> Option<String> {
+    if let Some(folder) = st.folders.get(&key(name)).filter(|p| Path::new(p).is_dir()) {
+        return Some(folder.clone());
+    }
+    let dir = store::find_project(root, name)?;
+    let previous: Vec<String> = crate::inspection::optional_json(&dir.join(RENAMED_FROM)).unwrap_or_default();
+    previous.iter().rev().find_map(|old| {
+        if store::find_project(root, old).is_some() {
+            return None;
+        }
+        st.folders.get(&key(old)).filter(|p| Path::new(p).is_dir()).cloned()
+    })
+}
+
 pub fn metadata(root: &Path, name: &str) -> Option<Value> {
     serde_json::from_slice(&std::fs::read(store::find_project(root, name)?.join(".project.json")).ok()?).ok()
 }
@@ -40,8 +63,8 @@ pub fn bind(root: &Path, name: &str, folder: &str, st: &mut State) -> Result<()>
 }
 
 pub fn folder(root: &Path, name: &str, st: &State) -> Option<String> {
-    if let Some(folder) = st.folders.get(&key(name)).filter(|p| Path::new(p).is_dir()) {
-        return Some(folder.clone());
+    if let Some(folder) = remembered_folder(root, name, st) {
+        return Some(folder);
     }
     let meta = metadata(root, name)?;
     if !meta["git"].is_object() && meta["path"] == meta["home"] {
@@ -108,7 +131,7 @@ pub fn current(root: &Path, st: &State, cwd: &str) -> Option<String> {
         .filter_map(|dir| {
             let name = dir.file_name()?.to_string_lossy().into_owned();
             // Only consult bindings and Git metadata here, without scanning other repositories.
-            if let Some(folder) = st.folders.get(&key(&name)).filter(|folder| contains(folder, cwd)) {
+            if let Some(folder) = remembered_folder(root, &name, st).filter(|folder| contains(folder, cwd)) {
                 return Some((folder.len(), name));
             }
             let here = here.as_ref()?;

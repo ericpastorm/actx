@@ -50,6 +50,8 @@ actx sync --general          # 同步无项目对话，并选择此设备上的�
 actx resume                  # 同步并继续对话
 actx cv                      # 转换当前文件夹/项目中的对话，无需配置共享存储
 actx cv --all                # 所有文件夹，包括没有工作目录的对话
+actx mv myproject            # 将所选已保存的对话移至项目；--general 移至常规
+actx mv --project old new    # 重命名 actx 项目，保留工作文件夹和历史
 actx delete                  # 删除所选共享副本，保留本地原始对话和项目
 actx rm myproject            # 删除整个项目及共享副本；需要确认
 ```

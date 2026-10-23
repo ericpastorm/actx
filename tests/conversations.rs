@@ -214,6 +214,17 @@ fn membership_can_move_and_delete_filters_do_not_remove_other_scopes() {
 
 /// Let the command reach the lock with its original snapshot, change the store, then release it.
 fn while_waiting(m: &Machine, args: &[&str], ids: &[&str], mutate: impl FnOnce()) -> String {
+    let (out, status) = while_waiting_result(m, args, ids, mutate);
+    assert!(status.success(), "{out}");
+    out
+}
+
+fn while_waiting_result(
+    m: &Machine,
+    args: &[&str],
+    ids: &[&str],
+    mutate: impl FnOnce(),
+) -> (String, std::process::ExitStatus) {
     let lock = m.store.join(".lock");
     let now = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -231,6 +242,7 @@ fn while_waiting(m: &Machine, args: &[&str], ids: &[&str], mutate: impl FnOnce()
         .env("ACTX_ANSWER", "y")
         .env("ACTX_LOCK_WAIT", "20")
         .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
         .unwrap();
     let stdout = child.stdout.take().unwrap();
@@ -262,8 +274,10 @@ fn while_waiting(m: &Machine, args: &[&str], ids: &[&str], mutate: impl FnOnce()
         out.push_str(&line);
         out.push('\n');
     }
-    assert!(child.wait().unwrap().success(), "{out}");
-    out
+    let status = child.wait().unwrap();
+    use std::io::Read;
+    child.stderr.take().unwrap().read_to_string(&mut out).unwrap();
+    (out, status)
 }
 
 #[test]
@@ -282,6 +296,44 @@ fn delete_and_rm_recheck_changes_after_waiting_for_the_lock() {
         assert!(out.contains("changed"), "{out}");
         assert!(meta.exists());
     }
+}
+
+#[test]
+fn mv_rechecks_conversations_projects_and_destinations_after_waiting_for_the_lock() {
+    let w = World::new();
+    let a = w.machine("desk");
+    let (_, id) = conversation(&a, &a.home.join("notes"), "Moving safely");
+    save(&a, "ideas", &id);
+    a.actx(&["mk", "destination"]);
+    let source = w.store().join("ideas/claude").join(&id);
+    let meta = source.join("meta.json");
+    let (out, status) = while_waiting_result(&a, &["mv", "destination"], &[&id], || {
+        let mut v: Value = serde_json::from_slice(&std::fs::read(&meta).unwrap()).unwrap();
+        v["pushed_at"] = json!(v["pushed_at"].as_f64().unwrap() + 1.0);
+        std::fs::write(&meta, serde_json::to_vec(&v).unwrap()).unwrap();
+    });
+    assert!(!status.success(), "{out}");
+    assert!(out.contains("changed while confirming"), "{out}");
+    assert!(source.exists());
+    assert!(!w.store().join("destination/claude").join(&id).exists());
+    let (out, status) = while_waiting_result(&a, &["mv", "--project", "ideas", "renamed"], &[], || {
+        std::fs::write(w.store().join("ideas/new-file"), "added elsewhere").unwrap();
+    });
+    assert!(!status.success(), "{out}");
+    assert!(out.contains("changed while confirming"), "{out}");
+    assert!(w.store().join("ideas/new-file").exists());
+    assert!(!w.store().join("renamed").exists());
+    let (out, status) = while_waiting_result(&a, &["mv", "--project", "ideas", "renamed"], &[], || {
+        std::fs::create_dir(w.store().join("renamed")).unwrap();
+        std::fs::write(w.store().join("renamed/keep"), "existing project").unwrap();
+    });
+    assert!(!status.success(), "{out}");
+    assert!(out.contains("changed while confirming"), "{out}");
+    assert!(source.exists());
+    assert_eq!(
+        std::fs::read_to_string(w.store().join("renamed/keep")).unwrap(),
+        "existing project"
+    );
 }
 
 #[test]

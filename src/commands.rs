@@ -380,9 +380,7 @@ pub fn mk(args: Args) {
         let typed = ask(&tr!("Project name [{default}]:", default = default), false);
         if typed.is_empty() { default } else { typed }
     });
-    let valid = name.chars().next().is_some_and(|c| c.is_alphanumeric())
-        && name.chars().all(|c| c.is_alphanumeric() || "_.-".contains(c));
-    if !valid {
+    if !crate::project::valid_name(&name) {
         die(&tr!("Invalid name: use letters, numbers, '-', '_' or '.'"));
     }
     let root = store_root(false).expect("a shared folder");
@@ -1372,9 +1370,11 @@ pub fn cv(args: Args) {
         let project = root.as_ref().and_then(|r| crate::project::current(r, &st, &here));
         let folder = project
             .as_ref()
-            .and_then(|name| st.folders.get(&crate::project::key(name)))
+            .and_then(|name| {
+                root.as_ref()
+                    .and_then(|r| crate::project::remembered_folder(r, name, &st))
+            })
             .filter(|folder| crate::project::contains(folder, &here))
-            .cloned()
             .unwrap_or_else(|| git_id(&here).map_or(here, |g| g.top));
         candidates.retain(|s| {
             crate::project::contains(&folder, &s.path)

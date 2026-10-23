@@ -279,7 +279,11 @@ pub(crate) fn list_with_catalog(args: &Args, supplied: Option<Catalog>) -> Respo
                     }
                     Some(Project {
                         collection: Collection::new(&name),
-                        local_folder: st.folders.get(&crate::project::key(&name)).cloned(),
+                        local_folder: st
+                            .folders
+                            .get(&crate::project::key(&name))
+                            .cloned()
+                            .or_else(|| crate::project::remembered_folder(root, &name, &st)),
                         auto_add: (name != store::GENERAL).then(|| crate::adoption::rule(root, &name)),
                     })
                 })

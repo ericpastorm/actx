@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Moving saved conversations and renaming projects
+
+- Add `actx mv [destination]`, `--general` and `--all` with source detection from the current
+  project, grouped conversation selection, a destination picker and confirmed project creation.
+- Move existing shared snapshots and all linked harness copies together, preserving native
+  histories, pending local edits, identities, preferences and sync baselines.
+- Add `actx mv --project OLD NEW`. Keep work folders and project settings, and carry former names
+  so other computers can retain non-Git folder bindings across renames.
+- Recheck reviewed inputs and destination collisions under the shared lock. Roll back completed
+  conversation moves after I/O failures; shared snapshots remain intact if the process is interrupted.
+- Provide English, Spanish and Simplified Chinese interface texts. Desktop controls are planned
+  separately; the operation logic is shared for that integration.
+
 ### Conversion from the current folder
 
 - `actx cv` discovers conversations in the current folder/project, including when launched from

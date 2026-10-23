@@ -79,6 +79,8 @@ Then:
 | `actx gui` | Optional desktop interface: projects, previews, sync, conversion and resume. Build with `--features gui`; see the [desktop guide](desktop.md). |
 | `actx profile` / `actx profile setup` | Readable preferences or the profile wizard; `--json` provides structured output. |
 | `actx cv [project]` | Convert conversations from the current folder/project; `--all` searches all folders. |
+| `actx mv [destination]` | Move selected saved conversations to a project or `--general`; `--all` includes other projects. |
+| `actx mv --project OLD NEW` | Rename an actx project, keeping its work folder and conversations. |
 | `actx rm <project>` | Delete the whole project and its shared copies, after confirmation. Keeps local originals on every machine. |
 | `actx auto [on\|off]` | Automatic sync: hooks in Claude Code and Codex, and a timer. Plain `actx auto` shows how it's doing. |
 | `actx restore` | Put back a conversation from a backup. |
@@ -99,6 +101,38 @@ The normal browser reads only maintained conversations. Use `--all` for the full
 Blocking operations show an animated loading indicator in interactive terminals.
 `delete` removes selected shared conversations; `rm` removes the whole actx project. Existing
 projects remain usable; run `mk <project>` inside their work folder to record an explicit binding.
+
+### Moving conversations and renaming projects
+
+```sh
+actx mv                        # select saved conversations, then their destination
+actx mv pneuma                 # move the selection to the existing pneuma project
+actx mv --general              # move the selection to General
+actx mv pneuma --all           # select from all saved projects and General
+actx mv --project old new      # rename the whole actx project
+```
+
+Inside a bound project, the conversation selector starts with that project. Outside a project it
+shows all saved conversations. `--all` broadens the source selection to all saved collections;
+local conversations that have never been added remain outside this operation.
+
+Each selection moves all its explicitly linked shared harness copies together. actx previews the
+source and destination and asks for confirmation. It moves the existing saved snapshots without
+publishing pending local edits, changing native histories, or moving work folders. IDs, profiles,
+sync baselines and saved history bytes are preserved. The destination picker also offers project
+creation; the new project is created only after confirmation. Bind it later with `actx mk <name>`
+from its work folder if needed.
+
+Project renames retain project settings and local folder bindings. A small `.renamed-from.json`
+file carries former names so updated actx installations on other computers can reuse their
+remembered folder, including for projects without Git. If a former name is reused by another
+project, actx stops using that name as a fallback binding. The new organization is available on
+the next sync. Renaming to an existing project is rejected; projects are never merged implicitly.
+
+The shared lock protects the operation. Changes made while selecting or confirming require a
+fresh review. If a conversation move encounters an I/O error, actx tries to roll back completed
+directory moves and reports any copies it could not put back. An abrupt process interruption can
+leave linked copies in different collections; their saved histories remain intact.
 
 ### General conversations
 

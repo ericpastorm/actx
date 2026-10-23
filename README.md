@@ -148,6 +148,7 @@ can also require conversion. See [conversion details](docs/cli.md#converting-bet
 | `actx` / `actx ls` | Browse maintained conversations / print their state. |
 | `actx mk <project>` / `actx rm <project>` | Create or remove an actX project. |
 | `actx add` / `actx delete` | Select conversations to share or remove from shared storage. Keep local originals. |
+| `actx mv [destination]` / `actx mv --project OLD NEW` | Move saved conversations between collections / rename an actX project. |
 | `actx sync` / `actx sync --dry-run` | Synchronize or inspect proposed operations. |
 | `actx resume` / `actx cv --all` | Continue a conversation / convert one into another agent. |
 | `actx compare` / `actx resolve` | Compare histories and review a conflict resolution. |

@@ -77,9 +77,9 @@ macro_rules! tr {
     };
 }
 
-pub const HELP: &str = "actx (agent context): keep your Claude Code, opencode and Codex conversations in sync across\nmachines, grouped into projects, through any shared folder (a NAS, Syncthing, ...).\n\n  actx setup [folder]  guided setup: shared folder, harnesses and retention\n  actx init [folder]   choose only the shared folder\n  actx profile        show your profile (use profile setup to configure it)\n  actx browse         compact conversation browser (also: plain actx)\n  actx resume         sync a conversation and choose where to open it\n  actx mk <project>    bind this project folder and choose conversations\n  actx add [project]   save conversations from this project (or General)\n  actx delete [project] delete selected saved conversations; keep local originals\n  actx sync [project]  push what you continued here and pull what's new (pick projects; --all)\n  actx sync --dry-run  preview operations without changing data\n  actx ls [project]    compact conversation list and harness states\n  actx rm <project>    delete a project and its saved copies; keep local originals\n  actx cv [project]    convert conversations from this folder/project (--all: all folders)\n  actx clean           review unused local conversations and quarantine them safely\n  actx clean purge     permanently delete chosen quarantine entries\n  actx auto [on|off]   sync by itself: when a conversation starts or ends, and every 10 min\n  actx restore         put back a conversation from a backup\n  actx doctor          check the shared folder, the tools and automatic sync\n  actx update          install the newest actx found in the shared folder\n\nConversations don't depend on folder paths. When pulling one, actx looks for its repo on this\nmachine by the first commit (other paths, clones and worktrees all work); otherwise it tries\nthe same path; otherwise it asks once and remembers. Run it inside the project and it goes\nthere. Paths inside the conversation are rewritten to this machine's.\n\nGeneral conversations ask for a destination folder on each machine and remember it per conversation.\nUse --general with sync, ls, cv or delete to select only General.\n\nIf you continued a conversation on two machines, sync lets you merge them: you keep this one\nplus a summary of what was done on the other, and the other version is kept separately.\n\nPickers: type to filter, TAB marks several, Ctrl-A all, Enter confirms, Esc quits.\nLanguage: English, Spanish or Simplified Chinese, from your locale; set ACTX_LANG=en|es|zh-CN or `actx init --lang`.\n";
+pub const HELP: &str = "actx (agent context): keep your Claude Code, opencode and Codex conversations in sync across\nmachines, grouped into projects, through any shared folder (a NAS, Syncthing, ...).\n\n  actx setup [folder]  guided setup: shared folder, harnesses and retention\n  actx init [folder]   choose only the shared folder\n  actx profile        show your profile (use profile setup to configure it)\n  actx browse         compact conversation browser (also: plain actx)\n  actx resume         sync a conversation and choose where to open it\n  actx mk <project>    bind this project folder and choose conversations\n  actx add [project]   save conversations from this project (or General)\n  actx delete [project] delete selected saved conversations; keep local originals\n  actx sync [project]  push what you continued here and pull what's new (pick projects; --all)\n  actx sync --dry-run  preview operations without changing data\n  actx ls [project]    compact conversation list and harness states\n  actx rm <project>    delete a project and its saved copies; keep local originals\n  actx mv [target]     move saved conversations; --project OLD NEW renames a project\n  actx cv [project]    convert conversations from this folder/project (--all: all folders)\n  actx clean           review unused local conversations and quarantine them safely\n  actx clean purge     permanently delete chosen quarantine entries\n  actx auto [on|off]   sync by itself: when a conversation starts or ends, and every 10 min\n  actx restore         put back a conversation from a backup\n  actx doctor          check the shared folder, the tools and automatic sync\n  actx update          install the newest actx found in the shared folder\n\nConversations don't depend on folder paths. When pulling one, actx looks for its repo on this\nmachine by the first commit (other paths, clones and worktrees all work); otherwise it tries\nthe same path; otherwise it asks once and remembers. Run it inside the project and it goes\nthere. Paths inside the conversation are rewritten to this machine's.\n\nGeneral conversations ask for a destination folder on each machine and remember it per conversation.\nUse --general with sync, ls, cv or delete to select only General.\n\nIf you continued a conversation on two machines, sync lets you merge them: you keep this one\nplus a summary of what was done on the other, and the other version is kept separately.\n\nPickers: type to filter, TAB marks several, Ctrl-A all, Enter confirms, Esc quits.\nLanguage: English, Spanish or Simplified Chinese, from your locale; set ACTX_LANG=en|es|zh-CN or `actx init --lang`.\n";
 
-const HELP_ES: &str = "actx (agent context): mantiene tus conversaciones de Claude Code, opencode y Codex al día\nentre tus PCs, agrupadas en proyectos, a través de cualquier carpeta compartida (un NAS, Syncthing...).\n\n  actx setup [carpeta]  asistente: carpeta compartida, harnesses y retención\n  actx init [carpeta]   elige solo la carpeta compartida\n  actx profile         muestra tu perfil (profile setup para configurarlo)\n  actx browse          explorador compacto (también: actx a secas)\n  actx resume          sincroniza una conversación y elige dónde abrirla\n  actx mk <proyecto>    vincula esta carpeta y elige conversaciones\n  actx add [proyecto]   guarda conversaciones del proyecto actual (o en General)\n  actx delete [proyecto] borra conversaciones guardadas; conserva originales locales\n  actx sync [proyecto]  sube lo que has seguido aquí y baja lo nuevo (eliges proyectos; --all)\n  actx sync --dry-run   previsualiza las operaciones sin modificar datos\n  actx ls [proyecto]    lista compacta de conversaciones y sus harnesses\n  actx rm <proyecto>    borra un proyecto y sus copias guardadas; conserva originales locales\n  actx cv [proyecto]    convierte conversaciones de esta carpeta/proyecto (--all: todas)\n  actx clean            revisa conversaciones locales sin usar y las pone a salvo en cuarentena\n  actx clean purge      borra definitivamente las entradas elegidas de la cuarentena\n  actx auto [on|off]    sincroniza solo: al abrir o cerrar una conversación y cada 10 min\n  actx restore          recupera una conversación de una copia de seguridad\n  actx doctor           comprueba la carpeta compartida, los programas y el modo auto\n  actx update           instala la última versión de actx que haya en la carpeta compartida\n\nLas conversaciones no dependen de la carpeta. Al bajar una, actx busca su repo en este PC por\nel primer commit (vale con otras rutas, clones y worktrees); si no, prueba la misma ruta; y si\ntampoco, te pregunta una vez y se acuerda. Si lo lanzas dentro del proyecto, va ahí. Las rutas\ndentro de la conversación se cambian a las de este PC.\n\nLas conversaciones de General preguntan la carpeta de destino en cada PC y la recuerdan por conversación.\nUsa --general con sync, ls, cv o delete para seleccionar solo General.\n\nSi seguiste una conversación en dos PCs, sync te deja mezclarlas: sigues con la de aquí más un\nresumen de lo hecho en el otro, y la otra versión queda aparte.\n\nSelectores: escribe para filtrar, TAB marca varias, Ctrl-A todas, Enter confirma, Esc sale.\nIdioma: inglés, español o chino simplificado, según tu sistema; o ACTX_LANG=en|es|zh-CN, o `actx init --lang`.\n";
+const HELP_ES: &str = "actx (agent context): mantiene tus conversaciones de Claude Code, opencode y Codex al día\nentre tus PCs, agrupadas en proyectos, a través de cualquier carpeta compartida (un NAS, Syncthing...).\n\n  actx setup [carpeta]  asistente: carpeta compartida, harnesses y retención\n  actx init [carpeta]   elige solo la carpeta compartida\n  actx profile         muestra tu perfil (profile setup para configurarlo)\n  actx browse          explorador compacto (también: actx a secas)\n  actx resume          sincroniza una conversación y elige dónde abrirla\n  actx mk <proyecto>    vincula esta carpeta y elige conversaciones\n  actx add [proyecto]   guarda conversaciones del proyecto actual (o en General)\n  actx delete [proyecto] borra conversaciones guardadas; conserva originales locales\n  actx sync [proyecto]  sube lo que has seguido aquí y baja lo nuevo (eliges proyectos; --all)\n  actx sync --dry-run   previsualiza las operaciones sin modificar datos\n  actx ls [proyecto]    lista compacta de conversaciones y sus harnesses\n  actx rm <proyecto>    borra un proyecto y sus copias guardadas; conserva originales locales\n  actx mv [destino]     mueve conversaciones guardadas; --project OLD NEW renombra un proyecto\n  actx cv [proyecto]    convierte conversaciones de esta carpeta/proyecto (--all: todas)\n  actx clean            revisa conversaciones locales sin usar y las pone a salvo en cuarentena\n  actx clean purge      borra definitivamente las entradas elegidas de la cuarentena\n  actx auto [on|off]    sincroniza solo: al abrir o cerrar una conversación y cada 10 min\n  actx restore          recupera una conversación de una copia de seguridad\n  actx doctor           comprueba la carpeta compartida, los programas y el modo auto\n  actx update           instala la última versión de actx que haya en la carpeta compartida\n\nLas conversaciones no dependen de la carpeta. Al bajar una, actx busca su repo en este PC por\nel primer commit (vale con otras rutas, clones y worktrees); si no, prueba la misma ruta; y si\ntampoco, te pregunta una vez y se acuerda. Si lo lanzas dentro del proyecto, va ahí. Las rutas\ndentro de la conversación se cambian a las de este PC.\n\nLas conversaciones de General preguntan la carpeta de destino en cada PC y la recuerdan por conversación.\nUsa --general con sync, ls, cv o delete para seleccionar solo General.\n\nSi seguiste una conversación en dos PCs, sync te deja mezclarlas: sigues con la de aquí más un\nresumen de lo hecho en el otro, y la otra versión queda aparte.\n\nSelectores: escribe para filtrar, TAB marca varias, Ctrl-A todas, Enter confirma, Esc sale.\nIdioma: inglés, español o chino simplificado, según tu sistema; o ACTX_LANG=en|es|zh-CN, o `actx init --lang`.\n";
 
 pub static ES: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| {
     HashMap::from([
@@ -1659,6 +1659,83 @@ pub static ES: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
             "Falta la carpeta de trabajo original; restáurala antes de recuperar esta conversación",
         ),
         ("Recovered: {title}", "Recuperada: {title}"),
+        (
+            "A shared copy already exists at {path}; nothing was moved",
+            "Ya existe una copia compartida en {path}; no se ha movido nada",
+        ),
+        (
+            "Cannot move a shared entry that is a symbolic link",
+            "No se puede mover una entrada compartida que es un enlace simbólico",
+        ),
+        (
+            "Choose from all saved conversations, beyond the current project",
+            "Elegir entre todas las conversaciones guardadas, fuera del proyecto actual",
+        ),
+        (
+            "Destination project; otherwise choose it after selecting conversations",
+            "Proyecto de destino; si se omite, se elige después de seleccionar conversaciones",
+        ),
+        (
+            "Move conversations from {name} · --all shows other projects · TAB marks several",
+            "Mover conversaciones de {name} · --all muestra otros proyectos · TAB marca varias",
+        ),
+        (
+            "Move interrupted: {err}. Copies remain at: {paths}",
+            "Movimiento interrumpido: {err}. Las copias permanecen en: {paths}",
+        ),
+        (
+            "Move saved conversations or rename an actx project",
+            "Mover conversaciones guardadas o renombrar un proyecto de actx",
+        ),
+        (
+            "Move saved conversations · all linked harness copies move together · TAB marks several",
+            "Mover conversaciones guardadas · se mueven juntas las copias vinculadas de cada harness · TAB marca varias",
+        ),
+        (
+            "Move the selected conversations to General",
+            "Mover las conversaciones seleccionadas a General",
+        ),
+        (
+            "Move to which project or General?",
+            "¿A qué proyecto o a General las muevo?",
+        ),
+        (
+            "Move {n} conversation(s) to {name}? Native histories and work folders are kept.",
+            "¿Mover {n} conversación(es) a {name}? Se conservan los historiales nativos y las carpetas de trabajo.",
+        ),
+        (
+            "Moved {n} conversation(s) to {name}",
+            "Movidas {n} conversación(es) a {name}",
+        ),
+        ("Moving saved conversations", "Moviendo conversaciones guardadas"),
+        ("New project name:", "Nombre del nuevo proyecto:"),
+        (
+            "No saved conversations in this view; use actx mv --all to choose from other projects",
+            "No hay conversaciones guardadas en esta vista; usa actx mv --all para elegir de otros proyectos",
+        ),
+        ("Project renamed: {old} → {new}", "Proyecto renombrado: {old} → {new}"),
+        (
+            "Rename actx project {old} → {new}? Work folders and histories are kept.",
+            "¿Renombrar el proyecto de actx {old} → {new}? Se conservan las carpetas de trabajo y los historiales.",
+        ),
+        (
+            "Rename an actx project; keep its work folder",
+            "Renombrar un proyecto de actx; conservar su carpeta de trabajo",
+        ),
+        ("Renaming project", "Renombrando proyecto"),
+        ("Preparing move", "Preparando movimiento"),
+        (
+            "The selected conversations are already in {name}",
+            "Las conversaciones seleccionadas ya están en {name}",
+        ),
+        (
+            "The shared folder changed or its lock was lost; run actx mv again",
+            "La carpeta compartida ha cambiado o se ha perdido su bloqueo; ejecuta actx mv de nuevo",
+        ),
+        (
+            "The shared folder changed while confirming; run actx mv again",
+            "La carpeta compartida ha cambiado durante la confirmación; ejecuta actx mv de nuevo",
+        ),
     ])
 });
 

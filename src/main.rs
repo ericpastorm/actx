@@ -28,6 +28,7 @@ mod inspection;
 mod integrity;
 mod lock;
 mod merge;
+mod moves;
 mod multisync;
 mod opencode;
 mod paths;
@@ -144,6 +145,7 @@ fn cli() -> Command {
                 ),
         ))
         .subcommand(clean::command())
+        .subcommand(moves::command())
         .subcommands(recovery::commands())
         .subcommand(adoption::command())
         .subcommand(Command::new("api").about(tr!("Read one structured request from stdin")))
@@ -430,6 +432,7 @@ fn main() {
             ..Default::default()
         }),
         Some(("clean", m)) => clean::dispatch(m),
+        Some(("mv", m)) => moves::cli(m),
         Some(("update", _)) => commands::update(),
         Some(("auto-add", m)) => adoption::cli(m),
         Some(("auto", m)) => auto::auto(get(m, "action").as_deref()),
