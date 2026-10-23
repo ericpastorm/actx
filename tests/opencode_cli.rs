@@ -192,7 +192,7 @@ fn opencode_converts_without_folder_and_reports_unconfigured_model() {
     let dest = a.home.join("chosen");
     std::fs::create_dir_all(&dest).unwrap();
     let out = a.actx_with(
-        &["cv"],
+        &["cv", "--all"],
         Opts {
             pick: Some(&[OC_SID, "claude", "::other"]),
             answer: Some(dest.to_str().unwrap()),

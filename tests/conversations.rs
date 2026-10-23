@@ -376,7 +376,7 @@ fn cv_converts_without_init_git_or_original_folder_and_rewrites_paths() {
 
     // Cancelling or picking a non-existent folder fails cleanly and keeps the original.
     let bad = m.actx_with(
-        &["cv"],
+        &["cv", "--all"],
         Opts {
             pick: Some(&[claude_id, "antigravity", "::other"]),
             answer: Some(m.home.join("no-such-folder").to_str().unwrap()),
@@ -388,7 +388,7 @@ fn cv_converts_without_init_git_or_original_folder_and_rewrites_paths() {
 
     // Picking an existing non-git working folder succeeds, rewrites the foreign path, and never creates a store.
     let out = m.actx_with(
-        &["cv"],
+        &["cv", "--all"],
         Opts {
             pick: Some(&[claude_id, "antigravity", "::other"]),
             answer: Some(work.to_str().unwrap()),
@@ -411,7 +411,7 @@ fn cv_converts_without_init_git_or_original_folder_and_rewrites_paths() {
     std::fs::write(&rollout, format!("{meta}\n{user}\n{reply}\n")).unwrap();
 
     let out = m.actx_with(
-        &["cv"],
+        &["cv", "--all"],
         Opts {
             pick: Some(&[codex_id, "claude", "::other"]),
             answer: Some(work.to_str().unwrap()),
@@ -474,11 +474,11 @@ fn folderless_claude_converts_without_configuration_and_cancel_keeps_original() 
         "message":{"role":"assistant", "content":[{"type":"text", "text":"Hello"}]}})
     );
     std::fs::write(&file, &original).unwrap();
-    let out = m.pick(&["cv"], &[id, "antigravity"]);
+    let out = m.pick(&["cv", "--all"], &[id, "antigravity"]);
     assert!(out.contains("I don't know which folder"), "{out}");
     assert!(!m.home.join(".gemini/antigravity-cli/conversations").exists());
     let out = m.actx_with(
-        &["cv"],
+        &["cv", "--all"],
         Opts {
             pick: Some(&[id, "antigravity", "::other"]),
             answer: Some(m.home.to_str().unwrap()),

@@ -77,7 +77,7 @@ Y luego:
 | `actx setup [carpeta]` | Asistente completo de carpeta compartida, harnesses, retención y preferencia al abrir. |
 | `actx gui` | GUI opcional: proyectos, vista previa, sincronización, conversión y retomar. Compila con `--features gui`; consulta la [guía de escritorio](desktop.md). |
 | `actx profile` / `actx profile setup` | Resumen del perfil o asistente para modificarlo. `--json` conserva la salida estructurada. |
-| `actx cv [proyecto]` | Copia una conversación a otro programa (Claude Code, opencode, Codex, Antigravity). |
+| `actx cv [proyecto]` | Convierte conversaciones de la carpeta/proyecto actual; `--all` busca en todas las carpetas. |
 | `actx rm <proyecto>` | Borra el proyecto completo y sus copias compartidas, previa confirmación. Conserva los originales locales en todos los equipos. |
 | `actx auto [on\|off]` | Sincronización automática: hooks en Claude Code y Codex, y un temporizador. `actx auto` a secas dice cómo va. |
 | `actx restore` | Recupera una conversación de una copia de seguridad. |
@@ -278,10 +278,15 @@ publicaciones pendientes. La GUI ofrece los mismos flujos. Consulta el [contrato
 
 ### Convertir entre programas
 
-`actx cv` crea una copia en el programa que elijas. Funciona con cualquier conversación local,
-incluso sin haber ejecutado `actx init`, sin proyecto de actx y fuera de cualquier repositorio Git.
-Si la conversación no tenía carpeta o la carpeta original ya no existe en este PC, actx te deja
-elegir una carpeta de trabajo existente y cambia las rutas de la carpeta antigua a la nueva. La
+`actx cv` detecta las conversaciones de la carpeta actual y sus subcarpetas, y crea una copia en el
+programa que elijas. Dentro de un repositorio Git usa su raíz; dentro de un proyecto vinculado de actx
+usa la carpeta de ese proyecto e incluye sus conversaciones que solo están en la carpeta compartida.
+Funciona también en carpetas normales, sin `actx init` ni proyecto de actx.
+
+Usa `actx cv --all` para elegir entre todas las carpetas, incluidas las conversaciones sin carpeta.
+`actx cv <proyecto>` y `actx cv --general` seleccionan esas colecciones guardadas independientemente
+de la carpeta actual. Si la conversación no tenía carpeta o la carpeta original ya no existe en este
+PC, actx te deja elegir una carpeta de trabajo existente y cambia las rutas de la carpeta antigua a la nueva. La
 conversación original no se toca, y las conversaciones locales que no pertenecen a un proyecto ni a
 General no se suben al convertirlas.
 

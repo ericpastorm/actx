@@ -121,7 +121,8 @@ Cada conversación recuerda su propio destino en cada equipo. El conversor tambi
 local sin almacenamiento compartido, sin proyecto de actX y fuera de un repositorio Git:
 
 ```sh
-actx cv --all
+actx cv        # conversaciones de la carpeta/proyecto actual
+actx cv --all  # todas las carpetas, incluidas las conversaciones sin carpeta
 ```
 
 ## Agentes compatibles

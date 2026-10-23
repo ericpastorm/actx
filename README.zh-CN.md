@@ -48,7 +48,8 @@ actx sync --dry-run          # 预览，不修改数据
 actx sync                    # 同步当前项目；在项目外选择范围
 actx sync --general          # 同步无项目对话，并选择此设备上的目标文件夹
 actx resume                  # 同步并继续对话
-actx cv --all                # 转换对话，也可不配置共享存储
+actx cv                      # 转换当前文件夹/项目中的对话，无需配置共享存储
+actx cv --all                # 所有文件夹，包括没有工作目录的对话
 actx delete                  # 删除所选共享副本，保留本地原始对话和项目
 actx rm myproject            # 删除整个项目及共享副本；需要确认
 ```

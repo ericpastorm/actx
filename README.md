@@ -120,7 +120,8 @@ Each conversation remembers its own destination on each computer. Conversion als
 without shared storage, an actX project or a Git repository:
 
 ```sh
-actx cv --all
+actx cv        # conversations from the current folder/project
+actx cv --all  # all folders, including conversations without a folder
 ```
 
 ## Supported agents

@@ -78,7 +78,7 @@ Then:
 | `actx setup [folder]` | Full shared-folder and profile setup wizard. |
 | `actx gui` | Optional desktop interface: projects, previews, sync, conversion and resume. Build with `--features gui`; see the [desktop guide](desktop.md). |
 | `actx profile` / `actx profile setup` | Readable preferences or the profile wizard; `--json` provides structured output. |
-| `actx cv [project]` | Copy a conversation into another tool (Claude Code, opencode, Codex, Antigravity). |
+| `actx cv [project]` | Convert conversations from the current folder/project; `--all` searches all folders. |
 | `actx rm <project>` | Delete the whole project and its shared copies, after confirmation. Keeps local originals on every machine. |
 | `actx auto [on\|off]` | Automatic sync: hooks in Claude Code and Codex, and a timer. Plain `actx auto` shows how it's doing. |
 | `actx restore` | Put back a conversation from a backup. |
@@ -279,9 +279,15 @@ provides the same comparison and recovery flows. See the [recovery contract](jso
 
 ### Converting between tools
 
-`actx cv` writes a copy in the tool you pick. It works on any local conversation — even without
-`actx init`, without an actx project, and outside any Git repository. If the conversation had no
-folder or its original folder no longer exists on this machine, actx lets you pick an existing
+`actx cv` finds conversations in your current folder and its subfolders, then writes a copy in the
+tool you pick. Inside a Git repository it uses the repository root; inside a bound actx project it
+uses that project's folder and includes shared-only conversations from that project. There is no
+need to run `actx init` or create an actx project, and ordinary folders work too.
+
+Use `actx cv --all` to choose from every folder, including conversations without a working folder.
+`actx cv <project>` and `actx cv --general` select those saved collections regardless of your current
+folder. If the conversation had no folder or its original folder no longer exists on this machine,
+actx lets you pick an existing
 working folder and rewrites any paths from the old folder to the new one. The original is left
 untouched, and local conversations that aren't in a project or General are never uploaded by `cv`.
 

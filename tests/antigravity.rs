@@ -373,7 +373,7 @@ fn folderless_antigravity_asks_for_a_working_folder_without_init() {
     std::fs::create_dir_all(m.claude_dir()).unwrap();
     let original = std::fs::read(&db).unwrap();
     let out = m.actx_with(
-        &["cv"],
+        &["cv", "--all"],
         Opts {
             pick: Some(&[&id, "claude", "::other"]),
             answer: Some(m.home.to_str().unwrap()),

@@ -256,8 +256,18 @@ fn cli() -> Command {
         .subcommand(
             Command::new("cv")
                 .about(tr!("copy a conversation into another tool"))
+                .after_help(tr!(
+                    "By default, show conversations from the current folder/project. Use --all to search all folders."
+                ))
                 .arg(project().help(tr!("only this project's")))
-                .arg(general()),
+                .arg(general())
+                .arg(
+                    Arg::new("all")
+                        .long("all")
+                        .action(ArgAction::SetTrue)
+                        .conflicts_with_all(["project", "general"])
+                        .help(tr!("show conversations from all folders")),
+                ),
         )
         .subcommand(
             Command::new("auto")
@@ -416,6 +426,7 @@ fn main() {
         Some(("cv", m)) => commands::cv(Args {
             project: get(m, "project"),
             general: m.get_flag("general"),
+            all: m.get_flag("all"),
             ..Default::default()
         }),
         Some(("clean", m)) => clean::dispatch(m),

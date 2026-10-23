@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Conversion from the current folder
+
+- `actx cv` discovers conversations in the current folder/project, including when launched from
+  a Git subdirectory or a bound actx project's subfolder. Shared-only copies follow the local
+  project binding, even when published from a different computer.
+- Use `actx cv --all` for all folders and folderless conversations. Explicit project and General
+  selectors still work from any folder; conversion still works without setup or a shared store.
+
 ### Desktop CI and workflow fixes
 
 - Build and lint the GUI and launcher on Linux, macOS and Windows. Run frontend state and

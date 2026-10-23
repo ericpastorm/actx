@@ -1366,6 +1366,26 @@ pub fn cv(args: Args) {
     );
     let catalog = crate::catalog::Catalog::load_all();
     let scope = args.general.then_some(GENERAL.to_string()).or(args.project);
+    let folder = (scope.is_none() && !args.all).then(|| {
+        let here = cwd();
+        let st = state::load();
+        let project = root.as_ref().and_then(|r| crate::project::current(r, &st, &here));
+        let folder = project
+            .as_ref()
+            .and_then(|name| st.folders.get(&crate::project::key(name)))
+            .filter(|folder| crate::project::contains(folder, &here))
+            .cloned()
+            .unwrap_or_else(|| git_id(&here).map_or(here, |g| g.top));
+        candidates.retain(|s| {
+            crate::project::contains(&folder, &s.path)
+                // Shared-only histories can have a path from another computer.
+                || (s.meta.is_some()
+                    && project.as_ref().is_some_and(|name| {
+                        s.project.as_ref().is_some_and(|p| p.eq_ignore_ascii_case(name))
+                    }))
+        });
+        folder
+    });
     if let Some(name) = &scope {
         let name = name.to_lowercase();
         candidates.retain(|s| {
@@ -1383,6 +1403,12 @@ pub fn cv(args: Args) {
         }
     }
     if candidates.is_empty() {
+        if let Some(folder) = &folder {
+            die(&tr!(
+                "No conversations found in {path}; use actx cv --all to choose from all folders",
+                path = short(folder)
+            ));
+        }
         die(&tr!(
             "No Claude Code, opencode, Codex or Antigravity conversations found"
         ));
@@ -1418,7 +1444,17 @@ pub fn cv(args: Args) {
         })
         .collect();
     let (rows, _) = catalog.compact(rows);
-    let header = tr!("Convert · creates a copy in another tool, the original is left untouched · TAB marks several");
+    let mut header =
+        tr!("Convert · creates a copy in another tool, the original is left untouched · TAB marks several");
+    if let Some(folder) = &folder {
+        header += &format!(
+            "\n{}",
+            tr!(
+                "Folder: {path} · use actx cv --all for other folders",
+                path = short(folder)
+            )
+        );
+    }
     let keys: HashSet<String> = fzf(&rows, &header, true, true).into_iter().collect();
     let mut chosen = Vec::new();
     for key in keys {
