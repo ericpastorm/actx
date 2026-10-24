@@ -126,7 +126,7 @@ fn compare(req: &Request) -> Result<Comparison> {
     } else {
         json!(null)
     };
-    let data = json!({"merge_preview":merge_preview,"comparison":{"left":l,"right":r,"common_messages":common,"left_messages_after_common":a.len()-common,"right_messages_after_common":b.len()-common,"compacted":left.harness=="codex"&&left.src.as_ref().is_some_and(|p|crate::codex::compaction_key(p).ok().flatten().is_some())},"choices":choices,"operations":[{"kind":"resolve","session_id":left.key(),"title":left.title,"target_harness":req.target,"resolution":req.choice,"preserves_alternative":true}]});
+    let data = json!({"merge_preview":merge_preview,"comparison":{"left":l,"right":r,"common_messages":common,"left_messages_after_common":a.len()-common,"right_messages_after_common":b.len()-common,"compacted":crate::multisync::compacted(&left)},"choices":choices,"operations":[{"kind":"resolve","session_id":left.key(),"title":left.title,"target_harness":req.target,"resolution":req.choice,"preserves_alternative":true}]});
     Ok(Comparison {
         left,
         right,

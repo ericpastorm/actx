@@ -168,8 +168,10 @@ Each conversation contains:
 Timestamps are Unix seconds, possibly fractional. Weight units are `bytes` for Claude/Codex,
 `messages` for opencode and `steps` for Antigravity. Weights are adapter change indicators,
 not portable content hashes. State values are `local`, `new`, `synced`, `push`, `pull`,
-`conflict`, `unknown`, `missing`, `unmanaged`; the aggregate conversation state uses the
-highest-priority pending state. Offline maintained conversations are `unknown`.
+`conflict`, `unknown`, `missing`, `unmanaged`, `active`; the aggregate conversation state uses the
+highest-priority pending state. Offline maintained conversations are `unknown`. `active` appears
+only in listings: a linked copy whose other side an agent is writing right now, which listings
+don't read again and sync defers. Actions (resume, convert, sync) always compute exact states.
 Listings contain metadata, not message bodies or rendered previews. Matching titles alone
 never group conversations.
 

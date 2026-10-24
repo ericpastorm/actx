@@ -19,7 +19,7 @@ fn scoped<'a>(catalog: &'a Catalog, args: &Args) -> Vec<&'a Conversation> {
     catalog.scoped(args)
 }
 pub fn list(args: &Args) {
-    let catalog = Catalog::load_for(args.all);
+    let catalog = Catalog::listing(args.all);
     let groups = scoped(&catalog, args);
     println!("{}", ui::bold(&crate::catalog::header()));
     for g in &groups {
@@ -56,7 +56,7 @@ pub fn browse(args: Args) {
         return;
     }
     loop {
-        let catalog = Catalog::load_for(args.all);
+        let catalog = Catalog::listing(args.all);
         let groups = scoped(&catalog, &args);
         let rows: Vec<_> = groups.iter().map(|g| g.row()).collect();
         if rows.is_empty() {
@@ -97,7 +97,7 @@ pub fn browse(args: Args) {
 }
 
 pub fn resume(args: Args) {
-    let catalog = Catalog::load_for(args.all);
+    let catalog = Catalog::listing(args.all);
     let rows: Vec<_> = scoped(&catalog, &args).iter().map(|g| g.row()).collect();
     if let Some(key) = ui::fzf(&rows, &tr!("Choose a conversation to open"), false, true).first()
         && let Some(g) = catalog.find(key)

@@ -53,7 +53,7 @@ fn candidates(req: &Request) -> Response<Value> {
     } else {
         None
     };
-    let catalog = crate::catalog::Catalog::load_all();
+    let catalog = crate::catalog::Catalog::listing(true);
     let keys: std::collections::HashSet<_> = catalog
         .groups
         .iter()

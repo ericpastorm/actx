@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Faster detection and harness switching
+
+- Fingerprint growing histories incrementally: a changed conversation is verified byte for byte
+  against a saved resume point and only its new lines are parsed (a 450 MB conversation in use:
+  1.3 s to about 0.25 s per read). Any edit, truncation or replacement reads it all again; results
+  are identical to a full read, so existing sync baselines remain valid.
+- Show linked copies as **in use** in listings while an agent is writing their other side, instead
+  of reading that whole history again on every refresh. Resume, convert and sync still compute exact
+  states.
+- Let desktop jobs hand refreshed content fingerprints and linked-copy hashes to the desktop app,
+  which keeps them, so later refreshes reuse them (resume preview: 5.9 s to 0.8 s). CLI previews
+  still write nothing.
+- Repair linked copies after a Claude Code compaction (including automatic ones on a full context)
+  like after a Codex compaction, retaining the previous native copy. They used to stay in conflict.
+- Recognize projects saved before folder bindings existed from their conversations' Git repository:
+  running actx in the project folder (or a clone elsewhere) selects that project, and the desktop
+  can list its candidates.
+
 ### Faster synchronization and cleanup fixes
 
 - Fingerprint legacy shared snapshots (without `content_hash`) once and cache them by file stamp,

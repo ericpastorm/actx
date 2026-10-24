@@ -115,6 +115,8 @@ impl Conversation {
             "↑"
         } else if self.copies.iter().any(|c| ["pull", "new"].contains(&c.state)) {
             "↓"
+        } else if self.copies.iter().any(|c| c.state == "active") {
+            "●"
         } else {
             "✓"
         }
@@ -127,6 +129,7 @@ impl Conversation {
                     "⚠" => "conflict",
                     "↑" => "push",
                     "↓" => "pull",
+                    "●" => "active",
                     _ =>
                         if self.managed {
                             "synced"
@@ -207,6 +210,7 @@ pub fn state_label(s: &str) -> String {
         "unknown" => tr!("⚠ state unknown"),
         "missing" => tr!("copy missing"),
         "unmanaged" => tr!("local copy (not maintained)"),
+        "active" => tr!("● in use"),
         _ => tr!("local copy"),
     }
 }
@@ -221,6 +225,14 @@ impl Catalog {
         Self::load_for(true)
     }
     pub fn load_for(all: bool) -> Self {
+        Self::load_with(all, false)
+    }
+    /// For showing conversations only: a linked copy whose other side an agent is writing right
+    /// now shows as in use instead of being read again. Decisions need the exact `load_for`.
+    pub fn listing(all: bool) -> Self {
+        Self::load_with(all, true)
+    }
+    fn load_with(all: bool, listing: bool) -> Self {
         let _loading = ui::loading(&if all {
             tr!("Finding local conversations")
         } else {
@@ -239,12 +251,12 @@ impl Catalog {
             harness::local_keys(&keys)
         };
         let locals = locals.into_iter().map(|s| (s.key(), s)).collect();
-        Self::build(locals, remotes)
+        Self::build(locals, remotes, listing)
     }
-    fn build(locals: HashMap<String, Session>, remotes: Vec<Session>) -> Self {
+    fn build(locals: HashMap<String, Session>, remotes: Vec<Session>, listing: bool) -> Self {
         let st = state::load();
         let mut parents = aliases();
-        let views = multisync::views(&locals);
+        let views = multisync::views(&locals, listing);
         for v in &views {
             parents.insert(v.target.clone(), v.source.clone());
         }

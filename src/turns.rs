@@ -211,6 +211,41 @@ pub fn fit_within(mut turns: Vec<Turn>, source_label: &str, model: Option<&str>,
     turns
 }
 
+/// A key for the last record of a native history that `is` matches, such as its latest
+/// compaction: it changes exactly when the agent writes another one. Lines without `needle`
+/// are skipped unparsed. Cached for this run while the file keeps its size and mtime.
+pub(crate) fn last_marker(
+    path: &std::path::Path,
+    needle: &'static [u8],
+    is: fn(&Value) -> bool,
+) -> crate::ctx::Result<Option<String>> {
+    use std::collections::HashMap;
+    use std::io::{BufRead, Read};
+    use std::sync::{Mutex, OnceLock};
+    type Cached = (u64, std::time::SystemTime, Option<String>);
+    type Markers = HashMap<(std::path::PathBuf, &'static [u8]), Cached>;
+    static CACHE: OnceLock<Mutex<Markers>> = OnceLock::new();
+    let metadata = path.metadata()?;
+    let stamp = (metadata.len(), metadata.modified()?);
+    let key = (path.to_path_buf(), needle);
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some((size, time, found)) = cache.lock().unwrap().get(&key)
+        && (*size, *time) == stamp
+    {
+        return Ok(found.clone());
+    }
+    let mut found = None;
+    let file = std::fs::File::open(path)?;
+    for raw in std::io::BufReader::new(file.take(stamp.0)).split(b'\n') {
+        let raw = raw?;
+        if memchr::memmem::find(&raw, needle).is_some() && serde_json::from_slice::<Value>(&raw).is_ok_and(|e| is(&e)) {
+            found = Some(crate::engine::digest(&raw));
+        }
+    }
+    cache.lock().unwrap().insert(key, (stamp.0, stamp.1, found.clone()));
+    Ok(found)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -3,56 +3,12 @@
 mod common;
 
 use std::io::{BufRead, BufReader};
-use std::path::{Path, PathBuf};
-use std::process::{Child, Stdio};
+use std::path::PathBuf;
+use std::process::Stdio;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use common::*;
 use serde_json::{Value, json};
-
-/// A real process named Claude, registered as holding this session. Using a copy of actx lets
-/// the same fixture run on Unix and Windows without a shell or an installed Claude CLI.
-struct OpenClaude {
-    child: Child,
-    registry: PathBuf,
-}
-
-impl OpenClaude {
-    fn start(machine: &Machine, folder: &Path, sid: &str) -> Self {
-        let bin = machine.home.join("agent-bin");
-        std::fs::create_dir_all(&bin).unwrap();
-        let agent = bin.join(if cfg!(windows) { "claude.exe" } else { "claude" });
-        std::fs::copy(ACTX, &agent).unwrap();
-        let child = machine
-            .command(agent.to_str().unwrap())
-            .args(["sync", "--auto", "--delay", "900"])
-            .current_dir(folder)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
-        let registry = machine
-            .home
-            .join(".claude/sessions")
-            .join(format!("{}.json", child.id()));
-        let agent = Self { child, registry };
-        std::fs::create_dir_all(agent.registry.parent().unwrap()).unwrap();
-        std::fs::write(
-            &agent.registry,
-            json!({"pid": agent.child.id(), "sessionId": sid}).to_string(),
-        )
-        .unwrap();
-        agent
-    }
-}
-
-impl Drop for OpenClaude {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        let _ = std::fs::remove_file(&self.registry);
-    }
-}
 
 fn conflict(w: &World) -> (Machine, Machine, PathBuf, PathBuf, String) {
     let (a, b) = (w.machine("desk"), w.machine("laptop"));

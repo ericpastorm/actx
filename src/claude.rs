@@ -781,6 +781,14 @@ pub fn branch_copy(r: &Session, folder: &str, fix: Fix, title: &str) -> Result<S
     finished(sid, title, folder, path)
 }
 
+/// Its latest compaction (`/compact`, or automatic on a full context): after one, the history
+/// starts again from a summary.
+pub(crate) fn compaction_key(path: &Path) -> Result<Option<String>> {
+    crate::turns::last_marker(path, b"compact_boundary", |e| {
+        e["type"] == "system" && e["subtype"] == "compact_boundary"
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

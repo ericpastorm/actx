@@ -103,6 +103,118 @@ fn linked_harnesses_continue_both_ways_without_new_session_ids() {
     );
 }
 #[test]
+fn listings_show_linked_copies_as_in_use_while_an_agent_writes_the_source() {
+    use std::io::Write;
+    let w = World::new();
+    let m = w.machine("desk");
+    let folder = m.home.join("notes");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::create_dir_all(m.home.join(".gemini/antigravity-cli")).unwrap();
+    let source = claude_session(
+        &m,
+        &folder,
+        &[("user", "hello"), ("assistant", "hi")],
+        Some("Busy notes"),
+    );
+    closed(&source, 1);
+    let sid = source.file_stem().unwrap().to_string_lossy().into_owned();
+    m.actx(&[
+        "init",
+        m.store.to_str().unwrap(),
+        "--harnesses",
+        "claude,antigravity",
+        "--retention",
+        "never",
+    ]);
+    m.pick(&["add"], &[&sid]);
+    let listed = || {
+        let mut child = m
+            .command(ACTX)
+            .arg("api")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(br#"{"action":"list"}"#).unwrap();
+        let out: Value = serde_json::from_slice(&child.wait_with_output().unwrap().stdout).unwrap();
+        let copies = out["data"]["conversations"][0]["copies"].as_array().unwrap().clone();
+        let state = |harness: &str| {
+            let copy = copies.iter().find(|c| c["harness"] == harness).unwrap();
+            copy["state"].as_str().unwrap().to_string()
+        };
+        (state("claude"), state("antigravity"))
+    };
+    // The agent goes on writing and still has it open.
+    claude_continue(&source, &[("user", "more"), ("assistant", "more answer")], None);
+    let agent = OpenClaude::start(&m, &folder, &sid);
+    assert_eq!(listed(), ("push".into(), "active".into()));
+    // Closed: listings read it again and report the exact state.
+    drop(agent);
+    assert_eq!(listed(), ("push".into(), "pull".into()));
+}
+#[test]
+fn desktop_jobs_hand_over_refreshed_caches_and_plain_api_calls_write_nothing() {
+    use std::io::Write;
+    let w = World::new();
+    let m = w.machine("desk");
+    let folder = m.home.join("notes");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::create_dir_all(m.home.join(".gemini/antigravity-cli")).unwrap();
+    let source = claude_session(
+        &m,
+        &folder,
+        &[("user", "hello"), ("assistant", "hi")],
+        Some("Cached notes"),
+    );
+    closed(&source, 1);
+    let sid = source.file_stem().unwrap().to_string_lossy().into_owned();
+    m.actx(&[
+        "init",
+        m.store.to_str().unwrap(),
+        "--harnesses",
+        "claude,antigravity",
+        "--retention",
+        "never",
+    ]);
+    m.pick(&["add"], &[&sid]);
+    claude_continue(&source, &[("user", "more"), ("assistant", "more answer")], None);
+    closed(&source, 1);
+    let cache = m.home.join(".cache/actx");
+    let listed = |job: bool| {
+        let mut c = m.command(ACTX);
+        if job {
+            c.env("ACTX_PROGRESS", "1");
+        }
+        let mut child = c
+            .arg("api")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(br#"{"action":"list"}"#).unwrap();
+        let err = String::from_utf8(child.wait_with_output().unwrap().stderr).unwrap();
+        err.lines()
+            .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+            .filter(|e| e["event"] == "cache_entries")
+            .map(|e| e["file"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>()
+    };
+    let snapshot = || {
+        files_under(&cache)
+            .into_iter()
+            .map(|p| (p.clone(), std::fs::read(p).unwrap()))
+            .collect::<Vec<_>>()
+    };
+    let before = snapshot();
+    assert!(listed(false).is_empty());
+    assert_eq!(snapshot(), before, "a plain API call writes no cache");
+    let files = listed(true);
+    assert!(files.contains(&"content-v1.json".to_string()), "{files:?}");
+    assert!(files.contains(&"linked-history-v1.json".to_string()), "{files:?}");
+    assert_eq!(snapshot(), before, "the job's parent keeps them, not the job");
+}
+#[test]
 fn retention_is_opt_in_and_only_removes_shared_copies() {
     let w = World::new();
     let m = w.machine("desk");

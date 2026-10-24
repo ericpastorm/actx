@@ -18,6 +18,7 @@ dependencies = [
  "chrono",
  "clap",
  "clap_complete",
+ "crc32fast",
  "eframe",
  "flate2",
  "gethostname",

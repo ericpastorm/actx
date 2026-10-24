@@ -121,6 +121,8 @@
   "Use the machine profile": "使用此设备的配置",
   "What do you want to remove? Esc cancels": "要移除什么？Esc 取消",
   "copy missing": "副本缺失",
+  "● in use": "● 使用中",
+  "In use": "使用中",
   "local copy": "本地副本",
   "pending creation": "等待创建",
   "⚠ state unknown": "⚠ 状态未知",

@@ -137,3 +137,44 @@ fn normal_view_never_opens_unmanaged_transcripts() {
     let output = child.wait_with_output().unwrap();
     assert!(String::from_utf8_lossy(&output.stdout).contains("Tracked"));
 }
+
+#[test]
+fn projects_saved_before_folder_bindings_are_found_from_their_conversations() {
+    let w = World::new();
+    let (a, b) = (w.machine("desk"), w.machine("laptop"));
+    let repo = git_repo(&a.home.join("code/shop"));
+    let clone = git_clone(&repo, &b.home.join("elsewhere/shop-clone"));
+    let source = claude_session(
+        &a,
+        &repo,
+        &[("user", "cart"), ("assistant", "Cart fixed")],
+        Some("Cart"),
+    );
+    std::fs::File::options()
+        .write(true)
+        .open(&source)
+        .unwrap()
+        .set_modified(SystemTime::now() - Duration::from_secs(3600))
+        .unwrap();
+    let sid = source.file_stem().unwrap().to_string_lossy().into_owned();
+    a.actx(&["mk", "shop"]);
+    a.pick(&["add", "shop"], &[&sid]);
+    // As older versions left it: conversations, but no project binding.
+    let binding = w.store().join("shop/.project.json");
+    std::fs::remove_file(&binding).unwrap();
+    let here = |args: &[&str]| {
+        b.actx_with(
+            args,
+            Opts {
+                cwd: Some(&clone),
+                ..Default::default()
+            },
+        )
+    };
+    let preview: Value = serde_json::from_str(&here(&["sync", "--dry-run", "--json"])).unwrap();
+    assert_eq!(preview["data"]["scope"]["project"], "shop", "{preview}");
+    here(&["sync"]);
+    let (path, texts, _) = claude_transcript(&b, &sid);
+    assert!(texts.contains(&"Cart fixed".to_string()));
+    assert!(path.to_string_lossy().contains("shop-clone"), "{}", path.display());
+}

@@ -90,6 +90,10 @@ pub(super) fn call_api(
                 && event["event"] == "discovery_index"
             {
                 let _ = crate::discovery::persist(&event);
+            } else if let Ok(event) = serde_json::from_str::<Value>(&line)
+                && event["event"] == "cache_entries"
+            {
+                let _ = crate::discovery::persist_entries(&event);
             } else if errors.len() < 8192 {
                 errors.push_str(&line);
                 errors.push('\n');

@@ -9,7 +9,10 @@ use crate::{
     ui,
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, path::Path};
+use std::{
+    collections::{BTreeSet, HashMap},
+    path::Path,
+};
 
 type History = (Vec<Turn>, Option<String>);
 #[derive(Default)]
@@ -69,12 +72,12 @@ mod tests {
         let mut s = Session::local("claude", "one".into(), String::new(), String::new(), 0.0, 0);
         s.src = Some(path.clone());
         let mut cache = ViewCache::default();
-        let mut dirty = false;
-        let first = cache.get(&s, &mut dirty).unwrap();
-        assert!(dirty);
-        dirty = false;
-        assert_eq!(cache.get(&s, &mut dirty).unwrap(), first);
-        assert!(!dirty);
+        let mut touched = BTreeSet::new();
+        let first = cache.get(&s, &mut touched).unwrap();
+        assert!(touched.contains("claude:one"));
+        touched.clear();
+        assert_eq!(cache.get(&s, &mut touched).unwrap(), first);
+        assert!(touched.is_empty());
         std::fs::write(&path, line("edited")).unwrap();
         std::fs::File::options()
             .write(true)
@@ -82,10 +85,10 @@ mod tests {
             .unwrap()
             .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(2))
             .unwrap();
-        assert_ne!(cache.get(&s, &mut dirty).unwrap(), first);
-        assert!(dirty);
+        assert_ne!(cache.get(&s, &mut touched).unwrap(), first);
+        assert!(touched.contains("claude:one"));
         std::fs::remove_file(path).unwrap();
-        assert!(cache.get(&s, &mut dirty).is_none());
+        assert!(cache.get(&s, &mut touched).is_none());
     }
 
     #[test]
@@ -130,6 +133,22 @@ mod tests {
         assert!(change(&link, &source, &[2], &[4]) == LinkChange::Edited);
         link.epoch = epoch(&source);
         assert!(change(&link, &source, &[2], &[3]) == LinkChange::Edited);
+        // Claude Code marks a compaction with a boundary record.
+        let claude_path = dir.path().join("claude.jsonl");
+        let boundary = |id: &str| {
+            format!("{{\"type\":\"system\",\"subtype\":\"compact_boundary\",\"uuid\":\"{id}\",\"parentUuid\":null}}\n")
+        };
+        std::fs::write(&claude_path, "{\"type\":\"user\",\"message\":{\"content\":\"hi\"}}\n").unwrap();
+        let mut claude = Session::local("claude", "three".into(), String::new(), String::new(), 0., 0);
+        claude.src = Some(claude_path.clone());
+        link.epoch = epoch(&claude);
+        assert!(link.epoch.is_none() && change(&link, &claude, &[2], &[3]) == LinkChange::Edited);
+        std::fs::write(&claude_path, boundary("first")).unwrap();
+        assert!(change(&link, &claude, &[2], &[3]) == LinkChange::Refresh);
+        link.epoch = epoch(&claude);
+        assert!(change(&link, &claude, &[2], &[3]) == LinkChange::Edited);
+        std::fs::write(&claude_path, boundary("first") + &boundary("second")).unwrap();
+        assert!(change(&link, &claude, &[2], &[3]) == LinkChange::Refresh);
     }
 }
 
@@ -159,11 +178,17 @@ enum LinkChange {
     Baselines,
     Refresh,
 }
+/// Whether this history restarted from a summary at some point.
+pub(crate) fn compacted(s: &Session) -> bool {
+    epoch(s).is_some()
+}
 fn epoch(source: &Session) -> Option<String> {
-    if source.harness != "codex" {
-        return None;
+    let path = source.src.as_ref()?;
+    match source.harness {
+        "codex" => crate::codex::compaction_key(path).ok().flatten(),
+        "claude" => crate::claude::compaction_key(path).ok().flatten(),
+        _ => None,
     }
-    crate::codex::compaction_key(source.src.as_ref()?).ok().flatten()
 }
 #[cfg(test)]
 fn change(link: &Link, source: &Session, a: &[u64], b: &[u64]) -> LinkChange {
@@ -985,7 +1010,11 @@ impl ViewCache {
             .filter(|entry| entry.stamp == stamp)
             .map(|entry| entry.hashes.as_slice())
     }
-    fn get(&mut self, s: &Session, dirty: &mut bool) -> Option<Vec<u64>> {
+    /// Whether this copy's hashes were taken from its files exactly as they are now.
+    fn current(&self, s: &Session) -> bool {
+        Self::stamp(s).is_some_and(|stamp| self.0.get(&s.key()).is_some_and(|entry| entry.stamp == stamp))
+    }
+    fn get(&mut self, s: &Session, touched: &mut BTreeSet<String>) -> Option<Vec<u64>> {
         let stamp = Self::stamp(s)?;
         if let Some(entry) = self.0.get(&s.key()).filter(|entry| entry.stamp == stamp) {
             return Some(entry.hashes.clone());
@@ -1008,11 +1037,11 @@ impl ViewCache {
                 continuations: HashMap::new(),
             },
         );
-        *dirty = true;
+        touched.insert(s.key());
         Some(hashes)
     }
-    fn delta(&mut self, s: &Session, base: &[u64], dirty: &mut bool) -> Option<Option<Vec<u64>>> {
-        let current = self.get(s, dirty)?;
+    fn delta(&mut self, s: &Session, base: &[u64], touched: &mut BTreeSet<String>) -> Option<Option<Vec<u64>>> {
+        let current = self.get(s, touched)?;
         if current.starts_with(base) {
             return Some(Some(current[base.len()..].to_vec()));
         }
@@ -1031,7 +1060,7 @@ impl ViewCache {
             entry.continuations.clear();
         }
         entry.continuations.insert(key, delta.clone());
-        *dirty = true;
+        touched.insert(s.key());
         Some(delta)
     }
     fn save(&self, path: &Path) -> Result<()> {
@@ -1043,7 +1072,8 @@ impl ViewCache {
     }
 }
 
-pub fn views(local: &HashMap<String, Session>) -> Vec<LinkView> {
+/// `listing`: only for display, so an agent writing one side right now isn't waited for.
+pub fn views(local: &HashMap<String, Session>, listing: bool) -> Vec<LinkView> {
     let links = match read() {
         Ok(l) => l,
         Err(e) => {
@@ -1061,7 +1091,7 @@ pub fn views(local: &HashMap<String, Session>) -> Vec<LinkView> {
     };
     let cache_file = ctx().cache_dir.join("linked-history-v1.json");
     let mut disk = ViewCache::load();
-    let mut dirty = false;
+    let mut touched = BTreeSet::new();
     let views = links
         .copies
         .into_values()
@@ -1073,8 +1103,22 @@ pub fn views(local: &HashMap<String, Session>) -> Vec<LinkView> {
                     state: "unmanaged",
                 };
             }
-            let a = local.get(&l.source).and_then(|s| disk.delta(s, &l.a, &mut dirty));
-            let b = local.get(&l.target).and_then(|s| disk.delta(s, &l.b, &mut dirty));
+            // Its history would have to be read whole again, and sync leaves it alone anyway.
+            let writing = |key: &str| {
+                listing
+                    && local
+                        .get(key)
+                        .is_some_and(|s| !disk.current(s) && agents::in_use_by_agent(s))
+            };
+            if writing(&l.source) || writing(&l.target) {
+                return LinkView {
+                    source: l.source,
+                    target: l.target,
+                    state: "active",
+                };
+            }
+            let a = local.get(&l.source).and_then(|s| disk.delta(s, &l.a, &mut touched));
+            let b = local.get(&l.target).and_then(|s| disk.delta(s, &l.b, &mut touched));
             let state = match (a, b) {
                 (_, None) => "missing",
                 (None, Some(Some(b))) => {
@@ -1106,7 +1150,13 @@ pub fn views(local: &HashMap<String, Session>) -> Vec<LinkView> {
             }
         })
         .collect();
-    if dirty && !crate::inspection::enabled() {
+    if crate::inspection::enabled() {
+        for key in touched {
+            if let Some(value) = disk.0.get(&key).and_then(|entry| serde_json::to_value(entry).ok()) {
+                crate::discovery::keep("linked-history-v1.json", key, value);
+            }
+        }
+    } else if !touched.is_empty() {
         let _ = disk.save(&cache_file);
     }
     views

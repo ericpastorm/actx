@@ -36,7 +36,42 @@ pub(crate) fn remembered_folder(root: &Path, name: &str, st: &State) -> Option<S
 }
 
 pub fn metadata(root: &Path, name: &str) -> Option<Value> {
-    serde_json::from_slice(&std::fs::read(store::find_project(root, name)?.join(".project.json")).ok()?).ok()
+    let dir = store::find_project(root, name)?;
+    match std::fs::read(dir.join(".project.json")) {
+        Ok(bytes) => serde_json::from_slice(&bytes).ok(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => inferred(&dir),
+        Err(_) => None,
+    }
+}
+
+/// Projects saved before work folders were bound (`actx add <project>` alone) have no metadata.
+/// When every conversation saved there comes from one Git repository, that repository is the
+/// project: what `actx mk` would have recorded. Anything less certain stays unbound.
+fn inferred(dir: &Path) -> Option<Value> {
+    let mut newest: Option<Value> = None;
+    for harness in crate::harness::NAMES {
+        for entry in std::fs::read_dir(dir.join(harness)).into_iter().flatten().flatten() {
+            if entry.file_name().to_string_lossy().starts_with('.') {
+                continue;
+            }
+            let meta: Value = serde_json::from_slice(&std::fs::read(entry.path().join("meta.json")).ok()?).ok()?;
+            let root = meta["git"]["root"].as_str()?;
+            match &newest {
+                Some(n) if n["git"]["root"].as_str() != Some(root) => return None,
+                Some(n) if n["pushed_at"].as_f64() >= meta["pushed_at"].as_f64() => {}
+                _ => newest = Some(meta),
+            }
+        }
+    }
+    let meta = newest?;
+    let folder = meta["git"]["top"].as_str().or(meta["path"].as_str())?;
+    let home = meta["home"].as_str().unwrap_or_default();
+    let rel = folder
+        .strip_prefix(home)
+        .filter(|_| !home.is_empty())
+        .map(|r| r.trim_start_matches(['/', '\\']))
+        .map(|r| if r.is_empty() { "." } else { r });
+    Some(json!({"v":1,"path":folder,"rel":rel,"home":meta["home"],"host":meta["host"],"git":meta["git"]}))
 }
 
 /// Called under the store lock. Existing projects retain their portable identity.
@@ -51,7 +86,9 @@ pub fn bind(root: &Path, name: &str, folder: &str, st: &mut State) -> Result<()>
                 "This project belongs to another repository; run this command in its work folder"
             )));
         }
-    } else {
+    }
+    // A binding inferred from its conversations is written down once confirmed here.
+    if !dir.join(".project.json").exists() {
         let meta = json!({"v":1,"path":folder,"rel":paths::rel_home(folder),"home":ctx().home_str(),"host":ctx().host,"git":git::git_info(folder)});
         let mut tmp = tempfile::NamedTempFile::new_in(&dir)?;
         serde_json::to_writer_pretty(tmp.as_file_mut(), &meta)?;

@@ -194,23 +194,70 @@ pub fn inventory(path: &Path, extra: &Value, compute: impl FnOnce() -> Vec<Sessi
         }
     }
 }
+/// Other disposable caches an inspecting read refreshes (content fingerprints, linked-copy
+/// hashes). Like the index above, they reach disk only through the desktop job that ran it.
+const KEPT: [&str; 2] = ["content-v1.json", "linked-history-v1.json"];
+type Kept = BTreeMap<&'static str, serde_json::Map<String, Value>>;
+fn kept() -> &'static Mutex<Kept> {
+    static KEPT_ENTRIES: OnceLock<Mutex<Kept>> = OnceLock::new();
+    KEPT_ENTRIES.get_or_init(Default::default)
+}
+pub fn keep(file: &'static str, key: String, value: Value) {
+    if std::env::var("ACTX_PROGRESS").as_deref() == Ok("1") && KEPT.contains(&file) {
+        kept().lock().unwrap().entry(file).or_default().insert(key, value);
+    }
+}
 /// Emitted only by GUI jobs; ordinary CLI/JSON analysis never writes an index.
 pub fn emit() {
     if std::env::var("ACTX_PROGRESS").as_deref() != Ok("1") {
         return;
     }
     let delta = std::mem::take(&mut memory().lock().unwrap().delta);
-    if delta.is_empty() {
-        return;
+    let mut events = Vec::new();
+    if !delta.is_empty() {
+        events.push(json!({"event":"discovery_index","version":1,"context":context(),"entries":delta}));
     }
-    let event = json!({"event":"discovery_index","version":1,"context":context(),"entries":delta});
-    if let Ok(bytes) = serde_json::to_vec(&event)
-        && bytes.len() as u64 <= MAX_BYTES
-    {
-        let mut stderr = std::io::stderr().lock();
-        let _ = stderr.write_all(&bytes);
-        let _ = stderr.write_all(b"\n");
+    for (file, entries) in std::mem::take(&mut *kept().lock().unwrap()) {
+        events.push(json!({"event":"cache_entries","version":1,"context":context(),"file":file,"entries":entries}));
     }
+    for event in events {
+        if let Ok(bytes) = serde_json::to_vec(&event)
+            && bytes.len() as u64 <= MAX_BYTES
+        {
+            let mut stderr = std::io::stderr().lock();
+            let _ = stderr.write_all(&bytes);
+            let _ = stderr.write_all(b"\n");
+        }
+    }
+}
+/// Merge entries a desktop job handed over into their cache file. Losing a race costs a cache miss.
+#[cfg(feature = "gui")]
+pub fn persist_entries(event: &Value) -> Result<()> {
+    let Some(file) = KEPT.iter().find(|f| event["file"] == **f) else {
+        return Ok(());
+    };
+    let Some(entries) = event["entries"].as_object() else {
+        return Ok(());
+    };
+    if event["version"] != 1 || event["context"] != context() {
+        return Ok(());
+    }
+    let dir = &ctx().cache_dir;
+    std::fs::create_dir_all(dir)?;
+    let lock = std::fs::File::create(dir.join(format!("{file}.lock")))?;
+    if lock.try_lock().is_err() {
+        return Ok(());
+    }
+    let path = dir.join(file);
+    let mut all: serde_json::Map<String, Value> = std::fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default();
+    all.extend(entries.clone());
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+    serde_json::to_writer(tmp.as_file_mut(), &all)?;
+    tmp.persist(path).map_err(|e| Error(e.to_string()))?;
+    Ok(())
 }
 #[cfg(feature = "gui")]
 pub fn persist(event: &Value) -> Result<()> {

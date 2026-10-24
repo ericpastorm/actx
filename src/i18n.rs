@@ -698,6 +698,8 @@ pub static ES: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
             "¿Qué quieres quitar? Esc cancela",
         ),
         ("copy missing", "falta la copia"),
+        ("● in use", "● en uso"),
+        ("In use", "En uso"),
         ("local copy", "copia local"),
         ("pending creation", "pendiente de crear"),
         ("⚠ state unknown", "⚠ estado desconocido"),

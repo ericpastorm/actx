@@ -1674,6 +1674,7 @@ fn state_label(state: &str) -> String {
         "unknown" => tr!("⚠ state unknown"),
         "missing" => tr!("copy missing"),
         "unmanaged" => tr!("local copy (not maintained)"),
+        "active" => tr!("In use"),
         _ => tr!("local copy"),
     }
 }

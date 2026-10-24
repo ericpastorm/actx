@@ -175,7 +175,7 @@ pub struct ConversationData {
 }
 impl From<&Conversation> for ConversationData {
     fn from(g: &Conversation) -> Self {
-        let state = ["conflict", "unknown", "missing", "push", "pull", "new"]
+        let state = ["conflict", "unknown", "missing", "push", "pull", "new", "active"]
             .into_iter()
             .find(|state| g.copies.iter().any(|c| c.state == *state))
             .unwrap_or(if g.managed { "synced" } else { "local" });
@@ -263,7 +263,7 @@ pub(crate) fn list_with_catalog(args: &Args, supplied: Option<Catalog>) -> Respo
     if let Err(error) = validate_project(root.as_deref(), args) {
         return Response::error("ls", error);
     }
-    let catalog = supplied.unwrap_or_else(|| Catalog::load_for(args.all));
+    let catalog = supplied.unwrap_or_else(|| Catalog::listing(args.all));
     let st = state::load();
     let projects = root
         .as_ref()

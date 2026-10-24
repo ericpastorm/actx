@@ -765,35 +765,7 @@ mod tests {
 }
 
 pub(crate) fn compaction_key(path: &Path) -> Result<Option<String>> {
-    type Cached = (u64, std::time::SystemTime, Option<String>);
-    static CACHE: OnceLock<std::sync::Mutex<HashMap<PathBuf, Cached>>> = OnceLock::new();
-    let metadata = path.metadata()?;
-    let stamp = (metadata.len(), metadata.modified()?);
-    let cache = CACHE.get_or_init(Default::default);
-    if let Some((size, time, key)) = cache.lock().unwrap().get(path)
-        && (*size, *time) == stamp
-    {
-        return Ok(key.clone());
-    }
-    let mut key = None;
-    let file = File::open(path)?;
-    let length = file.metadata()?.len();
-    for raw in BufReader::new(file.take(length)).split(b'\n') {
-        let raw = raw?;
-        if memchr::memmem::find(&raw, b"compacted").is_none() {
-            continue;
-        }
-        if let Ok(e) = serde_json::from_slice::<Value>(&raw)
-            && e["type"] == "compacted"
-        {
-            key = Some(crate::engine::digest(&raw));
-        }
-    }
-    cache
-        .lock()
-        .unwrap()
-        .insert(path.into(), (stamp.0, stamp.1, key.clone()));
-    Ok(key)
+    crate::turns::last_marker(path, b"compacted", |e| e["type"] == "compacted")
 }
 
 #[cfg(test)]
