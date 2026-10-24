@@ -301,6 +301,14 @@ impl State {
             .base
             .get(&remote.key())
             .ok_or_else(|| crate::ctx::Error("Missing sync baseline".into()))?;
+        // Already current: neither copy changed since this baseline was taken.
+        if self.content.get(&remote.key()).is_some_and(|b| {
+            b.weights == weights
+                && b.stamp == crate::integrity::stamp(local)
+                && crate::integrity::fresh(remote).is_ok_and(|hash| hash == b.remote)
+        }) {
+            return Ok(());
+        }
         self.content
             .insert(remote.key(), crate::integrity::capture(local, remote, weights)?);
         Ok(())

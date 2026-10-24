@@ -151,6 +151,31 @@ fn the_lock_makes_others_wait() {
 }
 
 #[test]
+fn automatic_runs_on_one_machine_take_turns() {
+    let w = World::new();
+    let (_a, b, _clone, sid) = setup(&w);
+    let state = b.home.join(".local/state/actx");
+    std::fs::create_dir_all(&state).unwrap();
+    let hold = |name: &str| {
+        let f = std::fs::File::create(state.join(name)).unwrap();
+        f.lock().unwrap();
+        f
+    };
+    // one run going and another waiting: a third trigger has nothing to add
+    let (running, waiting) = (hold("auto-run.lock"), hold("auto-next.lock"));
+    let (ok, out, err) = run(&b, &["sync", "--auto", "--busy", "claude:opening"], &[], "");
+    assert!(ok, "{out}{err}");
+    assert!(find(&b.claude_dir(), &format!("{sid}.jsonl")).is_none());
+    let notes = state.join("auto-busy.txt");
+    assert_eq!(std::fs::read_to_string(&notes).unwrap().trim(), "claude:opening");
+    drop((running, waiting));
+    // the next run does the work and takes over what that trigger was opening
+    run(&b, &["sync", "--auto"], &[], "");
+    assert!(find(&b.claude_dir(), &format!("{sid}.jsonl")).is_some());
+    assert!(!notes.exists());
+}
+
+#[test]
 fn hooks_warn_about_news_and_sync_in_the_background() {
     let w = World::new();
     let (a, b, clone, sid) = setup(&w);

@@ -92,6 +92,7 @@ impl Transaction {
         }
         let parent = root.join(project).join(harness);
         std::fs::create_dir_all(&parent)?;
+        sweep(&parent);
         let nonce = uuid::Uuid::new_v4().to_string();
         let suffix = format!("{id}-{}-{nonce}", std::process::id());
         let journal = Journal {
@@ -114,6 +115,13 @@ impl Transaction {
     }
     fn root(&self) -> &Path {
         self.parent.parent().unwrap().parent().unwrap()
+    }
+    /// A publication that failed before its files were complete leaves nothing behind.
+    pub fn discard(self) {
+        if self.journal.phase == "preparing" {
+            let _ = std::fs::remove_dir_all(self.temporary());
+            let _ = std::fs::remove_file(self.journal_path());
+        }
     }
     fn journal_path(&self) -> PathBuf {
         self.parent.join(format!(".publish-{}.json", self.journal.nonce))
@@ -201,6 +209,37 @@ impl Transaction {
             let _ = std::fs::remove_file(self.journal_path());
         }
         sync_dir(&self.parent)
+    }
+}
+/// Under the shared lock nobody else is preparing a publication here, so a journal still
+/// "preparing" belongs to a run that died first. Without valid metadata its staged files can't
+/// be recovered: remove them. Anything recovery could still offer is kept.
+fn sweep(parent: &Path) {
+    let harness = parent.file_name().unwrap_or_default().to_string_lossy();
+    for entry in std::fs::read_dir(parent).into_iter().flatten().flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.starts_with(".publish-") {
+            continue;
+        }
+        let Some(j) = std::fs::read(entry.path())
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Journal>(&bytes).ok())
+        else {
+            continue;
+        };
+        if j.phase != "preparing"
+            || name != format!(".publish-{}.json", j.nonce)
+            || !component(&j.id)
+            || j.temporary != format!(".tmp-{}-{}-{}", j.id, j.pid, j.nonce)
+        {
+            continue;
+        }
+        let staged = parent.join(&j.temporary);
+        if staged.is_dir() && metadata(&staged, &harness, &j.id).is_ok() {
+            continue;
+        }
+        let _ = std::fs::remove_dir_all(&staged);
+        let _ = std::fs::remove_file(entry.path());
     }
 }
 #[derive(Clone)]
@@ -578,6 +617,28 @@ mod tests {
         assert_eq!(std::fs::read(t.destination().join("payload")).unwrap(), b"next");
         assert_eq!(std::fs::read(unrelated.join("payload")).unwrap(), b"another recovery");
         assert!(!t.journal_path().exists());
+    }
+    #[test]
+    fn failed_or_abandoned_preparations_are_removed_but_recoverable_ones_are_kept() {
+        let root = tempfile::tempdir().unwrap();
+        let failed = transaction(root.path());
+        let (tmp, journal) = (failed.temporary(), failed.journal_path());
+        failed.discard();
+        assert!(!tmp.exists() && !journal.exists());
+        // A run that died while preparing: incomplete files, no metadata.
+        let dead = transaction(root.path());
+        let (dead_tmp, dead_journal) = (dead.temporary(), dead.journal_path());
+        std::mem::forget(dead);
+        // One that died after writing complete metadata stays recoverable.
+        let complete = transaction(root.path());
+        let meta = json!({"harness":"claude","id":"one","files":{"session":"payload"}});
+        std::fs::write(complete.temporary().join("meta.json"), meta.to_string()).unwrap();
+        let (kept_tmp, kept_journal) = (complete.temporary(), complete.journal_path());
+        std::mem::forget(complete);
+        let next = Transaction::begin(root.path(), "Project", "claude", "one").unwrap();
+        assert!(!dead_tmp.exists() && !dead_journal.exists());
+        assert!(kept_tmp.exists() && kept_journal.exists());
+        assert!(next.journal_path().exists());
     }
     #[test]
     fn legacy_and_journalled_names_have_unambiguous_native_identities() {

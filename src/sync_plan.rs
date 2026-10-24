@@ -273,8 +273,7 @@ pub fn prepare(remote: &[Session], locals: &HashMap<String, Session>, st: &State
                 .map(|s| s.path.clone())
                 .or_else(|| commands::session_folder(&r, &mut st.clone(), false));
             if let Some(l) = local
-                && (agents::in_use_by_agent(l)
-                    || args.auto && (agents::in_use(l) || args.busy.as_deref() == Some(l.key().as_str())))
+                && (agents::in_use_by_agent(l) || args.auto && (agents::in_use(l) || args.is_busy(&l.key())))
             {
                 op.kind = "skip";
                 op.reason_code = "conversation_active";

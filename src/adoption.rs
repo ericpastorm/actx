@@ -225,7 +225,7 @@ pub fn candidates(root: &Path, args: &Args, override_rule: Option<(&str, &Rule)>
         let reason = if matching.len() > 1 {
             "ambiguous_project"
         } else if crate::agents::in_use_by_agent_now(&session)
-            || args.auto && (crate::agents::in_use(&session) || args.busy.as_deref() == Some(session.key().as_str()))
+            || args.auto && (crate::agents::in_use(&session) || args.is_busy(&session.key()))
             || session.harness == "codex"
                 && session
                     .src

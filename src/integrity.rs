@@ -123,7 +123,17 @@ pub fn fresh(s: &Session) -> Result<String> {
         if let Some(hash) = s.meta()["content_hash"].as_str() {
             return Ok(hash.into());
         }
-        return records(s.harness, crate::store::open_read(&s.stored_file(None))?);
+        // Legacy publications lack content_hash. Their files are never edited in place (each
+        // publication swaps in new ones), so a file stamp safely spares re-downloading them.
+        let file = s.stored_file(None);
+        let key = format!("stored:{}", file.display());
+        let before = format!("{}{}", file_stamp(&file), file_stamp(&s.store_dir().join("meta.json")));
+        if let Some(hash) = cached(&key, &before) {
+            return Ok(hash);
+        }
+        let hash = records(s.harness, crate::store::open_read(&file)?)?;
+        remember(key, before, &hash);
+        return Ok(hash);
     }
     if s.harness == "opencode" {
         let value = crate::opencode::read_export(s)?;
@@ -135,30 +145,53 @@ pub fn fresh(s: &Session) -> Result<String> {
         .ok_or_else(|| crate::ctx::Error("Missing native conversation".into()))?;
     records(s.harness, BufReader::new(std::fs::File::open(path)?))
 }
-pub fn local(s: &Session) -> Result<String> {
-    let before = stamp(s);
-    if let Some(entry) = cache().lock().unwrap().get(&s.key()).filter(|c| c.stamp == before) {
-        return Ok(entry.hash.clone());
-    }
-    let hash = fresh(s)?;
-    if stamp(s) != before {
-        return Err(crate::ctx::Error("Conversation changed while reading".into()));
-    }
+fn cached(key: &str, stamp: &str) -> Option<String> {
+    cache()
+        .lock()
+        .unwrap()
+        .get(key)
+        .filter(|c| c.stamp == stamp)
+        .map(|c| c.hash.clone())
+}
+/// Keep a fingerprint for this process, and on disk unless inspecting (previews write nothing).
+fn remember(key: String, stamp: String, hash: &str) {
     cache().lock().unwrap().insert(
-        s.key(),
+        key,
         Cached {
-            stamp: before,
-            hash: hash.clone(),
+            stamp,
+            hash: hash.into(),
         },
     );
-    if !crate::inspection::enabled() {
+    if crate::inspection::enabled() {
+        return;
+    }
+    let _ = (|| -> Result<()> {
         std::fs::create_dir_all(&ctx().cache_dir)?;
         let mut tmp = tempfile::NamedTempFile::new_in(&ctx().cache_dir)?;
         serde_json::to_writer(tmp.as_file_mut(), &*cache().lock().unwrap())?;
         tmp.persist(ctx().cache_dir.join("content-v1.json"))
             .map_err(|e| crate::ctx::Error(e.to_string()))?;
+        Ok(())
+    })();
+}
+pub fn local(s: &Session) -> Result<String> {
+    let before = stamp(s);
+    if let Some(hash) = cached(&s.key(), &before) {
+        return Ok(hash);
     }
+    let hash = fresh(s)?;
+    if stamp(s) != before {
+        return Err(crate::ctx::Error("Conversation changed while reading".into()));
+    }
+    remember(s.key(), before, &hash);
     Ok(hash)
+}
+/// A copy's fingerprint, from the cache when its files haven't changed since it was taken.
+pub fn current(s: &Session) -> Result<String> {
+    if s.meta.is_some() {
+        return fresh(s);
+    }
+    local(s).or_else(|_| fresh(s))
 }
 pub fn capture(local: &Session, remote: &Session, weights: (u64, u64)) -> Result<Baseline> {
     Ok(Baseline {

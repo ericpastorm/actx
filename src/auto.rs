@@ -56,6 +56,50 @@ fn spawn_sync(delay: u64, busy: Option<&str>, after: Option<u32>) {
     }
 }
 
+/// Holds this machine's turn to sync automatically.
+pub struct Turn(#[allow(dead_code)] Option<File>);
+
+/// One automatic sync at a time on this machine, and at most one waiting for it. A trigger that
+/// finds both places taken has nothing to add: the waiting run starts after it. It only leaves
+/// that run the conversation it was opening, so it isn't pulled over. None: covered, stop here.
+pub fn take_turn(args: &mut crate::commands::Args) -> Option<Turn> {
+    use std::io::Write;
+    let dir = &ctx().state_dir;
+    let _ = std::fs::create_dir_all(dir);
+    let open = |name: &str| {
+        File::options()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(dir.join(name))
+    };
+    let (Ok(running), Ok(waiting)) = (open("auto-run.lock"), open("auto-next.lock")) else {
+        return Some(Turn(None)); // can't coordinate: run as before
+    };
+    let notes = dir.join("auto-busy.txt");
+    if running.try_lock().is_err() {
+        if waiting.try_lock().is_err() {
+            if let Some(busy) = &args.busy
+                && let Ok(mut f) = File::options().create(true).append(true).open(&notes)
+            {
+                let _ = writeln!(f, "{busy}");
+            }
+            return None;
+        }
+        if running.lock().is_err() {
+            return Some(Turn(None));
+        }
+        drop(waiting);
+    }
+    if let Ok(text) = std::fs::read_to_string(&notes) {
+        let _ = std::fs::remove_file(&notes);
+        let mut keys: Vec<String> = text.lines().filter(|l| !l.is_empty()).map(String::from).collect();
+        keys.extend(args.busy.take());
+        args.busy = (!keys.is_empty()).then(|| keys.join(","));
+    }
+    Some(Turn(Some(running)))
+}
+
 /// Let the process outlive the agent that started it (and have no console window on Windows).
 fn detach(c: &mut Command) {
     #[cfg(unix)]

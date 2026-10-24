@@ -289,13 +289,14 @@ pub fn push_one(
 ) -> Result<Option<String>> {
     let _loading = crate::ui::loading(&tr!("Saving {title}", title = s.title));
     let baseline_stamp = crate::integrity::stamp(s);
-    let before = crate::integrity::fresh(s)?;
+    let before = crate::integrity::current(s)?;
     let mut transaction = crate::publication::Transaction::begin(root, project, s.harness, &s.id)?;
     let tmp = transaction.temporary();
-    std::fs::create_dir(&tmp)?;
     let result = (|| -> Result<(u64, u64)> {
+        std::fs::create_dir(&tmp)?;
         let pushed = crate::harness::get(s.harness).push(s, &tmp)?;
-        if crate::integrity::fresh(s)? != before {
+        // Records an agent appends that don't count (progress...) don't stop the upload.
+        if crate::integrity::stamp(s) != baseline_stamp && crate::integrity::fresh(s)? != before {
             return Err(crate::ctx::Error(
                 "Conversation changed while preparing the upload; retry after its turn finishes".into(),
             ));
@@ -343,6 +344,9 @@ pub fn push_one(
         );
         Ok(weights)
     })();
+    if result.is_err() {
+        transaction.discard();
+    }
     st.base.insert(s.key(), result?);
     if project == GENERAL && Path::new(&s.path).is_dir() {
         st.folders.insert(format!("session:{}", s.key()), s.path.clone());

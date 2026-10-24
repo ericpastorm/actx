@@ -34,32 +34,42 @@ fn db() -> Option<Connection> {
 /// opencode's major version here (1 or 2): from its database, or its CLI when there's no database yet.
 pub fn version() -> Option<u8> {
     static VERSION: OnceLock<Option<u8>> = OnceLock::new();
-    *VERSION.get_or_init(|| {
-        if let Some(con) = db() {
-            let tables: Vec<String> = con
-                .prepare("select name from sqlite_master where type = 'table'")
-                .and_then(|mut st| st.query_map([], |r| r.get(0))?.collect())
-                .unwrap_or_default();
-            if tables.iter().any(|t| t == "session_v2") {
-                return Some(2);
-            }
-            if tables.iter().any(|t| t == "session") {
-                return Some(1);
-            }
+    if let Some(known) = VERSION.get() {
+        return *known;
+    }
+    let found = detect_version();
+    // Inspection doesn't ask the CLI: an unknown version then must not stick for the whole run
+    // (a later import would use the wrong command line).
+    if found.is_some() || !crate::inspection::enabled() {
+        let _ = VERSION.set(found);
+    }
+    found
+}
+fn detect_version() -> Option<u8> {
+    if let Some(con) = db() {
+        let tables: Vec<String> = con
+            .prepare("select name from sqlite_master where type = 'table'")
+            .and_then(|mut st| st.query_map([], |r| r.get(0))?.collect())
+            .unwrap_or_default();
+        if tables.iter().any(|t| t == "session_v2") {
+            return Some(2);
         }
-        if crate::inspection::enabled() || !which("opencode") {
-            return None;
+        if tables.iter().any(|t| t == "session") {
+            return Some(1);
         }
-        let out = crate::ctx::command("opencode")
-            .args(["session", "--help"])
-            .output()
-            .ok()?;
-        let help = [out.stdout, out.stderr].concat();
-        Some(if memchr::memmem::find(&help, b"import").is_some() {
-            2
-        } else {
-            1
-        })
+    }
+    if crate::inspection::enabled() || !which("opencode") {
+        return None;
+    }
+    let out = crate::ctx::command("opencode")
+        .args(["session", "--help"])
+        .output()
+        .ok()?;
+    let help = [out.stdout, out.stderr].concat();
+    Some(if memchr::memmem::find(&help, b"import").is_some() {
+        2
+    } else {
+        1
     })
 }
 

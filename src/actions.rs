@@ -160,7 +160,7 @@ pub(crate) fn error(command: &'static str, code: &'static str, message: impl Int
 }
 pub(crate) fn revision(s: &Session, remote: Option<&Session>) -> String {
     let mut bytes = format!("{}:{}:{}:{}", s.key(), s.weight, s.updated.to_bits(), s.path).into_bytes();
-    match crate::integrity::fresh(s) {
+    match crate::integrity::current(s) {
         Ok(hash) => bytes.extend_from_slice(hash.as_bytes()),
         Err(e) => {
             bytes.extend_from_slice(e.to_string().as_bytes());

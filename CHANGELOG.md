@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Faster synchronization and cleanup fixes
+
+- Fingerprint legacy shared snapshots (without `content_hash`) once and cache them by file stamp,
+  instead of downloading and rehashing them up to four times per preview and again on every sync.
+  Previews still write nothing; real and automatic syncs persist the cache.
+- Reuse cached fingerprints for desktop review tokens, skip baselines that are already current,
+  and decide unchanged linked copies from the linked-history cache without reading both histories.
+- Read a conversation twice instead of four times when uploading it; the final check only rehashes
+  if the file changed, so active conversations fail less with "changed while preparing the upload".
+- Remove the staged files of a failed upload, and sweep incomplete staged files left by runs that
+  died (recoverable staged versions are kept). Previously each failure left a full copy behind.
+- Keep one automatic sync running and at most one queued per machine; extra hook or timer
+  triggers exit at once and leave the conversation they were opening protected for the queued run.
+- Don't remember an unknown opencode version detected during inspection, which made a later import
+  use opencode 1.x arguments against opencode 2.x.
+
 ### Desktop conversation moves and project renames
 
 - Add searchable multiple selection for moving saved conversations between projects and General,

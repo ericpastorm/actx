@@ -967,6 +967,24 @@ impl ViewCache {
         }
         Some(stamp)
     }
+    fn load() -> Self {
+        std::fs::read(ctx().cache_dir.join("linked-history-v1.json"))
+            .ok()
+            .and_then(|data| serde_json::from_slice(&data).ok())
+            .unwrap_or_default()
+    }
+    /// Cached turn hashes, only if the native files are exactly as when they were taken. Outside
+    /// inspection, sync reads opencode through its CLI rather than like this cache: no shortcut.
+    fn peek(&self, s: &Session) -> Option<&[u64]> {
+        if s.harness == "opencode" && !crate::inspection::enabled() {
+            return None;
+        }
+        let stamp = Self::stamp(s)?;
+        self.0
+            .get(&s.key())
+            .filter(|entry| entry.stamp == stamp)
+            .map(|entry| entry.hashes.as_slice())
+    }
     fn get(&mut self, s: &Session, dirty: &mut bool) -> Option<Vec<u64>> {
         let stamp = Self::stamp(s)?;
         if let Some(entry) = self.0.get(&s.key()).filter(|entry| entry.stamp == stamp) {
@@ -1042,10 +1060,7 @@ pub fn views(local: &HashMap<String, Session>) -> Vec<LinkView> {
             .is_some_and(|(tool, _)| profile::harnesses(&l.source).contains(&tool))
     };
     let cache_file = ctx().cache_dir.join("linked-history-v1.json");
-    let mut disk: ViewCache = std::fs::read(&cache_file)
-        .ok()
-        .and_then(|data| serde_json::from_slice(&data).ok())
-        .unwrap_or_default();
+    let mut disk = ViewCache::load();
     let mut dirty = false;
     let views = links
         .copies
@@ -1124,6 +1139,7 @@ pub fn preview(
     };
     let config = profile::current();
     let aliases = crate::catalog::aliases();
+    let viewed = ViewCache::load();
     let families: HashMap<_, _> = stored
         .iter()
         .map(|r| {
@@ -1155,6 +1171,7 @@ pub fn preview(
             source.path = crate::commands::session_folder(r, &mut st.clone(), false).unwrap_or_default();
         }
         let source = source.as_ref();
+        let source_status = source.map(|s| st.status(Some(s), Some(r)));
         let mut histories = Histories::default();
         let family_start = operations.len();
         for target in targets {
@@ -1173,14 +1190,14 @@ pub fn preview(
                         tr!("Create or update linked copies after downloading the source and choosing its folder"),
                     ));
                 };
-                if matches!(st.status(Some(source), Some(r)), "pull" | "conflict") {
+                if matches!(source_status, Some("pull" | "conflict")) {
                     return Ok((
                         "check",
                         "source_sync_required",
                         tr!("Recheck linked copies after downloading or resolving the shared conflict"),
                     ));
                 }
-                if agents::in_use(source) || args.busy.as_deref() == Some(key.as_str()) {
+                if agents::in_use(source) || args.is_busy(&key) {
                     return Ok((
                         "skip",
                         "source_active",
@@ -1192,6 +1209,21 @@ pub fn preview(
                         "skip",
                         "work_folder_required",
                         tr!("An existing work folder is required for linked copies"),
+                    ));
+                }
+                // Both native files untouched since their hashes matched the saved baselines:
+                // the same answer as reading both histories below, without reading them.
+                if let Some(link) = links.copies.get(&format!("{key}/{target}"))
+                    && let Some(mirror) = sessions.get(&link.target)
+                    && !link.a.is_empty()
+                    && viewed.peek(sessions.get(&key).unwrap_or(source)) == Some(link.a.as_slice())
+                    && viewed.peek(mirror) == Some(link.b.as_slice())
+                {
+                    op.target_id = Some(link.target.clone());
+                    return Ok((
+                        "synced",
+                        "linked_copies_match",
+                        tr!("Linked histories match their saved baselines"),
                     ));
                 }
                 let history = histories.get(source)?;

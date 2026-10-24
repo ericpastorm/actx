@@ -55,6 +55,15 @@ pub struct Args {
     pub busy: Option<String>,
 }
 
+impl Args {
+    /// A conversation opening right now, that automatic runs mustn't replace.
+    pub fn is_busy(&self, key: &str) -> bool {
+        self.busy
+            .as_deref()
+            .is_some_and(|busy| busy.split(',').any(|k| k == key))
+    }
+}
+
 fn local_index() -> HashMap<String, Session> {
     all_local().into_iter().map(|s| (s.key(), s)).collect()
 }
@@ -726,7 +735,7 @@ fn moved_on(now: &HashMap<String, f64>, key: &str, was: Option<f64>, title: &str
 /// An open conversation can't be replaced. Automatic runs leave it for later; otherwise ask.
 fn may_replace(l: &Session, args: &Args) -> bool {
     if is_auto() {
-        return !(in_use(l) || args.busy.as_deref() == Some(l.key().as_str()));
+        return !(in_use(l) || args.is_busy(&l.key()));
     }
     if !in_use_by_agent(l) {
         return true;
@@ -785,13 +794,22 @@ pub fn sync(mut args: Args) {
         return;
     }
     let auto = args.auto;
-    let root = if auto {
+    // held until this run ends
+    let _turn = if auto {
         set_auto();
         crate::auto::rotate_log();
         if let Some(pid) = args.after {
             crate::agents::wait_for(pid);
         }
         std::thread::sleep(Duration::from_secs(args.delay));
+        let Some(turn) = crate::auto::take_turn(&mut args) else {
+            return;
+        };
+        Some(turn)
+    } else {
+        None
+    };
+    let root = if auto {
         match crate::store::reachable_root(Duration::from_secs(10)) {
             Some(root) => root,
             None => return, // away from home, say: next time
