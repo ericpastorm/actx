@@ -205,12 +205,31 @@ pub fn find_program(cmd: &str) -> Option<PathBuf> {
     } else {
         Vec::new()
     };
-    std::env::split_paths(&paths).find_map(|dir| {
+    let find = |dir: PathBuf| {
         let plain = dir.join(cmd);
         if exts.is_empty() {
             return plain.is_file().then_some(plain);
         }
         exts.iter().map(|e| dir.join(format!("{cmd}{e}"))).find(|p| p.is_file())
+    };
+    std::env::split_paths(&paths).find_map(find).or_else(|| {
+        // Hooks and timers may start with a bare PATH: look where per-user installers put agents.
+        let home = PathBuf::from(std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?);
+        [
+            ".local/share/mise/shims",
+            ".local/bin",
+            ".cargo/bin",
+            ".bun/bin",
+            ".volta/bin",
+            ".npm-global/bin",
+            ".local/share/pnpm",
+            ".asdf/shims",
+            ".nix-profile/bin",
+            ".opencode/bin",
+            ".claude/local",
+        ]
+        .into_iter()
+        .find_map(|dir| find(home.join(crate::paths::native(dir))))
     })
 }
 

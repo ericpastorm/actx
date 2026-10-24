@@ -7,6 +7,12 @@
 - A conversation closed moments ago in Codex (or opencode/Antigravity) updates its linked copies at
   once, including from the hook that runs when it closes. Only an agent that still has it open defers
   them, and only writing into a recently active conversation waits; it used to take two minutes.
+  Going back works the same way: a continuation in a linked copy closed moments ago reaches its
+  source in the same sync (it used to report a turn still in progress and wait).
+- Find agent CLIs installed per user (mise shims, `~/.local/bin`, `~/.cargo/bin`, Bun, Volta, pnpm,
+  asdf, Nix, opencode's installer) even when a hook or timer starts with a bare PATH. Timers set up
+  by older versions couldn't run `codex` or `opencode`, so automatic syncs skipped opencode copies
+  and Codex archiving.
 - When a compaction replaces a linked copy nobody touched, the old copy moves to recoverable
   quarantine (`actx clean restore`) instead of piling up as another conversation in its harness.
 

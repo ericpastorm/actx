@@ -815,15 +815,22 @@ fn run_locked(
                                     "Source recently active; its continuation from the linked copy waits".into(),
                                 ));
                             }
-                            if agents::in_use(&mirror)
-                                || agents::in_use_by_agent_now(&mirror)
-                                || mirror.harness == "codex"
-                                    && mirror
-                                        .src
-                                        .as_ref()
-                                        .is_some_and(|p| crate::codex::completed_end(p).ok().flatten().is_some())
+                            // The copy is only read here: closed a moment ago is fine, unless its
+                            // agent still has it open or a Codex turn isn't finished.
+                            if agents::in_use_by_agent_now(&mirror) {
+                                return Err(Error(
+                                    "Linked copy open in its agent; its continuation waits until it closes".into(),
+                                ));
+                            }
+                            if mirror.harness == "codex"
+                                && mirror
+                                    .src
+                                    .as_ref()
+                                    .is_some_and(|p| crate::codex::completed_end(p).ok().flatten().is_some())
                             {
-                                return Err(Error("Source turn is still in progress; linked copies deferred".into()));
+                                return Err(Error(
+                                    "Linked copy turn is still in progress; its continuation waits".into(),
+                                ));
                             }
                             histories.invalidate(&source);
                             append(
@@ -1389,7 +1396,7 @@ pub fn preview(
                     if kind == "linked_push"
                         && (agents::in_use(source)
                             || args.is_busy(&key)
-                            || agents::in_use(mirror)
+                            || agents::in_use_by_agent(mirror)
                             || mirror.harness == "codex"
                                 && mirror
                                     .src

@@ -223,3 +223,39 @@ fn sync_json_requires_explicit_dry_run() {
     assert!(out.stdout.is_empty());
     unchanged(w.dir.path(), &before);
 }
+
+#[test]
+#[cfg(unix)]
+fn agents_installed_per_user_are_found_even_with_a_bare_path() {
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+    let w = World::new();
+    let m = w.machine("timer");
+    let opencode_installed = || {
+        let mut child = m
+            .command(ACTX)
+            .env("PATH", "/usr/bin:/bin")
+            .arg("api")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(br#"{"action":"settings"}"#)
+            .unwrap();
+        let out: Value = serde_json::from_slice(&child.wait_with_output().unwrap().stdout).unwrap();
+        let tools = out["data"]["tools"].as_array().unwrap().clone();
+        tools.iter().find(|t| t["id"] == "opencode").unwrap()["installed"] == true
+    };
+    assert!(!opencode_installed());
+    // As a hook or a systemd timer sees it: no shell profile, but mise put the agent here.
+    let shims = m.home.join(".local/share/mise/shims");
+    std::fs::create_dir_all(&shims).unwrap();
+    let fake = shims.join("opencode");
+    std::fs::File::create(&fake).unwrap().write_all(b"#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(opencode_installed());
+}

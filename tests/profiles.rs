@@ -313,6 +313,47 @@ fn a_codex_conversation_closed_seconds_ago_updates_its_linked_copies_at_once() {
     assert_eq!(texts.last().unwrap(), "codex answer", "{texts:?}");
 }
 #[test]
+fn continuing_in_a_codex_copy_closed_seconds_ago_reaches_the_source_at_once() {
+    let w = World::new();
+    let m = w.machine("desk");
+    let folder = m.home.join("notes");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::create_dir_all(m.home.join(".claude/sessions")).unwrap();
+    let source = claude_session(
+        &m,
+        &folder,
+        &[("user", "hello"), ("assistant", "hi")],
+        Some("Claude notes"),
+    );
+    closed(&source, 1);
+    let sid = source.file_stem().unwrap().to_string_lossy().into_owned();
+    m.actx(&[
+        "init",
+        m.store.to_str().unwrap(),
+        "--harnesses",
+        "claude,codex",
+        "--retention",
+        "never",
+    ]);
+    m.pick(&["add"], &[&sid]);
+    let link_file = m.home.join(".local/state/actx/harness-links.json");
+    let links: Value = serde_json::from_slice(&std::fs::read(&link_file).unwrap()).unwrap();
+    let target = links["copies"].as_object().unwrap().values().next().unwrap()["target"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let copy = find(
+        &m.codex_sessions(),
+        &format!("{}.jsonl", target.split_once(':').unwrap().1),
+    )
+    .unwrap();
+    // Continued in Codex and closed it just now: back in Claude Code without waiting.
+    codex_continue(&copy, &[("user", "from codex"), ("assistant", "codex reply")], None);
+    m.actx(&["sync", "--all"]);
+    let (_, texts, _) = claude_transcript(&m, &sid);
+    assert_eq!(texts.last().unwrap(), "codex reply", "{texts:?}");
+}
+#[test]
 fn retention_is_opt_in_and_only_removes_shared_copies() {
     let w = World::new();
     let m = w.machine("desk");
