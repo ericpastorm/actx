@@ -136,8 +136,15 @@ fn a_codex_compaction_rebuilds_an_untouched_mirror_and_preserves_its_original() 
     assert_eq!(r["status"], "ok", "{r}");
     let after: Value = serde_json::from_slice(&std::fs::read(&links).unwrap()).unwrap();
     assert_ne!(after["copies"][format!("{key}/claude")]["target"], old);
-    assert_eq!(std::fs::read(&old_path).unwrap(), original);
     assert!(after["retired"].as_array().unwrap().contains(&json!(old)));
+    // The untouched old copy doesn't pile up in Claude Code: it is kept, intact, in quarantine.
+    assert!(!old_path.exists());
+    let kept: Vec<_> = files_under(&m.home.join(".local/state/actx/quarantine"))
+        .into_iter()
+        .filter(|p| p.file_name().is_some_and(|n| n == "payload.zst"))
+        .map(|p| zstd::stream::decode_all(std::fs::File::open(p).unwrap()).unwrap())
+        .collect();
+    assert_eq!(kept, vec![original]);
 }
 
 #[test]

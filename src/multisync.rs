@@ -542,10 +542,15 @@ fn run_inner(root: &Path, args: &crate::commands::Args, config: &serde_json::Val
     let guard = std::fs::File::create(ctx().state_dir.join("multiharness.lock"))?;
     let _loading = ui::loading(&crate::tr!("Syncing linked harnesses"));
     guard.lock()?;
-    let Some(_shared) = crate::commands::lock_store(root) else {
-        return Ok(());
-    };
-    run_locked(root, args, config)
+    let mut retired = Vec::new();
+    {
+        let Some(_shared) = crate::commands::lock_store(root) else {
+            return Ok(());
+        };
+        run_locked(root, args, config, &mut retired)?;
+    }
+    quarantine_replaced(retired);
+    Ok(())
 }
 
 /// Noninteractive entry point; lock order matches the CLI and never waits on another frontend.
@@ -553,10 +558,43 @@ pub(crate) fn run_service(root: &Path, args: &crate::commands::Args) -> Result<(
     std::fs::create_dir_all(&ctx().state_dir)?;
     let guard = std::fs::File::create(ctx().state_dir.join("multiharness.lock"))?;
     guard.try_lock().map_err(|e| Error(e.to_string()))?;
-    let _shared = crate::actions::acquire(root).map_err(|d| Error(d.message))?;
-    run_locked(root, args, &profile::current())
+    let mut retired = Vec::new();
+    {
+        let _shared = crate::actions::acquire(root).map_err(|d| Error(d.message))?;
+        run_locked(root, args, &profile::current(), &mut retired)?;
+    }
+    quarantine_replaced(retired);
+    Ok(())
 }
-fn run_locked(root: &Path, args: &crate::commands::Args, config: &serde_json::Value) -> Result<()> {
+/// Copies replaced after their source was compacted held nothing of their own (they still matched
+/// their baseline). Keep them recoverable in quarantine rather than piling up in their harness.
+/// Quarantine takes the shared lock itself and rechecks each one first.
+fn quarantine_replaced(copies: Vec<Session>) {
+    let candidates: Vec<_> = copies
+        .into_iter()
+        .filter_map(|session| {
+            Some(crate::clean::Candidate {
+                fingerprint: crate::clean::fingerprint(&session).ok()?,
+                reasons: vec![crate::tr!("Replaced after its source was compacted")],
+                preview: String::new(),
+                bytes: 0,
+                session,
+            })
+        })
+        .collect();
+    if candidates.is_empty() {
+        return;
+    }
+    if let Err(e) = crate::quarantine::apply(&candidates.iter().collect::<Vec<_>>()) {
+        ui::warn(&format!("Multiharness: {e}"));
+    }
+}
+fn run_locked(
+    root: &Path,
+    args: &crate::commands::Args,
+    config: &serde_json::Value,
+    replaced: &mut Vec<Session>,
+) -> Result<()> {
     let mut links = read()?;
     let mut st = state::load();
     let stored = store::stored_sessions(root);
@@ -644,15 +682,18 @@ fn run_locked(root: &Path, args: &crate::commands::Args, config: &serde_json::Va
         if matches!(st.status(Some(&source), Some(&r)), "pull" | "conflict") {
             continue;
         }
-        if agents::in_use(&source) || agents::in_use_by_agent_now(&source) {
+        // An agent with the source open may still be writing it. One closed a moment ago is only
+        // read here, to bring its copies up to date; writing into it waits for activity to settle.
+        if agents::in_use_by_agent_now(&source) {
             if !args.auto {
                 ui::warn(&crate::tr!(
-                    "{title}: linked copies deferred; close the source agent and retry (recent activity may take up to 2 minutes)",
+                    "{title}: linked copies deferred; close the source agent and retry",
                     title = source.title
                 ));
             }
             continue;
         }
+        let source_settling = agents::in_use(&source) || args.is_busy(&key);
         if source.path.is_empty() || !Path::new(&source.path).is_dir() {
             ui::warn(&format!(
                 "{}: choose an existing work folder before creating linked copies",
@@ -742,6 +783,7 @@ fn run_locked(root: &Path, args: &crate::commands::Args, config: &serde_json::Va
                                 );
                                 sessions.insert(copy.key(), copy);
                                 save(&links)?;
+                                replaced.push(mirror.clone());
                                 ui::ok(&crate::tr!(
                                     "Compacted history repaired; the previous native copy was preserved"
                                 ));
@@ -768,6 +810,11 @@ fn run_locked(root: &Path, args: &crate::commands::Args, config: &serde_json::Va
                                     .ok_or_else(|| Error("Source history changed".into()))?,
                             )?;
                         } else if change == LinkChange::ToSource {
+                            if source_settling {
+                                return Err(Error(
+                                    "Source recently active; its continuation from the linked copy waits".into(),
+                                ));
+                            }
                             if agents::in_use(&mirror)
                                 || agents::in_use_by_agent_now(&mirror)
                                 || mirror.harness == "codex"
@@ -1247,11 +1294,11 @@ pub fn preview(
                         tr!("Recheck linked copies after downloading or resolving the shared conflict"),
                     ));
                 }
-                if agents::in_use(source) || args.is_busy(&key) {
+                if agents::in_use_by_agent(source) {
                     return Ok((
                         "skip",
                         "source_active",
-                        tr!("Source open or active in the last 2 minutes; linked copies are deferred"),
+                        tr!("Source open in an agent; linked copies are deferred"),
                     ));
                 }
                 if source.path.is_empty() || !Path::new(&source.path).is_dir() {
@@ -1340,7 +1387,9 @@ pub fn preview(
                         }
                     };
                     if kind == "linked_push"
-                        && (agents::in_use(mirror)
+                        && (agents::in_use(source)
+                            || args.is_busy(&key)
+                            || agents::in_use(mirror)
                             || mirror.harness == "codex"
                                 && mirror
                                     .src

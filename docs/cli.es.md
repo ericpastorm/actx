@@ -301,8 +301,9 @@ actx restore --backup ID-RECUPERACION --json  # revisa la restauración sin apli
 La comparación muestra mensajes recientes; la GUI y la respuesta JSON incluyen también una vista
 previa de mezcla cuando está disponible. La resolución vuelve a comprobar el contenido y conserva
 alternativas como backup, rama o copia
-local retirada. Una compactación de Codex puede regenerar una copia vinculada intacta conservando
-el historial nativo anterior; las ediciones independientes siguen siendo conflictos. Las instantáneas
+local retirada. Una compactación de Codex o Claude Code regenera una copia vinculada intacta y manda la
+anterior a la cuarentena recuperable (`actx clean restore`); las ediciones independientes siguen siendo
+conflictos. Las instantáneas
 publicadas de Codex terminan en un turno completo.
 
 La recuperación reúne backups locales, cuarentena y publicaciones compartidas interrumpidas
@@ -487,10 +488,11 @@ nuevo en `add`, para evitar guardarlas como conversaciones independientes.
 La base compartida sigue siendo de Claude, Codex u opencode; Antigravity puede ser una copia vinculada
 local de ida y vuelta. Para partir de una conversación de Antigravity, conviértela primero con `cv` y
 usa `add` sobre la copia. Las copias requieren una carpeta existente y el harness de destino instalado;
-opencode necesita un modelo configurado. Se posponen conversaciones abiertas o con actividad reciente.
-Si ambas ramas cambiaron o tienen ediciones independientes, actx conserva ambas y avisa del conflicto
-para resolverlo con revisión. Una compactación de Codex puede reparar una copia vinculada intacta
-conservando el historial nativo anterior.
+opencode necesita un modelo configurado. Un original abierto en un agente aplaza sus copias; uno cerrado
+hace un momento las actualiza al instante, y solo escribir en una conversación con actividad reciente
+espera. Si ambas ramas cambiaron o tienen ediciones independientes, actx conserva ambas y avisa del
+conflicto para resolverlo con revisión. Una compactación de Codex o Claude Code repara una copia
+vinculada intacta; la anterior va a la cuarentena recuperable.
 
 La retención se aplica en cada `sync`, incluidos los automáticos que tengas activados con `actx auto`.
 Solo elimina copias de la carpeta compartida; conserva proyectos, originales y copias locales.

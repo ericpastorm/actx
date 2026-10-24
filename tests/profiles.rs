@@ -215,6 +215,104 @@ fn desktop_jobs_hand_over_refreshed_caches_and_plain_api_calls_write_nothing() {
     assert_eq!(snapshot(), before, "the job's parent keeps them, not the job");
 }
 #[test]
+fn a_claude_compaction_repairs_linked_copies_and_quarantines_the_replaced_one() {
+    use std::io::Write;
+    let w = World::new();
+    let m = w.machine("desk");
+    let folder = m.home.join("notes");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::create_dir_all(m.home.join(".gemini/antigravity-cli")).unwrap();
+    let source = claude_session(
+        &m,
+        &folder,
+        &[("user", "hello"), ("assistant", "hi")],
+        Some("Long notes"),
+    );
+    closed(&source, 1);
+    let sid = source.file_stem().unwrap().to_string_lossy().into_owned();
+    m.actx(&[
+        "init",
+        m.store.to_str().unwrap(),
+        "--harnesses",
+        "claude,antigravity",
+        "--retention",
+        "never",
+    ]);
+    m.pick(&["add"], &[&sid]);
+    let link_file = m.home.join(".local/state/actx/harness-links.json");
+    let target = |links: &Value| links["copies"].as_object().unwrap().values().next().unwrap()["target"].clone();
+    let before: Value = serde_json::from_slice(&std::fs::read(&link_file).unwrap()).unwrap();
+    // Claude Code compacts: the history starts again from a summary.
+    let boundary = serde_json::json!({"type":"system","subtype":"compact_boundary","uuid":"boundary-1",
+        "parentUuid":null,"isSidechain":false,"cwd":folder,"sessionId":sid});
+    let mut file = std::fs::OpenOptions::new().append(true).open(&source).unwrap();
+    writeln!(file, "{boundary}").unwrap();
+    drop(file);
+    claude_continue(
+        &source,
+        &[
+            ("user", "Summary of the earlier conversation"),
+            ("assistant", "after compaction"),
+        ],
+        None,
+    );
+    closed(&source, 1);
+    let out = m.actx(&["sync", "--all"]);
+    assert!(out.contains("Compacted history repaired"), "{out}");
+    let after: Value = serde_json::from_slice(&std::fs::read(&link_file).unwrap()).unwrap();
+    assert_ne!(target(&after), target(&before));
+    assert!(!m.actx(&["ls"]).contains("conflict"));
+    // The replaced copy is recoverable instead of piling up in Antigravity.
+    let old = target(&before).as_str().unwrap().split_once(':').unwrap().1.to_string();
+    let quarantined = m.actx(&["clean", "quarantine"]);
+    assert!(quarantined.contains("Long notes"), "{quarantined}");
+    assert!(
+        !m.home
+            .join(format!(".gemini/antigravity-cli/conversations/{old}.db"))
+            .exists()
+    );
+}
+#[test]
+fn a_codex_conversation_closed_seconds_ago_updates_its_linked_copies_at_once() {
+    let w = World::new();
+    let m = w.machine("desk");
+    let folder = m.home.join("notes");
+    std::fs::create_dir_all(&folder).unwrap();
+    // Claude Code's list of open sessions, as on a real machine: nothing holds the copy.
+    std::fs::create_dir_all(m.home.join(".claude/sessions")).unwrap();
+    let source = codex_rollout(
+        &m,
+        &folder,
+        &[("user", "hello"), ("assistant", "hi")],
+        Some("Codex notes"),
+    );
+    closed(&source, 1);
+    let id = rollout_id(&source);
+    m.actx(&[
+        "init",
+        m.store.to_str().unwrap(),
+        "--harnesses",
+        "codex,claude",
+        "--retention",
+        "never",
+    ]);
+    m.pick(&["add"], &[&id]);
+    let link_file = m.home.join(".local/state/actx/harness-links.json");
+    let links: Value = serde_json::from_slice(&std::fs::read(&link_file).unwrap()).unwrap();
+    let mirror = links["copies"].as_object().unwrap().values().next().unwrap()["target"]
+        .as_str()
+        .unwrap()
+        .split_once(':')
+        .unwrap()
+        .1
+        .to_string();
+    // Codex just wrote it and nothing has it open: switching harness doesn't wait two minutes.
+    codex_continue(&source, &[("user", "next"), ("assistant", "codex answer")], None);
+    m.actx(&["sync", "--all"]);
+    let (_, texts, _) = claude_transcript(&m, &mirror);
+    assert_eq!(texts.last().unwrap(), "codex answer", "{texts:?}");
+}
+#[test]
 fn retention_is_opt_in_and_only_removes_shared_copies() {
     let w = World::new();
     let m = w.machine("desk");

@@ -63,7 +63,7 @@ package from `libxkbcommon`; having the latter installed alone does not provide 
 6. **Compare histories** shows local/shared or selected linked histories, omitted-message counts
    and the native merge preview. Choose a resolution and review **Apply**; the alternative stays
    recoverable. Independent edits are never silently replaced. A Codex or Claude Code compaction
-   with an intact target repairs the conversion while retaining the old native conversation.
+   with an intact target repairs the conversion and moves the old copy to recoverable quarantine.
 7. **Recovery** lists backups, quarantined conversations and interrupted shared publications, with
    preview and confirmation. Restoring a backup protects the current history; quarantine recovery
    does not overwrite it. Replacing a shared publication retains its previous shared version.

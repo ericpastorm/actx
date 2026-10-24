@@ -301,9 +301,9 @@ actx restore --backup RECOVERY-ID --json       # inspect a restore without apply
 
 Comparison shows recent messages; the desktop and JSON response also include a merge preview when
 available. Resolution checks the current content again and preserves alternatives as a backup,
-branch or retired local copy. A Codex
-compaction can rebuild an unchanged linked copy while retaining the previous native history;
-independent target edits remain conflicts. Published Codex snapshots stop at complete task boundaries.
+branch or retired local copy. A Codex or Claude Code
+compaction rebuilds an unchanged linked copy and moves the previous one to recoverable quarantine
+(`actx clean restore`); independent target edits remain conflicts. Published Codex snapshots stop at complete task boundaries.
 
 Recovery combines local backups, cleanup quarantine and recognized interrupted shared publications
 (`.tmp-*` / `.old-*`). Review the version before restoring it. Replacing a shared publication keeps
@@ -482,9 +482,10 @@ text conversion format. Linked copies are excluded from `add` to avoid independe
 The shared base remains a Claude, Codex or opencode conversation. Antigravity supports local linked
 copies in both directions; to start from Antigravity, convert it with `cv` and add that copy first.
 Targets need an existing work folder, an installed harness and, for opencode, a configured model.
-Open or recently active sessions are deferred. Concurrent continuations and independent edits keep
-both versions intact and report a conflict for reviewed resolution. Codex compaction can repair an
-unchanged linked target with its previous native history preserved.
+A source open in an agent defers its copies; one closed moments ago updates them at once, and only
+writing into a recently active conversation waits. Concurrent continuations and independent edits
+keep both versions intact and report a conflict for reviewed resolution. A Codex or Claude Code
+compaction repairs an unchanged linked target; the previous copy goes to recoverable quarantine.
 
 Retention runs during each sync, including automatic syncs already enabled with `actx auto`. It removes
 only shared copies, keeping projects and all local originals/copies. Pending changes, conflicts and

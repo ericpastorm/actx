@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Switching harness without waiting, and no piled-up copies
+
+- A conversation closed moments ago in Codex (or opencode/Antigravity) updates its linked copies at
+  once, including from the hook that runs when it closes. Only an agent that still has it open defers
+  them, and only writing into a recently active conversation waits; it used to take two minutes.
+- When a compaction replaces a linked copy nobody touched, the old copy moves to recoverable
+  quarantine (`actx clean restore`) instead of piling up as another conversation in its harness.
+
 ### Faster detection and harness switching
 
 - Fingerprint growing histories incrementally: a changed conversation is verified byte for byte

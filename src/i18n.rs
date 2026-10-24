@@ -699,6 +699,18 @@ pub static ES: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
         ),
         ("copy missing", "falta la copia"),
         ("● in use", "● en uso"),
+        (
+            "Source open in an agent; linked copies are deferred",
+            "Original abierto en un agente; las copias vinculadas esperan",
+        ),
+        (
+            "{title}: linked copies deferred; close the source agent and retry",
+            "{title}: copias vinculadas aplazadas; cierra el agente del original y reintenta",
+        ),
+        (
+            "Replaced after its source was compacted",
+            "Sustituida tras compactarse el original",
+        ),
         ("In use", "En uso"),
         ("local copy", "copia local"),
         ("pending creation", "pendiente de crear"),
@@ -729,10 +741,6 @@ pub static ES: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| 
             "¿Qué harnesses usas? Enter marca o desmarca · Siguiente continúa · Ctrl-D desactiva las copias vinculadas · Esc conserva las preferencias",
         ),
         ("Next →", "Siguiente →"),
-        (
-            "{title}: linked copies deferred; close the source agent and retry (recent activity may take up to 2 minutes)",
-            "{title}: copias entre harnesses aplazadas; cierra el agente de origen y reintenta (la actividad reciente puede tardar hasta 2 minutos)",
-        ),
         ("Ask each time", "Preguntar cada vez"),
         ("Your actx profile", "Tu perfil de actx"),
         ("Harnesses", "Harnesses"),
