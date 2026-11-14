@@ -176,6 +176,31 @@ fn automatic_runs_on_one_machine_take_turns() {
 }
 
 #[test]
+fn runs_started_by_hooks_rest_as_long_as_the_previous_one_worked() {
+    let w = World::new();
+    let (_a, b, _clone, _sid) = setup(&w);
+    let last = b.home.join(".local/state/actx/auto-last-run");
+    let worked = || std::fs::read_to_string(&last).unwrap().parse::<u64>().unwrap();
+    // nothing to rest from yet; every automatic run notes how long it worked
+    b.actx(&["sync", "--auto", "--rest"]);
+    worked();
+    // the previous run worked for three seconds and ended just now
+    std::fs::write(&last, "3000").unwrap();
+    let start = std::time::Instant::now();
+    b.actx(&["sync", "--auto", "--rest"]);
+    assert!(start.elapsed() >= Duration::from_millis(2900), "it rested first");
+    assert!(
+        worked() < 3000,
+        "resting isn't work: the next run doesn't wait for it too"
+    );
+    // only hooks ask for it: the timer's runs (and a person's) start at once
+    std::fs::write(&last, "3000").unwrap();
+    let start = std::time::Instant::now();
+    b.actx(&["sync", "--auto"]);
+    assert!(start.elapsed() < Duration::from_millis(2900));
+}
+
+#[test]
 fn hooks_warn_about_news_and_sync_in_the_background() {
     let w = World::new();
     let (a, b, clone, sid) = setup(&w);

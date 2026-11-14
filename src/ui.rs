@@ -199,6 +199,7 @@ pub fn say(msg: &str) {
 pub fn die(msg: &str) -> ! {
     progress_clear();
     eprintln!("{}{msg}", paint("31", "✗ "));
+    crate::inspection::release();
     std::process::exit(1)
 }
 

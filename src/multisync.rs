@@ -16,20 +16,208 @@ use std::{
 
 type History = (Vec<Turn>, Option<String>);
 #[derive(Default)]
-struct Histories(HashMap<String, std::rc::Rc<History>>);
+struct Histories(HashMap<String, (std::rc::Rc<History>, Option<Stamp>)>);
 impl Histories {
     fn get(&mut self, session: &Session) -> Result<std::rc::Rc<History>> {
         let key = session.key();
-        if let Some(history) = self.0.get(&key) {
+        if let Some((history, _)) = self.0.get(&key) {
             return Ok(history.clone());
         }
+        let before = Stamp::take(session);
         let history = std::rc::Rc::new(harness::get(session.harness).local_turns(session)?);
-        self.0.insert(key, history.clone());
+        // only a history that stayed still while it was read can be told apart from a later one
+        let stamp = before.and_then(|before| Stamp::take(session).filter(|after| after.same(&before)));
+        self.0.insert(key, (history.clone(), stamp));
         Ok(history)
+    }
+
+    /// What pins down the history read with `get`, if it could be pinned down.
+    fn stamp(&self, session: &Session) -> Option<&Stamp> {
+        self.0.get(&session.key()).and_then(|(_, stamp)| stamp.as_ref())
     }
 
     fn invalidate(&mut self, session: &Session) {
         self.0.remove(&session.key());
+    }
+}
+
+/// What tells one state of a local copy from any other, without reading its history.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+struct Stamp {
+    /// its folder, activity and weight, and the size and time of its native files
+    files: String,
+    /// opencode keeps every session in one database, which changes whenever any of them does (or
+    /// is merely exported): a hash of this session's own records
+    #[serde(default)]
+    records: Option<u64>,
+}
+impl Stamp {
+    fn take(s: &Session) -> Option<Stamp> {
+        Some(Stamp {
+            files: ViewCache::stamp(s)?,
+            records: if s.harness == "opencode" {
+                Some(Self::records(s)?)
+            } else {
+                None
+            },
+        })
+    }
+    fn records(s: &Session) -> Option<u64> {
+        // from a snapshot: opening the database itself could leave WAL files next to it
+        let _snapshot = crate::inspection::Guard::new();
+        crate::opencode::clean_fingerprint(&s.id).ok()
+    }
+    fn same(&self, other: &Stamp) -> bool {
+        match (self.records, other.records) {
+            (Some(mine), Some(theirs)) => mine == theirs,
+            (None, None) => self.files == other.files,
+            _ => false,
+        }
+    }
+    /// This stamp as of now, if `s` is still what it was taken from. opencode's records are only
+    /// read when its database changed at all.
+    fn still(&self, s: &Session) -> Option<Stamp> {
+        let files = ViewCache::stamp(s)?;
+        if files == self.files {
+            return Some(self.clone());
+        }
+        let records = self.records?;
+        (s.harness == "opencode" && Self::records(s)? == records).then_some(Stamp {
+            files,
+            records: Some(records),
+        })
+    }
+}
+
+/// How a link check ended when there was nothing for it to write.
+#[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
+enum Outcome {
+    Unchanged,
+    Edited,
+    Diverged,
+    Missing,
+}
+impl Outcome {
+    /// What the run says and returns for it: the same whether just concluded or remembered.
+    fn report(self, title: &str, target: &str) -> Result<()> {
+        match self {
+            Outcome::Unchanged => Ok(()),
+            Outcome::Edited => Err(Error(
+                "History edited or compacted; linked conflict left untouched".into(),
+            )),
+            Outcome::Diverged => Err(Error(
+                "Continued in two harnesses: linked conflict left untouched".into(),
+            )),
+            Outcome::Missing => {
+                ui::warn(&format!(
+                    "{title}: linked {target} copy missing; restore the copy or disable its profile"
+                ));
+                Ok(())
+            }
+        }
+    }
+}
+#[derive(Serialize, Deserialize)]
+struct SettledLink {
+    /// the link's baselines when it was checked
+    link: String,
+    source: Stamp,
+    /// None: the linked copy was missing
+    mirror: Option<Stamp>,
+    outcome: Outcome,
+}
+/// Link checks that ended with nothing to write, and what each one had read. An automatic run
+/// repeats every check, many times an hour; while a link and both of its copies are exactly as
+/// they were, reading two long histories again (and asking opencode for an export) can only
+/// reach the same conclusion. Anything that writes is never remembered, so it always reads first.
+/// A disposable cache: without it, every link is checked again.
+#[derive(Default, Serialize, Deserialize)]
+struct Settled {
+    /// conclusions of another version are not trusted: it may read histories differently
+    version: String,
+    links: HashMap<String, SettledLink>,
+    #[serde(skip)]
+    dirty: bool,
+}
+impl Settled {
+    fn file() -> std::path::PathBuf {
+        ctx().cache_dir.join("linked-settled-v1.json")
+    }
+    fn load() -> Self {
+        std::fs::read(Self::file())
+            .ok()
+            .and_then(|data| serde_json::from_slice::<Settled>(&data).ok())
+            .filter(|settled| settled.version == env!("CARGO_PKG_VERSION"))
+            .unwrap_or_default()
+    }
+    fn baselines(link: &Link) -> String {
+        crate::engine::digest(
+            &serde_json::to_vec(&(&link.source, &link.target, &link.a, &link.b, &link.epoch)).unwrap_or_default(),
+        )
+    }
+    /// How this link's check ended last time, if nothing it read has changed since.
+    fn recall(&mut self, id: &str, link: &Link, source: &Session, mirror: Option<&Session>) -> Option<Outcome> {
+        let current = (|| {
+            let saved = self.links.get(id).filter(|saved| saved.link == Self::baselines(link))?;
+            let source = saved.source.still(source)?;
+            let mirror = match (&saved.mirror, mirror) {
+                (None, None) => None,
+                (Some(stamp), Some(mirror)) => Some(stamp.still(mirror)?),
+                _ => return None,
+            };
+            Some((source, mirror, saved.outcome))
+        })();
+        let Some((source, mirror, outcome)) = current else {
+            self.dirty |= self.links.remove(id).is_some();
+            return None;
+        };
+        let saved = self.links.get_mut(id)?;
+        if saved.source != source || saved.mirror != mirror {
+            // the same records in a database that moved on: compare its files first next time
+            (saved.source, saved.mirror) = (source, mirror);
+            self.dirty = true;
+        }
+        Some(outcome)
+    }
+    /// `mirror`: Some(None) when the linked copy is missing. A history that couldn't be pinned
+    /// down while it was read is not remembered.
+    fn remember(
+        &mut self,
+        id: &str,
+        link: &Link,
+        source: Option<&Stamp>,
+        mirror: Option<Option<&Stamp>>,
+        outcome: Outcome,
+    ) {
+        let (Some(source), Some(mirror)) = (source, mirror) else {
+            return;
+        };
+        self.links.insert(
+            id.to_string(),
+            SettledLink {
+                link: Self::baselines(link),
+                source: source.clone(),
+                mirror: mirror.cloned(),
+                outcome,
+            },
+        );
+        self.dirty = true;
+    }
+    fn save(&mut self) {
+        if !std::mem::take(&mut self.dirty) {
+            return;
+        }
+        self.version = env!("CARGO_PKG_VERSION").into();
+        let written = (|| -> Result<()> {
+            std::fs::create_dir_all(&ctx().cache_dir)?;
+            let mut tmp = tempfile::NamedTempFile::new_in(&ctx().cache_dir)?;
+            serde_json::to_writer(tmp.as_file_mut(), self)?;
+            tmp.persist(Self::file()).map_err(|e| Error(e.to_string()))?;
+            Ok(())
+        })();
+        if written.is_err() {
+            self.dirty = true; // only a cache: the checks are simply repeated
+        }
     }
 }
 
@@ -109,6 +297,71 @@ mod tests {
         let updated = histories.get(&session).unwrap();
         assert_eq!(updated.0[0].text, "after");
         assert!(!std::rc::Rc::ptr_eq(&first, &updated));
+    }
+
+    #[test]
+    fn settled_link_checks_are_recalled_until_something_they_read_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let line =
+            |text: &str| format!("{{\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":\"{text}\"}}}}\n");
+        let session = |id: &str| {
+            let path = dir.path().join(format!("{id}.jsonl"));
+            std::fs::write(&path, line("question")).unwrap();
+            let mut s = Session::local("claude", id.into(), String::new(), String::new(), 0.0, 0);
+            s.src = Some(path);
+            s
+        };
+        let (source, mirror) = (session("source"), session("mirror"));
+        let link = |b: u64| Link {
+            source: source.key(),
+            target: mirror.key(),
+            a: vec![1],
+            b: vec![b],
+            epoch: None,
+        };
+        let mut histories = Histories::default();
+        histories.get(&source).unwrap();
+        histories.get(&mirror).unwrap();
+        let mut settled = Settled::default();
+        let remember = |settled: &mut Settled, histories: &Histories| {
+            settled.remember(
+                "id",
+                &link(1),
+                histories.stamp(&source),
+                histories.stamp(&mirror).map(Some),
+                Outcome::Edited,
+            )
+        };
+        assert!(settled.recall("id", &link(1), &source, Some(&mirror)).is_none());
+        remember(&mut settled, &histories);
+        assert!(settled.recall("id", &link(1), &source, Some(&mirror)) == Some(Outcome::Edited));
+        assert!(settled.recall("id", &link(1), &source, Some(&mirror)) == Some(Outcome::Edited));
+        // other baselines are another check, and a conclusion that no longer holds is dropped
+        assert!(settled.recall("id", &link(2), &source, Some(&mirror)).is_none());
+        assert!(settled.links.is_empty());
+        remember(&mut settled, &histories);
+        assert!(
+            settled.recall("id", &link(1), &source, None).is_none(),
+            "the copy is gone"
+        );
+        remember(&mut settled, &histories);
+        // the source goes on: what was concluded from the shorter history says nothing about it
+        let mut file = std::fs::File::options()
+            .append(true)
+            .open(source.src.as_ref().unwrap())
+            .unwrap();
+        std::io::Write::write_all(&mut file, line("and another").as_bytes()).unwrap();
+        drop(file);
+        assert!(settled.recall("id", &link(1), &source, Some(&mirror)).is_none());
+        // a missing copy is remembered as missing, until there is one again
+        histories.invalidate(&source);
+        histories.get(&source).unwrap();
+        settled.remember("id", &link(1), histories.stamp(&source), Some(None), Outcome::Missing);
+        assert!(settled.recall("id", &link(1), &source, None) == Some(Outcome::Missing));
+        assert!(settled.recall("id", &link(1), &source, Some(&mirror)).is_none());
+        // a history that couldn't be pinned down while it was read is never remembered
+        settled.remember("id", &link(1), None, Some(None), Outcome::Missing);
+        assert!(settled.links.is_empty());
     }
 
     #[test]
@@ -596,6 +849,7 @@ fn run_locked(
     replaced: &mut Vec<Session>,
 ) -> Result<()> {
     let mut links = read()?;
+    let mut settled = Settled::load();
     let mut st = state::load();
     let stored = store::stored_sessions(root);
     let needed: std::collections::HashSet<_> = stored
@@ -727,6 +981,11 @@ fn run_locked(
                         title = source.title,
                         tool = target
                     ));
+                    if let Some(link) = links.copies.get(&id)
+                        && let Some(outcome) = settled.recall(&id, link, &source, sessions.get(&link.target))
+                    {
+                        return outcome.report(&source.title, target);
+                    }
                     let history = histories.get(&source)?;
                     let (a_turns, model) = history.as_ref();
                     let a = hashes(a_turns);
@@ -735,72 +994,65 @@ fn run_locked(
                     }
                     if let Some(link) = links.copies.get(&id) {
                         let Some(mut mirror) = sessions.get(&link.target).cloned() else {
-                            ui::warn(&format!(
-                                "{}: linked {target} copy missing; restore the copy or disable its profile",
-                                source.title
-                            ));
-                            return Ok(());
+                            settled.remember(&id, link, histories.stamp(&source), Some(None), Outcome::Missing);
+                            return Outcome::Missing.report(&source.title, target);
                         };
                         let mirror_history = histories.get(&mirror)?;
                         let (b_turns, _) = mirror_history.as_ref();
                         let change = history_change(link, &source, a_turns, b_turns);
-                        match change {
-                            LinkChange::Refresh => {
-                                if agents::in_use(&mirror) || agents::in_use_by_agent_now(&mirror) {
-                                    return Err(Error(
-                                        "Destination is active; compacted history repair deferred".into(),
-                                    ));
-                                }
-                                let before = crate::integrity::fresh(&source)?;
-                                let retired = mirror.key();
-                                let copy = harness::get(target).write(
-                                    &turns::fit(
-                                        a_turns.clone(),
-                                        harness::get(source.harness).label(),
-                                        model.as_deref(),
-                                    ),
-                                    &source.path,
-                                    &source.title,
-                                    model.as_deref(),
-                                )?;
-                                if crate::integrity::fresh(&source)? != before {
-                                    return Err(Error(
-                                        "Source changed during repair; both native copies were kept".into(),
-                                    ));
-                                }
-                                let b = hashes(&histories.get(&copy)?.0);
-                                crate::catalog::detach(&key, &retired)?;
-                                links.retired.push(retired);
-                                links.copies.insert(
-                                    id.clone(),
-                                    Link {
-                                        source: key.clone(),
-                                        target: copy.key(),
-                                        a,
-                                        b,
-                                        epoch: epoch(&source),
-                                    },
-                                );
-                                sessions.insert(copy.key(), copy);
-                                save(&links)?;
-                                replaced.push(mirror.clone());
-                                ui::ok(&crate::tr!(
-                                    "Compacted history repaired; the previous native copy was preserved"
-                                ));
-                                return Ok(());
+                        let outcome = match change {
+                            LinkChange::Unchanged => Some(Outcome::Unchanged),
+                            LinkChange::Edited => Some(Outcome::Edited),
+                            LinkChange::Diverged => Some(Outcome::Diverged),
+                            _ => None,
+                        };
+                        if let Some(outcome) = outcome {
+                            settled.remember(
+                                &id,
+                                link,
+                                histories.stamp(&source),
+                                histories.stamp(&mirror).map(Some),
+                                outcome,
+                            );
+                            return outcome.report(&source.title, target);
+                        }
+                        if change == LinkChange::Refresh {
+                            if agents::in_use(&mirror) || agents::in_use_by_agent_now(&mirror) {
+                                return Err(Error("Destination is active; compacted history repair deferred".into()));
                             }
-                            LinkChange::Unchanged => return Ok(()),
-                            LinkChange::Edited => {
+                            let before = crate::integrity::fresh(&source)?;
+                            let retired = mirror.key();
+                            let copy = harness::get(target).write(
+                                &turns::fit(a_turns.clone(), harness::get(source.harness).label(), model.as_deref()),
+                                &source.path,
+                                &source.title,
+                                model.as_deref(),
+                            )?;
+                            if crate::integrity::fresh(&source)? != before {
                                 return Err(Error(
-                                    "History edited or compacted; linked conflict left untouched".into(),
+                                    "Source changed during repair; both native copies were kept".into(),
                                 ));
                             }
-                            LinkChange::Diverged => {
-                                return Err(Error(
-                                    "Continued in two harnesses: linked conflict left untouched".into(),
-                                ));
-                            }
-                            _ => {}
+                            let b = hashes(&histories.get(&copy)?.0);
+                            crate::catalog::detach(&key, &retired)?;
+                            links.retired.push(retired);
+                            links.copies.insert(
+                                id.clone(),
+                                Link {
+                                    source: key.clone(),
+                                    target: copy.key(),
+                                    a,
+                                    b,
+                                    epoch: epoch(&source),
+                                },
+                            );
+                            sessions.insert(copy.key(), copy);
+                            save(&links)?;
+                            replaced.push(mirror.clone());
+                            ui::ok(&crate::tr!(
+                                "Compacted history repaired; the previous native copy was preserved"
+                            ));
+                            return Ok(());
                         }
                         if change == LinkChange::ToTarget {
                             histories.invalidate(&mirror);
@@ -933,6 +1185,7 @@ fn run_locked(
                 break;
             }
         }
+        settled.save();
         if source.weight != original_weight {
             // A continuation imported from a linked harness must reach the shared base in
             // this run, even when the native planner initially saw everything as synced.

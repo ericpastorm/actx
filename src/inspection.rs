@@ -32,7 +32,65 @@ pub fn finish() {
         return;
     }
     if ENABLED.fetch_sub(1, Ordering::Relaxed) == 1 {
-        *inputs().lock().unwrap() = Inputs::default();
+        // The snapshots stay: an agent database can be gigabytes, and the next operation of this
+        // process reuses its copy for as long as the database is exactly as it was. One whose
+        // database moved on would be copied again anyway: a long-lived process doesn't hold it.
+        let mut inputs = inputs().lock().unwrap();
+        inputs.stamps.clear();
+        inputs.errors.clear();
+        inputs.databases.retain(|path, (_, taken)| *taken == stamps(path));
+    }
+}
+/// The size and time of a database and of the files SQLite keeps next to it.
+fn stamps(path: &Path) -> [Stamp; 3] {
+    [
+        stamp(path),
+        stamp(&sidecar(path, "-wal")),
+        stamp(&sidecar(path, "-journal")),
+    ]
+}
+/// Remove this process's snapshots. They are private to it, so nothing else will.
+pub fn release() {
+    inputs().lock().unwrap().databases.clear();
+}
+
+const SNAPSHOT: &str = "actx-preview-";
+/// A folder for one snapshot, named after this process so a later run can tell it is orphaned.
+/// Never in the user's folders (inspection writes nothing there), and on disk where there is a
+/// choice: the default temporary folder is memory on most Linux systems (tmpfs), where copying a
+/// gigabyte database takes a gigabyte of RAM. /var/tmp is on disk, and when it shares a filesystem
+/// with the home (Btrfs subvolumes) the copy shares its blocks with the original. A TMPDIR someone
+/// set is their choice; macOS sets one, on disk.
+fn snapshot_dir() -> std::io::Result<tempfile::TempDir> {
+    let name = format!("{SNAPSHOT}{}-", std::process::id());
+    let on_disk = Path::new("/var/tmp");
+    if cfg!(unix) && std::env::var_os("TMPDIR").is_none() && on_disk.is_dir() {
+        sweep(on_disk);
+        if let Ok(dir) = tempfile::Builder::new().prefix(&name).tempdir_in(on_disk) {
+            return Ok(dir);
+        }
+    }
+    sweep(&std::env::temp_dir());
+    tempfile::Builder::new().prefix(&name).tempdir()
+}
+/// Snapshots left by processes that ended without removing theirs (killed, or exited early).
+fn sweep(parent: &Path) {
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let owner = name
+            .to_str()
+            .and_then(|n| n.strip_prefix(SNAPSHOT))
+            .and_then(|n| n.split_once('-'))
+            .and_then(|(pid, _)| pid.parse::<u32>().ok());
+        if let Some(pid) = owner
+            && pid != std::process::id()
+            && !crate::lock::alive(pid)
+        {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
     }
 }
 pub fn enabled() -> bool {
@@ -139,18 +197,24 @@ pub fn database(path: &Path) -> Result<Connection> {
         if journal.exists() {
             return Err(Error(format!("Database has a rollback journal: {}", path.display())));
         }
-        let before = [stamp(path), stamp(&wal), stamp(&journal)];
+        let before = stamps(path);
         inputs.stamps.entry(path.to_path_buf()).or_insert(before[0]);
         inputs.stamps.entry(wal.clone()).or_insert(before[1]);
         inputs.stamps.entry(journal.clone()).or_insert(before[2]);
-        let fresh = inputs.databases.get(path).is_some_and(|(_, cached)| *cached == before);
+        // (a snapshot someone removed from under us is taken again rather than failing to open)
+        let fresh = inputs
+            .databases
+            .get(path)
+            .is_some_and(|(dir, cached)| *cached == before && dir.path().join("snapshot.db").is_file());
         if !fresh {
-            let dir = tempfile::Builder::new().prefix("actx-preview-").tempdir()?;
+            // release the previous copy first: both are never needed at once
+            inputs.databases.remove(path);
+            let dir = snapshot_dir()?;
             std::fs::copy(path, dir.path().join("snapshot.db"))?;
             if wal.exists() {
                 std::fs::copy(&wal, dir.path().join("snapshot.db-wal"))?;
             }
-            if before != [stamp(path), stamp(&wal), stamp(&journal)] {
+            if before != stamps(path) {
                 return Err(Error(format!("Database changed while reading: {}", path.display())));
             }
             inputs.databases.insert(path.to_path_buf(), (dir, before));
@@ -183,8 +247,66 @@ mod tests {
         std::fs::write(&path, "after, longer").unwrap();
         assert!(changed());
     }
+    /// The tests below count guards, which are one per process: one at a time.
+    static GUARDS: Mutex<()> = Mutex::new(());
+    #[test]
+    fn snapshots_outlive_the_operation_until_the_database_changes() {
+        let _alone = GUARDS.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("reused.db");
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch("create table t (v); insert into t values (1);")
+            .unwrap();
+        // one whole operation each time: the guard ends before the next one starts
+        let operation = || {
+            let _guard = Guard::new();
+            let con = database(&path).unwrap();
+            let value: i64 = con.query_row("select v from t", [], |r| r.get(0)).unwrap();
+            (PathBuf::from(con.path().unwrap()), value)
+        };
+        let (first, _) = operation();
+        assert!(first.is_file());
+        assert_eq!(operation().0, first, "an unchanged database is not copied again");
+        std::fs::remove_dir_all(first.parent().unwrap()).unwrap();
+        let (second, value) = operation();
+        assert!(
+            second != first && value == 1,
+            "a snapshot removed from under us is taken again"
+        );
+        Connection::open(&path)
+            .unwrap()
+            .execute("update t set v = 2", [])
+            .unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(SystemTime::now() + std::time::Duration::from_secs(2))
+            .unwrap();
+        let (third, value) = operation();
+        assert!(third != second && value == 2, "a changed database is snapshotted again");
+        assert!(!second.exists(), "and its previous copy is gone");
+        release();
+        assert!(!third.exists(), "releasing removes what this process copied");
+    }
+    #[test]
+    fn orphaned_snapshots_are_swept_but_not_those_of_live_processes() {
+        let dir = tempfile::tempdir().unwrap();
+        let mine = dir.path().join(format!("{SNAPSHOT}{}-live", std::process::id()));
+        // no process has this id: Linux caps them at 2^22, and macOS and Windows far below
+        let orphan = dir.path().join(format!("{SNAPSHOT}4294967294-dead"));
+        let foreign = dir.path().join(format!("{SNAPSHOT}aB3dE9"));
+        for folder in [&mine, &orphan, &foreign] {
+            std::fs::create_dir(folder).unwrap();
+            std::fs::write(folder.join("snapshot.db"), "x").unwrap();
+        }
+        sweep(dir.path());
+        assert!(mine.exists() && foreign.exists() && !orphan.exists());
+    }
     #[test]
     fn nested_guards_keep_snapshots_and_refresh_changed_databases() {
+        let _alone = GUARDS.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("data.db");
         {

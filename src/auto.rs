@@ -7,7 +7,7 @@ use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
@@ -35,7 +35,7 @@ fn spawn_sync(delay: u64, busy: Option<&str>, after: Option<u32>) {
         return;
     };
     let mut c = Command::new(&ctx().self_path);
-    c.args(["sync", "--auto"]);
+    c.args(["sync", "--auto", "--rest"]);
     if delay > 0 {
         c.args(["--delay", &delay.to_string()]);
     }
@@ -57,7 +57,37 @@ fn spawn_sync(delay: u64, busy: Option<&str>, after: Option<u32>) {
 }
 
 /// Holds this machine's turn to sync automatically.
-pub struct Turn(#[allow(dead_code)] Option<File>);
+pub struct Turn(#[allow(dead_code)] Option<File>, Instant);
+
+/// When the last automatic run ended (the file's time) and how long it worked (in it, ms).
+const LAST_RUN: &str = "auto-last-run";
+/// The longest a run started by a hook rests after the previous one.
+const MAX_REST: Duration = Duration::from_secs(60);
+
+impl Turn {
+    /// A run started by a hook first rests for as long as the previous automatic run worked.
+    /// Agents that open and close sessions all the time (subagents, worktrees) trigger one run
+    /// after another: when those are quick this is no wait at all, and when they are not it
+    /// leaves the machine at least as much time idle as busy. It rests holding the turn, so
+    /// whatever triggers meanwhile waits behind it or is already covered by it.
+    pub fn rest(&mut self) {
+        let last = ctx().state_dir.join(LAST_RUN);
+        let worked = std::fs::read_to_string(&last)
+            .ok()
+            .and_then(|ms| ms.trim().parse().ok())
+            .map(Duration::from_millis);
+        let ended = std::fs::metadata(&last).and_then(|m| m.modified()).ok();
+        if let (Some(worked), Some(ended)) = (worked, ended) {
+            std::thread::sleep(worked.min(MAX_REST).saturating_sub(ended.elapsed().unwrap_or_default()));
+        }
+        self.1 = Instant::now();
+    }
+}
+impl Drop for Turn {
+    fn drop(&mut self) {
+        let _ = std::fs::write(ctx().state_dir.join(LAST_RUN), self.1.elapsed().as_millis().to_string());
+    }
+}
 
 /// One automatic sync at a time on this machine, and at most one waiting for it. A trigger that
 /// finds both places taken has nothing to add: the waiting run starts after it. It only leaves
@@ -74,7 +104,7 @@ pub fn take_turn(args: &mut crate::commands::Args) -> Option<Turn> {
             .open(dir.join(name))
     };
     let (Ok(running), Ok(waiting)) = (open("auto-run.lock"), open("auto-next.lock")) else {
-        return Some(Turn(None)); // can't coordinate: run as before
+        return Some(Turn(None, Instant::now())); // can't coordinate: run as before
     };
     let notes = dir.join("auto-busy.txt");
     if running.try_lock().is_err() {
@@ -87,7 +117,7 @@ pub fn take_turn(args: &mut crate::commands::Args) -> Option<Turn> {
             return None;
         }
         if running.lock().is_err() {
-            return Some(Turn(None));
+            return Some(Turn(None, Instant::now()));
         }
         drop(waiting);
     }
@@ -97,7 +127,7 @@ pub fn take_turn(args: &mut crate::commands::Args) -> Option<Turn> {
         keys.extend(args.busy.take());
         args.busy = (!keys.is_empty()).then(|| keys.join(","));
     }
-    Some(Turn(Some(running)))
+    Some(Turn(Some(running), Instant::now()))
 }
 
 /// Let the process outlive the agent that started it (and have no console window on Windows).
