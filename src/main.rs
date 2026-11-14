@@ -209,6 +209,7 @@ fn cli() -> Command {
                         .hide(true),
                 )
                 .arg(Arg::new("busy").long("busy").hide(true))
+                .arg(Arg::new("rest").long("rest").action(ArgAction::SetTrue).hide(true))
                 .arg(Arg::new("log").long("log").hide(true))
                 .arg(
                     Arg::new("after")
@@ -399,6 +400,7 @@ fn main() {
             delay: m.get_one::<u64>("delay").copied().unwrap_or(0),
             after: m.get_one::<u32>("after").copied(),
             busy: get(m, "busy"),
+            rest: m.get_flag("rest"),
             ..Default::default()
         }),
         Some(("ls", m)) => commands::ls(Args {
@@ -458,4 +460,5 @@ fn main() {
         ),
         _ => browser::browse(Args::default()),
     }
+    inspection::release();
 }

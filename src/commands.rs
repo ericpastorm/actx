@@ -53,6 +53,8 @@ pub struct Args {
     pub after: Option<u32>,
     pub delay: u64,
     pub busy: Option<String>,
+    /// sync --auto: started by a hook, so it keeps its distance from the previous automatic run
+    pub rest: bool,
 }
 
 impl Args {
@@ -802,9 +804,12 @@ pub fn sync(mut args: Args) {
             crate::agents::wait_for(pid);
         }
         std::thread::sleep(Duration::from_secs(args.delay));
-        let Some(turn) = crate::auto::take_turn(&mut args) else {
+        let Some(mut turn) = crate::auto::take_turn(&mut args) else {
             return;
         };
+        if args.rest {
+            turn.rest();
+        }
         Some(turn)
     } else {
         None

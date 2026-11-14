@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Automatic sync that costs next to nothing when nothing changed
+
+- Stop copying agent databases into the system's temporary folder, which is often memory (tmpfs).
+  The private snapshot actx reads opencode and Antigravity from goes to `/var/tmp` on Linux unless
+  `TMPDIR` says otherwise: on disk, and sharing its blocks with the original where both are on one
+  Btrfs filesystem (a 1 GB opencode database: 60 ms and no extra space). One snapshot serves a
+  whole run for as long as the database is unchanged, instead of being copied again by every step
+  (eight times per automatic run). Snapshots left behind by a killed run are removed by the next
+  one.
+- Remember linked-copy checks that ended with nothing to write (unchanged, edited, continued in two
+  harnesses, copy missing) together with what they read, and don't repeat them while the link and
+  both copies are exactly as they were. Every automatic run used to read both histories of every
+  link again and ask opencode for an export of each of its copies, to print the same warnings. An
+  opencode copy is recognized by its own records, so other sessions changing the shared database
+  don't count. With 13 linked conversations (up to 1 GB each) an automatic run went from 25–45 s and
+  1.1 GB of memory to about 4.5 s and 50 MB. Anything that writes still reads the histories first.
+- A run started by a hook first rests for as long as the previous automatic run worked (a minute at
+  most). Agents that open and close sessions all the time (subagents, worktrees) triggered runs back
+  to back for hours; quick runs still start at once, so linked copies keep updating right after a
+  conversation closes.
+
 ### Switching harness without waiting, and no piled-up copies
 
 - A conversation closed moments ago in Codex (or opencode/Antigravity) updates its linked copies at

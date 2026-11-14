@@ -463,9 +463,11 @@ pub fn print<T: Serialize>(response: Response<T>) {
     })();
     if let Err(error) = result {
         eprintln!("Cannot write JSON output: {error}");
+        crate::inspection::release();
         std::process::exit(1);
     }
     if status != 0 {
+        crate::inspection::release();
         std::process::exit(status);
     }
 }
